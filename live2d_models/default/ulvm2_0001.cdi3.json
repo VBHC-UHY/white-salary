@@ -1,0 +1,1251 @@
+{
+	"Version": 3,
+	"Parameters": [
+		{
+			"Id": "Param518",
+			"GroupId": "ParamGroup8",
+			"Name": "汗"
+		},
+		{
+			"Id": "Param521",
+			"GroupId": "ParamGroup8",
+			"Name": "目ハイライト消し"
+		},
+		{
+			"Id": "Param519",
+			"GroupId": "ParamGroup8",
+			"Name": "><"
+		},
+		{
+			"Id": "Param520",
+			"GroupId": "ParamGroup8",
+			"Name": "涙目"
+		},
+		{
+			"Id": "e2_Param517",
+			"GroupId": "ParamGroup8",
+			"Name": "青ざめ"
+		},
+		{
+			"Id": "e2_Param3",
+			"GroupId": "ParamGroup8",
+			"Name": "OuO"
+		},
+		{
+			"Id": "e2_Param4",
+			"GroupId": "ParamGroup8",
+			"Name": "ジト目"
+		},
+		{
+			"Id": "e2_ParamCheek",
+			"GroupId": "ParamGroup8",
+			"Name": "照れ"
+		},
+		{
+			"Id": "e2_Param6",
+			"GroupId": "ParamGroup8",
+			"Name": "ぺろり口"
+		},
+		{
+			"Id": "e2_Param7",
+			"GroupId": "ParamGroup8",
+			"Name": "～～口"
+		},
+		{
+			"Id": "e2_Param8",
+			"GroupId": "ParamGroup8",
+			"Name": "くっころ"
+		},
+		{
+			"Id": "e2_Param9",
+			"GroupId": "ParamGroup8",
+			"Name": "猫口"
+		},
+		{
+			"Id": "e2_Param10",
+			"GroupId": "ParamGroup8",
+			"Name": "o~口"
+		},
+		{
+			"Id": "e2_Param11",
+			"GroupId": "ParamGroup8",
+			"Name": "0口"
+		},
+		{
+			"Id": "e2_Param16",
+			"GroupId": "ParamGroup8",
+			"Name": "むすっ"
+		},
+		{
+			"Id": "v0000_Param8",
+			"GroupId": "",
+			"Name": "v0000_ONOFF"
+		},
+		{
+			"Id": "V0101_Param3",
+			"GroupId": "",
+			"Name": "YK-Nurse_ONOFF"
+		},
+		{
+			"Id": "v0052_Param3",
+			"GroupId": "",
+			"Name": "v0052_ONOFF"
+		},
+		{
+			"Id": "Param28",
+			"GroupId": "",
+			"Name": "スクール水着ONOFF"
+		},
+		{
+			"Id": "V0100Param44",
+			"GroupId": "",
+			"Name": "v0100_ONOFF"
+		},
+		{
+			"Id": "v0000_Param3",
+			"GroupId": "ParamGroup4",
+			"Name": "T‐シャツの揺れ"
+		},
+		{
+			"Id": "v0000_Param4",
+			"GroupId": "ParamGroup4",
+			"Name": "T‐シャツの揺れ2"
+		},
+		{
+			"Id": "v0000_Param7",
+			"GroupId": "ParamGroup4",
+			"Name": "T‐シャツの揺れ(腰)"
+		},
+		{
+			"Id": "v0000_Param5",
+			"GroupId": "ParamGroup4",
+			"Name": "胸の横揺れ"
+		},
+		{
+			"Id": "v0000_Param6",
+			"GroupId": "ParamGroup4",
+			"Name": "胸の縦揺れ"
+		},
+		{
+			"Id": "v0100_Param1",
+			"GroupId": "v0100_ParamGroup8",
+			"Name": "胸の縦揺れ"
+		},
+		{
+			"Id": "v0100_Param2",
+			"GroupId": "v0100_ParamGroup8",
+			"Name": "胸の横揺れ"
+		},
+		{
+			"Id": "v0100_Param3",
+			"GroupId": "v0100_ParamGroup8",
+			"Name": "リボンの揺れ"
+		},
+		{
+			"Id": "v0100_Param4",
+			"GroupId": "v0100_ParamGroup8",
+			"Name": "リボン下の揺れ"
+		},
+		{
+			"Id": "v0100_Param5",
+			"GroupId": "v0100_ParamGroup8",
+			"Name": "リボン下の揺れ2"
+		},
+		{
+			"Id": "v0100_Param6",
+			"GroupId": "v0100_ParamGroup8",
+			"Name": "ひらひらの揺れ"
+		},
+		{
+			"Id": "v0100_Param7",
+			"GroupId": "v0100_ParamGroup8",
+			"Name": "ひらひらの揺れ2"
+		},
+		{
+			"Id": "v0100_Param8",
+			"GroupId": "v0100_ParamGroup8",
+			"Name": "ひらひらの揺れ3"
+		},
+		{
+			"Id": "v0100_Param9",
+			"GroupId": "v0100_ParamGroup8",
+			"Name": "アウターの揺れ"
+		},
+		{
+			"Id": "v0100_Param10",
+			"GroupId": "v0100_ParamGroup8",
+			"Name": "アウターの縦揺れ"
+		},
+		{
+			"Id": "v0100_Param11",
+			"GroupId": "v0100_ParamGroup8",
+			"Name": "アウターの縦揺れ2"
+		},
+		{
+			"Id": "v0100_Param12",
+			"GroupId": "v0100_ParamGroup8",
+			"Name": "アウターリボンの揺れ"
+		},
+		{
+			"Id": "v0100_Param13",
+			"GroupId": "v0100_ParamGroup8",
+			"Name": "アウターリボンの揺れ2"
+		},
+		{
+			"Id": "v0100_Param14",
+			"GroupId": "v0100_ParamGroup8",
+			"Name": "スカートの揺れ"
+		},
+		{
+			"Id": "v100_Param15",
+			"GroupId": "v0100_ParamGroup8",
+			"Name": "スカートフリルの揺れ"
+		},
+		{
+			"Id": "v0100_Param16",
+			"GroupId": "v0100_ParamGroup8",
+			"Name": "クロスの揺れ"
+		},
+		{
+			"Id": "v0100_Param17",
+			"GroupId": "v0100_ParamGroup8",
+			"Name": "クロスの揺れ2"
+		},
+		{
+			"Id": "v0100_Param18",
+			"GroupId": "v0100_ParamGroup8",
+			"Name": "クロスの揺れ3"
+		},
+		{
+			"Id": "ParamBodyAngleX",
+			"GroupId": "ParamGroup5",
+			"Name": "体の回転　X"
+		},
+		{
+			"Id": "ParamBodyAngleY",
+			"GroupId": "ParamGroup5",
+			"Name": "体の回転　Y"
+		},
+		{
+			"Id": "ParamBodyAngleZ",
+			"GroupId": "ParamGroup5",
+			"Name": "体の回転　Z"
+		},
+		{
+			"Id": "ParamBreath",
+			"GroupId": "ParamGroup5",
+			"Name": "呼吸"
+		},
+		{
+			"Id": "e_Param48",
+			"GroupId": "ParamGroup6",
+			"Name": "ONOFF_ハート"
+		},
+		{
+			"Id": "e_Param62",
+			"GroupId": "ParamGroup6",
+			"Name": "ONOFF_青ライン"
+		},
+		{
+			"Id": "e_Param61",
+			"GroupId": "ParamGroup6",
+			"Name": "ONOFF_♪"
+		},
+		{
+			"Id": "e_Param59",
+			"GroupId": "ParamGroup6",
+			"Name": "ONOFF_汗（固定）"
+		},
+		{
+			"Id": "e_Param60",
+			"GroupId": "ParamGroup6",
+			"Name": "ONOFF_汗（動く）"
+		},
+		{
+			"Id": "e_Param58",
+			"GroupId": "ParamGroup6",
+			"Name": "ONOFF_驚き"
+		},
+		{
+			"Id": "e_Param56",
+			"GroupId": "ParamGroup6",
+			"Name": "ONOFF_疑問符"
+		},
+		{
+			"Id": "e_Param57",
+			"GroupId": "ParamGroup6",
+			"Name": "ONOFF_ビックリマーク"
+		},
+		{
+			"Id": "e_Param55",
+			"GroupId": "ParamGroup6",
+			"Name": "ONOFF_うずまき"
+		},
+		{
+			"Id": "e_Param54",
+			"GroupId": "ParamGroup6",
+			"Name": "ONOFF_黄色ライン"
+		},
+		{
+			"Id": "e_Param52",
+			"GroupId": "ParamGroup6",
+			"Name": "ONOFF_星"
+		},
+		{
+			"Id": "e_Param47",
+			"GroupId": "ParamGroup6",
+			"Name": "ONOFF_ZZZ"
+		},
+		{
+			"Id": "e_Param110",
+			"GroupId": "ParamGroup6",
+			"Name": "ONOFF_怒りマーク"
+		},
+		{
+			"Id": "ParamAngleX",
+			"GroupId": "ParamGroup",
+			"Name": "角度 X"
+		},
+		{
+			"Id": "ParamAngleY",
+			"GroupId": "ParamGroup",
+			"Name": "角度 Y"
+		},
+		{
+			"Id": "ParamAngleZ",
+			"GroupId": "ParamGroup",
+			"Name": "角度 Z"
+		},
+		{
+			"Id": "ParamEyeBallX",
+			"GroupId": "ParamGroup",
+			"Name": "目玉 X"
+		},
+		{
+			"Id": "ParamEyeBallY",
+			"GroupId": "ParamGroup",
+			"Name": "目玉 Y"
+		},
+		{
+			"Id": "ParamEyeLOpen",
+			"GroupId": "ParamGroup",
+			"Name": "左目　開閉"
+		},
+		{
+			"Id": "ParamEyeLSmile",
+			"GroupId": "ParamGroup",
+			"Name": "左目　笑顔"
+		},
+		{
+			"Id": "Param81",
+			"GroupId": "ParamGroup",
+			"Name": "左目ウインク"
+		},
+		{
+			"Id": "ParamEyeROpen",
+			"GroupId": "ParamGroup",
+			"Name": "右目　開閉"
+		},
+		{
+			"Id": "ParamEyeRSmile",
+			"GroupId": "ParamGroup",
+			"Name": "右目　笑顔"
+		},
+		{
+			"Id": "Param82",
+			"GroupId": "ParamGroup",
+			"Name": "右目ウインク"
+		},
+		{
+			"Id": "Param80",
+			"GroupId": "ParamGroup",
+			"Name": "笑顔目"
+		},
+		{
+			"Id": "ParamMouthForm",
+			"GroupId": "ParamGroup",
+			"Name": "口　変形"
+		},
+		{
+			"Id": "ParamMouthOpenY",
+			"GroupId": "ParamGroup",
+			"Name": "口　開閉"
+		},
+		{
+			"Id": "Param3",
+			"GroupId": "ParamGroup",
+			"Name": "口‐ONOFF"
+		},
+		{
+			"Id": "Param500",
+			"GroupId": "ParamGroup",
+			"Name": "瞳ハイライト揺れ"
+		},
+		{
+			"Id": "ParamCheek",
+			"GroupId": "ParamGroup",
+			"Name": "照れ"
+		},
+		{
+			"Id": "ParamBrowLY",
+			"GroupId": "ParamGroup",
+			"Name": "左眉　上下"
+		},
+		{
+			"Id": "ParamBrowLAngle",
+			"GroupId": "ParamGroup",
+			"Name": "左眉　角度"
+		},
+		{
+			"Id": "ParamBrowLForm",
+			"GroupId": "ParamGroup",
+			"Name": "左眉　変形"
+		},
+		{
+			"Id": "ParamBrowRY",
+			"GroupId": "ParamGroup",
+			"Name": "右眉　上下"
+		},
+		{
+			"Id": "ParamBrowRAngle",
+			"GroupId": "ParamGroup",
+			"Name": "右眉　角度"
+		},
+		{
+			"Id": "ParamBrowRForm",
+			"GroupId": "ParamGroup",
+			"Name": "右眉　変形"
+		},
+		{
+			"Id": "Param1000",
+			"GroupId": "ParamGroup3",
+			"Name": "腕回転"
+		},
+		{
+			"Id": "School_swimsuit_Param28",
+			"GroupId": "",
+			"Name": "スクール水着胸揺れ-縦"
+		},
+		{
+			"Id": "School_swimsuit_Param29",
+			"GroupId": "",
+			"Name": "スクール水着胸揺れ-横"
+		},
+		{
+			"Id": "Param26",
+			"GroupId": "ParamGroup2",
+			"Name": "アホ毛03の揺れ1"
+		},
+		{
+			"Id": "Param27",
+			"GroupId": "ParamGroup2",
+			"Name": "アホ毛03の揺れ2"
+		},
+		{
+			"Id": "Param24",
+			"GroupId": "ParamGroup2",
+			"Name": "つけ毛の揺れ1"
+		},
+		{
+			"Id": "Param25",
+			"GroupId": "ParamGroup2",
+			"Name": "つけ毛の揺れ2"
+		},
+		{
+			"Id": "Param22",
+			"GroupId": "ParamGroup2",
+			"Name": "前髪07の揺れ1"
+		},
+		{
+			"Id": "Param23",
+			"GroupId": "ParamGroup2",
+			"Name": "前髪07の揺れ2"
+		},
+		{
+			"Id": "Param17",
+			"GroupId": "ParamGroup2",
+			"Name": "横髪04の揺れ1"
+		},
+		{
+			"Id": "Param21",
+			"GroupId": "ParamGroup2",
+			"Name": "横髪04の揺れ2"
+		},
+		{
+			"Id": "Param31",
+			"GroupId": "ParamGroup2",
+			"Name": "側頭部02の縦揺れ1"
+		},
+		{
+			"Id": "Param32",
+			"GroupId": "ParamGroup2",
+			"Name": "側頭部02の縦揺れ2"
+		},
+		{
+			"Id": "Param14",
+			"GroupId": "ParamGroup2",
+			"Name": "側頭部02の揺れ1"
+		},
+		{
+			"Id": "Param15",
+			"GroupId": "ParamGroup2",
+			"Name": "側頭部02の揺れ2"
+		},
+		{
+			"Id": "Param29",
+			"GroupId": "ParamGroup2",
+			"Name": "側頭部03の縦揺れ1"
+		},
+		{
+			"Id": "Param30",
+			"GroupId": "ParamGroup2",
+			"Name": "側頭部03の縦揺れ2"
+		},
+		{
+			"Id": "Param12",
+			"GroupId": "ParamGroup2",
+			"Name": "側頭部03‐の揺れ1"
+		},
+		{
+			"Id": "Param13",
+			"GroupId": "ParamGroup2",
+			"Name": "側頭部03‐の揺れ2"
+		},
+		{
+			"Id": "Param33",
+			"GroupId": "ParamGroup2",
+			"Name": "後髪の縦揺れ1"
+		},
+		{
+			"Id": "Param34",
+			"GroupId": "ParamGroup2",
+			"Name": "後髪の縦揺れ2"
+		},
+		{
+			"Id": "Param",
+			"GroupId": "ParamGroup2",
+			"Name": "後髪01の揺れ1"
+		},
+		{
+			"Id": "Param2",
+			"GroupId": "ParamGroup2",
+			"Name": "後髪01の揺れ2"
+		},
+		{
+			"Id": "v0101_Param1",
+			"GroupId": "v0101_ParamGroup4",
+			"Name": "胸の横揺れ"
+		},
+		{
+			"Id": "v0101_Param2",
+			"GroupId": "v0101_ParamGroup4",
+			"Name": "胸の縦揺れ"
+		},
+		{
+			"Id": "v0101_Param3",
+			"GroupId": "v0101_ParamGroup4",
+			"Name": "リボンの縦揺れ"
+		},
+		{
+			"Id": "v0101_Param4",
+			"GroupId": "v0101_ParamGroup4",
+			"Name": "スカートリボンの縦揺れ"
+		},
+		{
+			"Id": "v0101_Param5",
+			"GroupId": "v0101_ParamGroup4",
+			"Name": "スカートリボンの揺れ"
+		},
+		{
+			"Id": "v0101_Param6",
+			"GroupId": "v0101_ParamGroup4",
+			"Name": "スカートリボンの揺れ2"
+		},
+		{
+			"Id": "v0101_Param7",
+			"GroupId": "v0101_ParamGroup4",
+			"Name": "エプロンのリボンの揺れ"
+		},
+		{
+			"Id": "v0101_Param8",
+			"GroupId": "v0101_ParamGroup4",
+			"Name": "エプロンのリボンの揺れ2"
+		},
+		{
+			"Id": "v0101_Param9",
+			"GroupId": "v0101_ParamGroup4",
+			"Name": "エプロンの縦揺れ"
+		},
+		{
+			"Id": "v0101_Param10",
+			"GroupId": "v0101_ParamGroup4",
+			"Name": "エプロンの縦揺れ2"
+		},
+		{
+			"Id": "v0101_Param11",
+			"GroupId": "v0101_ParamGroup4",
+			"Name": "エプロンの揺れ"
+		},
+		{
+			"Id": "v0101_Param12",
+			"GroupId": "v0101_ParamGroup4",
+			"Name": "エプロンの揺れ2"
+		},
+		{
+			"Id": "v0101_Param13",
+			"GroupId": "v0101_ParamGroup4",
+			"Name": "スカート‐フリル1の揺れ"
+		},
+		{
+			"Id": "v0101_Param14",
+			"GroupId": "v0101_ParamGroup4",
+			"Name": "スカート‐フリル2の揺れ"
+		},
+		{
+			"Id": "v0101_Param15",
+			"GroupId": "v0101_ParamGroup4",
+			"Name": "スカート-Aの揺れ"
+		},
+		{
+			"Id": "v0101_Param16",
+			"GroupId": "v0101_ParamGroup4",
+			"Name": "スカート-Aの揺れ2"
+		},
+		{
+			"Id": "v0101_Param17",
+			"GroupId": "v0101_ParamGroup4",
+			"Name": "スカート‐Aの縦揺れ"
+		},
+		{
+			"Id": "v0101_Param18",
+			"GroupId": "v0101_ParamGroup4",
+			"Name": "スカート‐Aの縦揺れ2"
+		},
+		{
+			"Id": "v0101_Param19",
+			"GroupId": "v0101_ParamGroup4",
+			"Name": "後リボンの揺れ"
+		},
+		{
+			"Id": "v0101_Param20",
+			"GroupId": "v0101_ParamGroup4",
+			"Name": "後リボンの揺れ2"
+		},
+		{
+			"Id": "v0101_Param21",
+			"GroupId": "v0101_ParamGroup4",
+			"Name": "後リボンの揺れ3"
+		},
+		{
+			"Id": "e_Param44",
+			"GroupId": "ParamGroup7",
+			"Name": "タイムライン_para1"
+		},
+		{
+			"Id": "e_Param46",
+			"GroupId": "ParamGroup7",
+			"Name": "タイムライン_para2"
+		},
+		{
+			"Id": "e_Param45",
+			"GroupId": "ParamGroup7",
+			"Name": "タイムライン_para3"
+		},
+		{
+			"Id": "e_Param49",
+			"GroupId": "ParamGroup7",
+			"Name": "タイムライン2_para1"
+		},
+		{
+			"Id": "e_Param50",
+			"GroupId": "ParamGroup7",
+			"Name": "タイムライン2_para2"
+		},
+		{
+			"Id": "e_Param51",
+			"GroupId": "ParamGroup7",
+			"Name": "タイムライン2_para3"
+		},
+		{
+			"Id": "e_Param53",
+			"GroupId": "ParamGroup7",
+			"Name": "タイムライン3_para1"
+		}
+	],
+	"ParameterGroups": [
+		{
+			"Id": "ParamGroup8",
+			"GroupId": "",
+			"Name": "表情‐コントローラー"
+		},
+		{
+			"Id": "ParamGroup4",
+			"GroupId": "",
+			"Name": "v0000_物理パラメータ"
+		},
+		{
+			"Id": "v0100_ParamGroup8",
+			"GroupId": "",
+			"Name": "v0100_物理パラメータ"
+		},
+		{
+			"Id": "ParamGroup5",
+			"GroupId": "",
+			"Name": "体"
+		},
+		{
+			"Id": "ParamGroup6",
+			"GroupId": "",
+			"Name": "エフェクト-コントローラー"
+		},
+		{
+			"Id": "ParamGroup",
+			"GroupId": "",
+			"Name": "頭"
+		},
+		{
+			"Id": "ParamGroup3",
+			"GroupId": "",
+			"Name": "腕"
+		},
+		{
+			"Id": "ParamGroup2",
+			"GroupId": "",
+			"Name": "K000-髪物理パラメータ"
+		},
+		{
+			"Id": "v0101_ParamGroup4",
+			"GroupId": "",
+			"Name": "v0101_物理パラメータ"
+		},
+		{
+			"Id": "ParamGroup7",
+			"GroupId": "",
+			"Name": "エフェクト-タイムライン"
+		}
+	],
+	"Parts": [
+		{
+			"Id": "e2_Part59",
+			"Name": "ulvm2表情差分.psd"
+		},
+		{
+			"Id": "e_Part56",
+			"Name": "エフェクト.psd"
+		},
+		{
+			"Id": "v0000_Part1",
+			"Name": "dress_0000_Live2D.psd"
+		},
+		{
+			"Id": "v0052_Part1",
+			"Name": "dress_0052_Live2D.psd"
+		},
+		{
+			"Id": "v0100_Part1",
+			"Name": "dress_0100_live2D.psd"
+		},
+		{
+			"Id": "v0101_Part1",
+			"Name": "C_YumekawaNurse_Live2D.psd"
+		},
+		{
+			"Id": "Part41",
+			"Name": "k-0000_Live2D.psd"
+		},
+		{
+			"Id": "Part19",
+			"Name": "全体コア"
+		},
+		{
+			"Id": "Part77",
+			"Name": "顔"
+		},
+		{
+			"Id": "Part9",
+			"Name": "スクール水着まとめ"
+		},
+		{
+			"Id": "e2_Part58",
+			"Name": "口パターン"
+		},
+		{
+			"Id": "e2_Part",
+			"Name": "丸目"
+		},
+		{
+			"Id": "e2_Part56",
+			"Name": "ジト目"
+		},
+		{
+			"Id": "e_Part62",
+			"Name": "effect_anxious"
+		},
+		{
+			"Id": "e_Part61",
+			"Name": "effect_sweat2"
+		},
+		{
+			"Id": "e_Part60",
+			"Name": "effect_sweat"
+		},
+		{
+			"Id": "e_Part59",
+			"Name": "effect_shocked"
+		},
+		{
+			"Id": "e_Part12",
+			"Name": "effect_zzz"
+		},
+		{
+			"Id": "e_Part57",
+			"Name": "effect_confused"
+		},
+		{
+			"Id": "e_Part58",
+			"Name": "effect_surprised"
+		},
+		{
+			"Id": "e_Part13",
+			"Name": "effect_star"
+		},
+		{
+			"Id": "e_Part14",
+			"Name": "effect_heart"
+		},
+		{
+			"Id": "e_Part15",
+			"Name": "effect_spin"
+		},
+		{
+			"Id": "e_Part16",
+			"Name": "effect_speaking"
+		},
+		{
+			"Id": "e_Part63",
+			"Name": "effect_♪"
+		},
+		{
+			"Id": "e_Part",
+			"Name": "怒りマーク"
+		},
+		{
+			"Id": "v0000_Part2",
+			"Name": "でかT"
+		},
+		{
+			"Id": "v0000_Part3",
+			"Name": "足"
+		},
+		{
+			"Id": "v0052_Part2",
+			"Name": "でかT"
+		},
+		{
+			"Id": "v0052_Part3",
+			"Name": "足"
+		},
+		{
+			"Id": "v0100_Part2",
+			"Name": "cross_R"
+		},
+		{
+			"Id": "v0100_Part3",
+			"Name": "cross_L"
+		},
+		{
+			"Id": "v0100_Part4",
+			"Name": "chain"
+		},
+		{
+			"Id": "v0100_Part5",
+			"Name": "ribbon"
+		},
+		{
+			"Id": "v0100_Part6",
+			"Name": "flap_R"
+		},
+		{
+			"Id": "v0100_Part7",
+			"Name": "flap_L"
+		},
+		{
+			"Id": "v0100_Part8",
+			"Name": "outer"
+		},
+		{
+			"Id": "v0100_Part17",
+			"Name": "inner"
+		},
+		{
+			"Id": "v0100_Part21",
+			"Name": "sleeve_R"
+		},
+		{
+			"Id": "v0100_Part24",
+			"Name": "sleeve_L"
+		},
+		{
+			"Id": "v0100_Part27",
+			"Name": "leg"
+		},
+		{
+			"Id": "v0101_Part2",
+			"Name": "hair_accessory"
+		},
+		{
+			"Id": "v0101_Part3",
+			"Name": "ribbon_apron"
+		},
+		{
+			"Id": "v0101_Part4",
+			"Name": "ribbon_apron_shadow"
+		},
+		{
+			"Id": "v0101_Part5",
+			"Name": "pocket_R"
+		},
+		{
+			"Id": "v0101_Part6",
+			"Name": "pocket_L"
+		},
+		{
+			"Id": "v0101_Part7",
+			"Name": "ribbon_collar"
+		},
+		{
+			"Id": "v0101_Part8",
+			"Name": "ribbon_collar_shadow"
+		},
+		{
+			"Id": "v0101_Part9",
+			"Name": "collar"
+		},
+		{
+			"Id": "v0101_Part10",
+			"Name": "heart"
+		},
+		{
+			"Id": "v0101_Part11",
+			"Name": "apron"
+		},
+		{
+			"Id": "v0101_Part12",
+			"Name": "top_frill"
+		},
+		{
+			"Id": "v0101_Part13",
+			"Name": "sleeve_frill"
+		},
+		{
+			"Id": "v0101_Part14",
+			"Name": "top"
+		},
+		{
+			"Id": "v0101_Part16",
+			"Name": "skirtA_ribbon_R"
+		},
+		{
+			"Id": "v0101_Part17",
+			"Name": "skirtA_ribbon_L"
+		},
+		{
+			"Id": "v0101_Part18",
+			"Name": "skirtA_frill"
+		},
+		{
+			"Id": "v0101_Part19",
+			"Name": "skirtA"
+		},
+		{
+			"Id": "v0101_Part20",
+			"Name": "leg_R"
+		},
+		{
+			"Id": "v0101_Part22",
+			"Name": "leg_L"
+		},
+		{
+			"Id": "v0101_Part24",
+			"Name": "sleeve"
+		},
+		{
+			"Id": "v0101_Part27",
+			"Name": "arm_n_leg"
+		},
+		{
+			"Id": "v0101_Part28",
+			"Name": "ribbon_back"
+		},
+		{
+			"Id": "k_0000",
+			"Name": "k_0000"
+		},
+		{
+			"Id": "Part3",
+			"Name": "眉毛"
+		},
+		{
+			"Id": "Part5",
+			"Name": "目"
+		},
+		{
+			"Id": "Part6",
+			"Name": "><"
+		},
+		{
+			"Id": "Part7",
+			"Name": "鼻"
+		},
+		{
+			"Id": "Part8",
+			"Name": "耳"
+		},
+		{
+			"Id": "Part2",
+			"Name": "顔輪郭"
+		},
+		{
+			"Id": "Part42",
+			"Name": "全体コア"
+		},
+		{
+			"Id": "Part6_Body",
+			"Name": "水着"
+		},
+		{
+			"Id": "Part7_Body",
+			"Name": "足パターンA"
+		},
+		{
+			"Id": "v0100_Part9",
+			"Name": "inner_collar"
+		},
+		{
+			"Id": "v0100_Part10",
+			"Name": "outer_collar"
+		},
+		{
+			"Id": "v0100_Part13",
+			"Name": "outer_R"
+		},
+		{
+			"Id": "v0100_Part15",
+			"Name": "outer_L"
+		},
+		{
+			"Id": "v0100_Part18",
+			"Name": "skirt"
+		},
+		{
+			"Id": "v0100_Part19",
+			"Name": "inner_ribbon"
+		},
+		{
+			"Id": "v0100_Part20",
+			"Name": "Blouse"
+		},
+		{
+			"Id": "v0100_Part22",
+			"Name": "sleeve_ribbon1"
+		},
+		{
+			"Id": "v0100_Part23",
+			"Name": "sleeve_ribbon2"
+		},
+		{
+			"Id": "v0100_Part25",
+			"Name": "sleeve_ribbon1"
+		},
+		{
+			"Id": "v0100_Part26",
+			"Name": "sleeve_ribbon2"
+		},
+		{
+			"Id": "v0100_Part28",
+			"Name": "leg_R"
+		},
+		{
+			"Id": "v0100_Part29",
+			"Name": "leg_L"
+		},
+		{
+			"Id": "v0101_Part15",
+			"Name": "▼ブラウス"
+		},
+		{
+			"Id": "v0101_Part21",
+			"Name": "ribbon_leg_R"
+		},
+		{
+			"Id": "v0101_Part23",
+			"Name": "ribbon_leg_L"
+		},
+		{
+			"Id": "v0101_Part25",
+			"Name": "Sleeve R"
+		},
+		{
+			"Id": "v0101_Part26",
+			"Name": "Sleeve L"
+		},
+		{
+			"Id": "Part13",
+			"Name": "前髪"
+		},
+		{
+			"Id": "Part20",
+			"Name": "目"
+		},
+		{
+			"Id": "Part26",
+			"Name": "顔"
+		},
+		{
+			"Id": "Part32",
+			"Name": "服(テンプレート)"
+		},
+		{
+			"Id": "Part33",
+			"Name": "後髪"
+		},
+		{
+			"Id": "Part12",
+			"Name": "右"
+		},
+		{
+			"Id": "Part10",
+			"Name": "左"
+		},
+		{
+			"Id": "Part11",
+			"Name": "スクール水着"
+		},
+		{
+			"Id": "Part10_Body",
+			"Name": "腕"
+		},
+		{
+			"Id": "v0100_Part11",
+			"Name": "collar_R"
+		},
+		{
+			"Id": "v0100_Part12",
+			"Name": "collar_L"
+		},
+		{
+			"Id": "v0100_Part14",
+			"Name": "outter_ribbon"
+		},
+		{
+			"Id": "v0100_Part16",
+			"Name": "outer_ribbon"
+		},
+		{
+			"Id": "Part15",
+			"Name": "前髪"
+		},
+		{
+			"Id": "Part14",
+			"Name": "飾り毛・付け毛・アホ毛"
+		},
+		{
+			"Id": "Part17",
+			"Name": "サイド"
+		},
+		{
+			"Id": "Part21",
+			"Name": "サラ"
+		},
+		{
+			"Id": "Part27",
+			"Name": "眉"
+		},
+		{
+			"Id": "Part28",
+			"Name": "鼻"
+		},
+		{
+			"Id": "Part29",
+			"Name": "口"
+		},
+		{
+			"Id": "Part30",
+			"Name": "顔輪郭"
+		},
+		{
+			"Id": "Part31",
+			"Name": "耳"
+		},
+		{
+			"Id": "Part36",
+			"Name": "頭頂部パーツ"
+		},
+		{
+			"Id": "Part34",
+			"Name": "サイド裏"
+		},
+		{
+			"Id": "Part37",
+			"Name": "▼側頭部"
+		},
+		{
+			"Id": "Part39",
+			"Name": "▼うしろ髪"
+		},
+		{
+			"Id": "Part44",
+			"Name": "パーツ35"
+		},
+		{
+			"Id": "Part16",
+			"Name": "07(長め瞼下）"
+		},
+		{
+			"Id": "Part18",
+			"Name": "04(サイドパツン)"
+		},
+		{
+			"Id": "Part22",
+			"Name": "右目"
+		},
+		{
+			"Id": "Part24",
+			"Name": "左目"
+		},
+		{
+			"Id": "Part35",
+			"Name": "02（エレガントロング）"
+		},
+		{
+			"Id": "Part38",
+			"Name": "03(ロング/ロップ)"
+		},
+		{
+			"Id": "Part40",
+			"Name": "01(ロング/ぽんと)"
+		},
+		{
+			"Id": "Part4",
+			"Name": "右目透過"
+		},
+		{
+			"Id": "Part23",
+			"Name": "まつ毛 -L"
+		},
+		{
+			"Id": "Part55",
+			"Name": "左目透過"
+		},
+		{
+			"Id": "Part25",
+			"Name": "まつ毛-R"
+		}
+	],
+	"CombinedParameters": [
+		[
+			"ParamMouthForm",
+			"ParamMouthOpenY"
+		]
+	]
+}

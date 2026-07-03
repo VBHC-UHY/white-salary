@@ -308,7 +308,7 @@ curl http://127.0.0.1:12400/health
 
 > ⚠️ **以下内容不在 MIT 许可范围内**，请以各自来源 / 说明为准：
 > - `prompts/` 下"白"的人设文本（原创人设）；
-> - `live2d_models/` 下的第三方 Live2D 模型；
+> - `live2d_models/` 下随仓库提供的公开可分发 Live2D 示例 / 参考模型资源；
 > - `assets/tts/` 下的参考音频；
 > - `NapCat/`、`NapCat_OneKey/` 等第三方组件。
 >

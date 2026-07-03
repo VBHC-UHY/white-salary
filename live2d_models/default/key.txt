@@ -1,0 +1,41 @@
+●VtubeStudio　キー設定
+
+Tab ＋ 左Ctrl・・・キーバインドリセット 
+
+左Shift ＋ 1・・・衣装1
+左Shift ＋ 2・・・衣装2
+左Shift ＋ 3・・・衣装3
+
+
+Tabキー ＋ Q・・・照れ
+Tabキー ＋ W・・・おこ
+Tabキー ＋ E・・・ふぇぇ
+Tabキー ＋ R・・・青ざめ
+Tabキー ＋ T・・・目ハイライトonoff
+Tabキー ＋ A・・・ウインク右
+Tabキー ＋ S・・・ウインク左
+Tabキー ＋ D・・・＞＜目
+Tabキー ＋ F・・・〇〇目
+Tabキー ＋ G・・・ジト目
+Tabキー ＋ Z・・・ぺろり
+Tabキー ＋ X・・・猫口
+Tabキー ＋ C・・・おっ？
+Tabキー ＋ V・・・くっころ
+Tabキー ＋ B・・・むすっ
+Tabキー ＋ N・・・ごにょごにょ
+Tabキー ＋ M・・・Zzz...
+Tabキー ＋ U・・・笑顔目（まばたき）
+
+Tabキー ＋ 1・・・fx_ハート
+Tabキー ＋ 2・・・fx_青ざめ
+Tabキー ＋ 3・・・fx_♪マーク
+Tabキー ＋ 4・・・fx_汗（固定
+Tabキー ＋ 5・・・fx_汗（動く
+Tabキー ＋ 6・・・fx_驚き
+Tabキー ＋ 7・・・fx_？マーク
+Tabキー ＋ 8・・・fx_！マーク
+Tabキー ＋ 9・・・fx_ぐるぐる
+Tabキー ＋ 0・・・fx_ピコピコ
+Tabキー ＋ P・・・fx_キラキラ
+Tabキー ＋ O・・・fx_Zzz
+Tabキー ＋ I・・・fx_怒り

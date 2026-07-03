@@ -1,0 +1,186 @@
+{
+	"Version": 3,
+	"FileReferences": {
+		"Moc": "ulvm2_0001.moc3",
+		"Textures": [
+			"ulvm2_0001.4096/texture_00.png",
+			"ulvm2_0001.4096/texture_01.png",
+			"ulvm2_0001.4096/texture_02.png",
+			"ulvm2_0001.4096/texture_03.png",
+			"ulvm2_0001.4096/texture_04.png"
+		],
+		"Physics": "ulvm2_0001.physics3.json",
+		"DisplayInfo": "ulvm2_0001.cdi3.json",
+		"Expressions": [
+			{
+				"Name": "happy",
+				"File": "animation/smile.exp3.json"
+			},
+			{
+				"Name": "sad",
+				"File": "animation/cry.exp3.json"
+			},
+			{
+				"Name": "angry",
+				"File": "animation/angry.exp3.json"
+			},
+			{
+				"Name": "surprised",
+				"File": "animation/surprised.exp3.json"
+			},
+			{
+				"Name": "shy",
+				"File": "animation/blush.exp3.json"
+			},
+			{
+				"Name": "angry2",
+				"File": "animation/angry2.exp3.json"
+			},
+			{
+				"Name": "blush",
+				"File": "animation/blush.exp3.json"
+			},
+			{
+				"Name": "cat_mouth",
+				"File": "animation/cat_mouth.exp3.json"
+			},
+			{
+				"Name": "costume_v0000",
+				"File": "animation/costume_v0000.exp3.json"
+			},
+			{
+				"Name": "costume_v0052",
+				"File": "animation/costume_v0052.exp3.json"
+			},
+			{
+				"Name": "costume_v0100",
+				"File": "animation/costume_v0100.exp3.json"
+			},
+			{
+				"Name": "costume_v0101",
+				"File": "animation/costume_v0101.exp3.json"
+			},
+			{
+				"Name": "cry",
+				"File": "animation/cry.exp3.json"
+			},
+			{
+				"Name": "fx_1_heart",
+				"File": "animation/fx_1_heart.exp3.json"
+			},
+			{
+				"Name": "fx_2_pale2",
+				"File": "animation/fx_2_pale2.exp3.json"
+			},
+			{
+				"Name": "fx_3_note",
+				"File": "animation/fx_3_note.exp3.json"
+			},
+			{
+				"Name": "fx_4_sweat",
+				"File": "animation/fx_4_sweat.exp3.json"
+			},
+			{
+				"Name": "fx_5_sweat_2",
+				"File": "animation/fx_5_sweat_2.exp3.json"
+			},
+			{
+				"Name": "fx_6_surprised",
+				"File": "animation/fx_6_surprised.exp3.json"
+			},
+			{
+				"Name": "fx_7_question",
+				"File": "animation/fx_7_question.exp3.json"
+			},
+			{
+				"Name": "fx_8_exclamation",
+				"File": "animation/fx_8_exclamation.exp3.json"
+			},
+			{
+				"Name": "fx_9_swirl",
+				"File": "animation/fx_9_swirl.exp3.json"
+			},
+			{
+				"Name": "fx_10_yellowline",
+				"File": "animation/fx_10_yellowline.exp3.json"
+			},
+			{
+				"Name": "fx_11_star",
+				"File": "animation/fx_11_star.exp3.json"
+			},
+			{
+				"Name": "fx_12_zzz",
+				"File": "animation/fx_12_zzz.exp3.json"
+			},
+			{
+				"Name": "fx_13_angry",
+				"File": "animation/fx_13_angry.exp3.json"
+			},
+			{
+				"Name": "gonyogonyo",
+				"File": "animation/gonyogonyo.exp3.json"
+			},
+			{
+				"Name": "highlight_onoff",
+				"File": "animation/highlight_onoff.exp3.json"
+			},
+			{
+				"Name": "jitome",
+				"File": "animation/jitome.exp3.json"
+			},
+			{
+				"Name": "kukkoro",
+				"File": "animation/kukkoro.exp3.json"
+			},
+			{
+				"Name": "oo",
+				"File": "animation/oo.exp3.json"
+			},
+			{
+				"Name": "pale",
+				"File": "animation/pale.exp3.json"
+			},
+			{
+				"Name": "perori",
+				"File": "animation/perori.exp3.json"
+			},
+			{
+				"Name": "sleep",
+				"File": "animation/sleep.exp3.json"
+			},
+			{
+				"Name": "smile",
+				"File": "animation/smile.exp3.json"
+			},
+			{
+				"Name": "wink_L",
+				"File": "animation/wink_L.exp3.json"
+			},
+			{
+				"Name": "wink_R",
+				"File": "animation/wink_R.exp3.json"
+			},
+			{
+				"Name": "XD",
+				"File": "animation/XD.exp3.json"
+			}
+		]
+	},
+	"Groups": [
+		{
+			"Target": "Parameter",
+			"Name": "EyeBlink",
+			"Ids": [
+				"ParamEyeLOpen",
+				"ParamEyeROpen"
+			]
+		},
+		{
+			"Target": "Parameter",
+			"Name": "LipSync",
+			"Ids": [
+				"ParamMouthOpenY"
+			]
+		}
+	]
+}

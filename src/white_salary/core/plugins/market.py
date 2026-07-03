@@ -57,6 +57,43 @@ class PluginMarket:
         self._token = github_token
         self._repo = github_repo
 
+    @staticmethod
+    def _is_plugin_dir(path: Path) -> bool:
+        return path.is_dir() and ((path / "plugin.py").exists() or (path / "__init__.py").exists())
+
+    def _iter_plugin_dirs(self) -> list[tuple[str, Path, str]]:
+        """Return installed plugin dirs using the same layout PluginManager discovers.
+
+        Supported layouts:
+          - plugins/<id>/plugin.py
+          - plugins/community/<id>/plugin.py
+          - plugins/builtin/<id>/plugin.py
+        """
+        entries: list[tuple[str, Path, str]] = []
+        seen: set[str] = set()
+
+        def add(plugin_id: str, path: Path, source: str) -> None:
+            if plugin_id in seen or not self._is_plugin_dir(path):
+                return
+            seen.add(plugin_id)
+            entries.append((plugin_id, path, source))
+
+        # Match runtime override order: root plugins first, then user/community,
+        # then bundled/builtin fallbacks.
+        for d in sorted(self._plugins_dir.iterdir()):
+            if d.name in {"builtin", "community", "__pycache__"}:
+                continue
+            add(d.name, d, "root")
+
+        for source in ["community", "builtin"]:
+            cat_dir = self._plugins_dir / source
+            if not cat_dir.exists():
+                continue
+            for d in sorted(cat_dir.iterdir()):
+                add(d.name, d, source)
+
+        return entries
+
     def _headers(self) -> dict:
         h = {"Accept": "application/vnd.github.v3+json"}
         if self._token:
@@ -136,12 +173,7 @@ class PluginMarket:
 
     def _get_installed_ids(self) -> set[str]:
         """获取已安装的插件ID列表。"""
-        installed = set()
-        for d in self._plugins_dir.iterdir():
-            if d.is_dir() and (d / "__init__.py").exists():
-                installed.add(d.name)
-            elif d.is_dir() and (d / "plugin.py").exists():
-                installed.add(d.name)
+        installed = {plugin_id for plugin_id, _, _ in self._iter_plugin_dirs()}
         for f in self._plugins_dir.glob("*.py"):
             if not f.name.startswith("_"):
                 installed.add(f.stem)
@@ -161,9 +193,9 @@ class PluginMarket:
         if not plugin_id:
             return {"success": False, "message": "插件ID为空"}
 
-        plugin_dir = self._plugins_dir / plugin_id
-        if plugin_dir.exists():
+        if self._find_plugin_dir(plugin_id):
             return {"success": False, "message": f"{plugin_id} 已安装"}
+        plugin_dir = self._plugins_dir / "community" / plugin_id
 
         # 从GitHub下载
         try:
@@ -232,10 +264,12 @@ class PluginMarket:
 
     def uninstall(self, plugin_id: str) -> dict:
         """卸载插件（删除文件）。"""
-        plugin_dir = self._plugins_dir / plugin_id
+        plugin_dir = self._find_plugin_dir(plugin_id)
         plugin_file = self._plugins_dir / f"{plugin_id}.py"
 
-        if plugin_dir.exists():
+        if plugin_dir and plugin_dir.parent == self._plugins_dir / "builtin":
+            return {"success": False, "message": f"{plugin_id} 是内置插件，可禁用但不能卸载"}
+        if plugin_dir and plugin_dir.exists():
             shutil.rmtree(str(plugin_dir))
             logger.info(f"[Market] 已卸载: {plugin_id}")
             return {"success": True, "message": f"已卸载 {plugin_id}"}
@@ -252,20 +286,31 @@ class PluginMarket:
     def get_installed(self) -> list[dict]:
         """获取已安装的插件列表（含本地信息）。"""
         result = []
-        for d in self._plugins_dir.iterdir():
-            if d.is_dir() and ((d / "plugin.py").exists() or (d / "__init__.py").exists()):
-                info = {"id": d.name, "name": d.name, "installed": True}
-                config_path = d / "config.json"
-                if config_path.exists():
-                    try:
-                        config = json.loads(config_path.read_text(encoding="utf-8"))
-                        info.update(config)
-                    except Exception:
-                        pass
-                result.append(info)
+        for plugin_id, d, source in self._iter_plugin_dirs():
+            info = {
+                "id": plugin_id,
+                "name": plugin_id,
+                "installed": True,
+                "source": source,
+                "path": str(d),
+            }
+            config_path = d / "config.json"
+            if config_path.exists():
+                try:
+                    config = json.loads(config_path.read_text(encoding="utf-8"))
+                    info.update(config)
+                except Exception:
+                    pass
+            result.append(info)
         for f in self._plugins_dir.glob("*.py"):
             if not f.name.startswith("_"):
-                result.append({"id": f.stem, "name": f.stem, "installed": True})
+                result.append({
+                    "id": f.stem,
+                    "name": f.stem,
+                    "installed": True,
+                    "source": "root_file",
+                    "path": str(f),
+                })
         return result
 
     # ================================================================
@@ -544,12 +589,12 @@ class PluginMarket:
         """查找插件目录（支持builtin/community子目录）。"""
         # 直接查找
         d = self._plugins_dir / plugin_id
-        if d.exists():
+        if self._is_plugin_dir(d):
             return d
         # 在子目录里查找
-        for sub in ["builtin", "community"]:
+        for sub in ["community", "builtin"]:
             d = self._plugins_dir / sub / plugin_id
-            if d.exists():
+            if self._is_plugin_dir(d):
                 return d
         return None
 
@@ -625,9 +670,9 @@ class PluginMarket:
         if not re.match(r'^[a-z][a-z0-9_]*$', plugin_id):
             return {"success": False, "message": "ID格式错误"}
 
-        plugin_dir = self._plugins_dir / plugin_id
-        if plugin_dir.exists():
+        if self._find_plugin_dir(plugin_id):
             return {"success": False, "message": f"{plugin_id} 已存在"}
+        plugin_dir = self._plugins_dir / "community" / plugin_id
 
         # 生成类名
         class_name = ''.join(w.capitalize() for w in plugin_id.split('_')) + 'Plugin'
@@ -681,8 +726,8 @@ class {class_name}(Plugin):
         errors = []
 
         async with aiohttp.ClientSession() as session:
-            for d in self._plugins_dir.iterdir():
-                if not d.is_dir():
+            for _, d, source in self._iter_plugin_dirs():
+                if source == "builtin":
                     continue
                 plugin_py = d / "plugin.py"
                 if not plugin_py.exists():

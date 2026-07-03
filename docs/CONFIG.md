@@ -183,7 +183,7 @@ avatar:
   model_path: "live2d_models/default"     # Live2D 模型目录
 ```
 
-> 桌面端 Live2D 由前端加载渲染；后端这里主要作记录。第三方 Live2D 模型不在 MIT 许可范围内。
+> 桌面端 Live2D 由前端加载渲染；后端这里主要作记录。`live2d_models/` 里的模型资源按各自来源 / 说明使用，不并入源码 MIT 许可。
 
 ---
 

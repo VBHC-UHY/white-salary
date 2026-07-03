@@ -1,0 +1,33 @@
+{
+  "name": "White Salary",
+  "canvas_size": {
+    "width": 1024,
+    "height": 1024
+  },
+  "textures": [
+    "texture_00.png"
+  ],
+  "layers": [
+    {
+      "name": "Hair_Back",
+      "file": "texture_01_Hair_Back.png"
+    },
+    {
+      "name": "Body",
+      "file": "texture_02_Body.png"
+    },
+    {
+      "name": "Face",
+      "file": "texture_03_Face.png"
+    },
+    {
+      "name": "Eye_L",
+      "file": "texture_04_Eye_L.png"
+    },
+    {
+      "name": "Hair_Front",
+      "file": "texture_05_Hair_Front.png"
+    }
+  ],
+  "notes": "Import texture_00.png into Cubism Editor, use Auto features for rigging"
+}
