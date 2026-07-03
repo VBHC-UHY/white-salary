@@ -66,6 +66,7 @@ pip install -e .
 - **`openai`** —— 当前主 LLM 适配器使用 OpenAI 兼容 SDK 调各家兼容接口；`uv sync` / `pip install -e .` 默认会安装。
 - **`python-multipart`** —— 控制面板上传图片（multipart 表单）需要它，缺了图片上传会报错。
 - **`ddgs`** —— `web_search` 等搜索工具的后端（DuckDuckGo），缺了搜索工具不可用。
+- **`yt-dlp`** —— `download_video` 视频下载工具的后端，缺了发视频下载任务会失败。
 
 > 这些已经写进 `pyproject.toml` 的主依赖，`pip install -e .` / `uv sync` 会自动装。若你是用旧的 `requirements` 方式手动装，务必补上。
 

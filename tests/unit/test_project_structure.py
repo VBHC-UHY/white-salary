@@ -80,6 +80,7 @@ class TestDirectoryStructure:
             "[project.optional-dependencies]", 1
         )[0]
         assert '"openai>=1.50.0"' in dependencies_block
+        assert '"yt-dlp>=2026.1.0"' in dependencies_block
 
     def test_windows_launcher_uses_project_venv(self) -> None:
         """Install/start scripts should use the Windows project .venv."""
@@ -88,6 +89,7 @@ class TestDirectoryStructure:
         assert "python -m venv" in install
         assert ".venv\\Scripts\\python.exe" in install
         assert '"%PROJECT_PYTHON%" -m pip install -e .' in install
+        assert "yt_dlp" in install
         assert ".venv\\Scripts\\python.exe" in start_backend
 
     def test_gpt_sovits_launchers_use_configured_path(self) -> None:
