@@ -48,6 +48,7 @@ def test_template_plugins_are_created_under_community(tmp_path: Path) -> None:
     assert result["success"] is True
     assert (plugins_dir / "community" / "hello_world" / "plugin.py").is_file()
     assert market._find_plugin_dir("hello_world") == plugins_dir / "community" / "hello_world"
+    assert market.get_installed()[0]["source"] == "community"
 
 
 def test_uninstall_supports_community_and_protects_builtin_paths(tmp_path: Path) -> None:

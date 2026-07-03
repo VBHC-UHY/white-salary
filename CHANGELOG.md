@@ -9,12 +9,10 @@
 
 ## [未发布 / 开发中] · 功能大项（发布时定为 0.2.0）
 
-在 0.1.4 之后陆续加入的新功能（累积中，达到里程碑后打 0.2.0 标签）：
+在 0.1.5 之后陆续加入的新功能（累积中，达到里程碑后打 0.2.0 标签）：
 
 - **安装文档校准**：README、快速上手、INSTALL、CONFIG、自检脚本提示统一强调 `.venv` 隔离安装、Python 3.10-3.12 边界、Linux `install.sh --with-memory` 用法，以及一把硅基流动 key 可复用到看图/语音/生图/生视频云端兜底。
 - **服务器新手向导**：新增 `server-setup.sh`，面向 Linux / VPS / 云服务器，自动调用 `install.sh`、写入 `conf.yaml`、提示粘贴 SiliconFlow key、配置监听地址端口、可选长期记忆和 systemd 服务；文档明确区分 Windows 桌宠路线与服务器后端路线。
-- **插件目录统一**：插件市场“已安装”列表与启动时 `PluginManager` 使用同一套目录规则，统一识别 `plugins/`、`plugins/community/`、`plugins/builtin/`；市场安装/模板创建默认进入 `plugins/community/`。
-- **默认 Live2D 模型随仓库提供**：公开仓库包含 `live2d_models/` 默认模型资源，下载后桌宠形象可开箱加载；Docker 构建仍排除该目录，避免服务器镜像变大。
 - **游戏对接接口**：`POST /api/game/event` + `GET /api/game/ping`——外部游戏（如 Aurora Forge）在打 Boss / 升级 / 收伙伴等事件时上报，白在桌面实时道喜/吐槽（fire-and-forget，穿透忙碌模式）。
 - **插件热加载**：`on_message`/`on_reply` 钩子接进 QQ/桌面消息链路（此前定义了从不触发）；插件市场装完即生效不用重启；坏插件隔离 + 超时保护。
 - **B 站直播弹幕互动**：连进直播间读弹幕、用白的人格回复（默认关闭；关键词触发 + 同用户 30 秒冷却防刷屏；发弹幕需先登录 B 站）。
@@ -22,6 +20,23 @@
 - **稳定性**：LLM 通道从不稳定的 NVIDIA 免费接口迁移到更稳定的供应商（默认模板配置更新）。
 
 测试：677 个单元 + 集成测试全绿。
+
+---
+
+## [0.1.5] - 2026-07-03 · 插件目录统一与默认 Live2D 模型
+
+面向公开仓库下载用户的体验修复版：重点解决“插件实际存在但插件市场/已安装列表看不到”的目录口径不一致问题，并把默认 Live2D 模型随源码提供，减少新手开箱后没有桌宠形象的困惑。
+
+### 修复
+- **插件目录统一**：插件市场“已安装”列表与启动时 `PluginManager` 使用同一套目录规则，统一识别 `plugins/`、`plugins/community/`、`plugins/builtin/`。
+- **市场安装位置明确**：市场安装和模板创建默认写入 `plugins/community/<插件名>/`，继续兼容旧的 `plugins/<插件名>/` 布局。
+- **内置插件保护**：`plugins/builtin/` 下的内置插件能显示、能禁用，但不会被卸载按钮直接删除。
+- **默认 Live2D 模型随仓库提供**：公开仓库包含 `live2d_models/` 默认模型资源，下载后桌宠形象可开箱加载；Docker 构建仍排除该目录，避免服务器镜像变大。
+- **文档同步**：README、快速上手、CONFIG、CHANGELOG 同步说明默认模型已附带，也保留用户自定义替换模型的路径。
+
+### 验证
+- `python -m pytest tests/unit/test_plugin_market_paths.py tests/unit/test_project_structure.py -q`
+- `python -m py_compile src/white_salary/core/plugins/market.py`
 
 ---
 

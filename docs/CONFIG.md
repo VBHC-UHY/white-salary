@@ -49,7 +49,7 @@ llm:
 ```yaml
 system:
   name: "White Salary"    # 项目名（别改）
-  version: "0.1.4"
+  version: "0.1.5"
   debug: false            # true=更多日志
   log_level: "INFO"       # DEBUG / INFO / WARNING / ERROR
 
