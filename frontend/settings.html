@@ -1,0 +1,1609 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>White Salary - Control Panel</title>
+    <link rel="stylesheet" href="css/settings.css">
+</head>
+<body>
+    <!-- Custom Title Bar -->
+    <div id="titlebar">
+        <div class="titlebar-title">White Salary Control Panel</div>
+        <div class="titlebar-buttons">
+            <button class="tb-btn" id="btn-minimize">─</button>
+            <button class="tb-btn" id="btn-maximize">□</button>
+            <button class="tb-btn tb-close" id="btn-close">✕</button>
+        </div>
+    </div>
+
+    <div class="app-container">
+        <!-- Sidebar Navigation -->
+        <nav class="sidebar">
+            <div class="sidebar-header">
+                <div class="logo"><img src="assets/avatar.png" alt="白" onerror="this.parentElement.textContent='白'"></div>
+                <div class="logo-text">White Salary</div>
+            </div>
+            <div class="nav-items">
+                <div class="nav-group-label">常用</div>
+                <button class="nav-btn active" data-tab="home">🏠 主界面</button>
+                <button class="nav-btn" data-tab="llm">🤖 LLM配置</button>
+                <button class="nav-btn" data-tab="voice">🎙️ 语音设置</button>
+                <button class="nav-btn" data-tab="character">👤 人设管理</button>
+
+                <div class="nav-group-label">功能</div>
+                <button class="nav-btn" data-tab="chat">💬 对话设置</button>
+                <button class="nav-btn" data-tab="memory">🧠 记忆系统</button>
+                <button class="nav-btn" data-tab="modules">⚙️ 模块管理</button>
+                <button class="nav-btn" data-tab="users">👥 用户管理</button>
+                <button class="nav-btn" data-tab="stickers">😎 表情包</button>
+                <button class="nav-btn" data-tab="expressions">🎭 表情动作</button>
+                <button class="nav-btn" data-tab="voice_clone">🎤 声音克隆</button>
+                <button class="nav-btn" data-tab="knowledge">🕸️ 知识图谱</button>
+                <button class="nav-btn" data-tab="plugins">🧩 插件市场</button>
+                <button class="nav-btn" data-tab="devplatform">👨‍💻 开发者</button>
+
+                <div class="nav-group-label">系统</div>
+                <button class="nav-btn" data-tab="ui">🖥️ UI/视觉</button>
+                <button class="nav-btn" data-tab="qq">📱 QQ集成</button>
+                <button class="nav-btn" data-tab="qzone">🌐 QQ空间</button>
+                <button class="nav-btn" data-tab="bilibili">📺 B站</button>
+                <button class="nav-btn" data-tab="aigen">🎨 AI生成</button>
+                <button class="nav-btn" data-tab="debug">🔧 调试工具</button>
+                <button class="nav-btn" data-tab="terminal">⚙️ 终端</button>
+                <button class="nav-btn" data-tab="about">ℹ️ 关于</button>
+            </div>
+        </nav>
+
+        <!-- Main Content Area -->
+        <main class="content">
+            <!-- ============ Home / Dashboard ============ -->
+            <section class="tab-panel active" id="tab-home">
+                <h2>主界面</h2>
+
+                <!-- 角色卡片 -->
+                <div class="home-hero">
+                    <div class="home-avatar">
+                        <img src="assets/avatar.png" alt="白" onerror="this.parentElement.textContent='白'">
+                    </div>
+                    <div class="home-info">
+                        <div class="home-name">White Salary</div>
+                        <div class="home-subtitle">AI桌面伙伴</div>
+                    </div>
+                </div>
+
+                <!-- 状态卡片 -->
+                <div class="status-cards">
+                    <div class="status-card">
+                        <div class="status-indicator" id="status-backend"></div>
+                        <div class="status-label">后端</div>
+                        <div class="status-detail" id="detail-backend">端口 12400</div>
+                    </div>
+                    <div class="status-card">
+                        <div class="status-indicator" id="status-tts"></div>
+                        <div class="status-label">语音</div>
+                        <div class="status-detail" id="detail-tts">端口 9880</div>
+                    </div>
+                    <div class="status-card">
+                        <div id="affinity-emoji-home" style="font-size:22px;">👨‍👩‍👧</div>
+                        <div class="status-label" id="affinity-level-home">家人</div>
+                        <div class="status-detail" id="affinity-pts-home">--</div>
+                    </div>
+                    <div class="status-card">
+                        <div id="mood-emoji-home" style="font-size:22px;">😊</div>
+                        <div class="status-label" id="mood-desc-home">正常</div>
+                        <div class="status-detail" id="mood-pts-home">80分</div>
+                    </div>
+                    <div class="status-card">
+                        <div class="status-indicator" id="status-qq"></div>
+                        <div class="status-label">QQ</div>
+                        <div class="status-detail" id="detail-qq">NapCat</div>
+                    </div>
+                    <div class="status-card">
+                        <div style="font-size:22px;">🧠</div>
+                        <div class="status-label" id="memory-count-home">记忆</div>
+                        <div class="status-detail" id="memory-detail-home">--</div>
+                    </div>
+                </div>
+
+                <!-- 快捷操作 -->
+                <div class="section">
+                    <h3>快捷操作</h3>
+                    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;">
+                        <!-- 2026-07-03 面板升级（批6）：手动刷新带 force=1 跳过后端10秒TTL缓存，
+                             真正即时探测（依据 panel-main.json"刷新状态按钮"审计项） -->
+                        <button class="btn-primary" onclick="checkStatus(true);loadMemory();showHint('已刷新')">刷新状态</button>
+                        <button class="btn-primary" onclick="restartBackend()">重启后端</button>
+                        <button class="btn-primary" onclick="startLocalTTS()">启动本地TTS</button>
+                    </div>
+                    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;">
+                        <button class="btn-small" onclick="triggerMemoryConsolidation()">手动整理记忆</button>
+                        <button class="btn-small" onclick="triggerUserLearning()">手动分析用户画像</button>
+                        <button class="btn-small" onclick="clearDesktopChat()">清空桌面对话</button>
+                        <button class="btn-small" onclick="clearQQContext()">清空QQ对话上下文</button>
+                    </div>
+                    <div style="display:flex;gap:10px;flex-wrap:wrap;">
+                        <button class="btn-small" onclick="openProjectDir()">打开项目目录</button>
+                        <button class="btn-small" onclick="openNapCatLogs()">NapCat日志目录</button>
+                    </div>
+                </div>
+
+                <!-- 运行日志 -->
+                <div class="section">
+                    <h3>运行日志</h3>
+                    <div class="log-viewer" id="launch-log-viewer" style="height:200px;">
+                        <div class="log-line">加载中...</div>
+                    </div>
+                    <button class="btn-small" style="margin-top:8px;" onclick="loadLaunchLogs()">刷新</button>
+                </div>
+            </section>
+
+            <!-- ============ LLM Tab ============ -->
+            <section class="tab-panel" id="tab-llm">
+                <h2>LLM配置</h2>
+                <div class="section">
+                    <h3>主对话模型（Main Brain）</h3>
+                    <div class="form-group">
+                        <label>供应商</label>
+                        <select id="llm-provider">
+                            <option value="">加载中...</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <!-- 2026-07-03 面板升级（批6）：Key输入框改密码态，打开面板不再明文裸奔
+                             （依据 panel-llm.json"API Key 掩码显示"审计项） -->
+                        <label>API Key</label>
+                        <input type="password" id="llm-api-key" placeholder="sk-...">
+                        <button class="btn-small" onclick="togglePassword('llm-api-key')">显示/隐藏</button>
+                    </div>
+                    <div class="form-group">
+                        <label>API 地址</label>
+                        <input type="text" id="llm-base-url" placeholder="https://api.example.com/v1">
+                    </div>
+                    <div class="form-group">
+                        <label>模型名称</label>
+                        <input type="text" id="llm-model" placeholder="gpt-4o">
+                    </div>
+                    <div class="form-group">
+                        <label>创造性 (Temperature) <span id="llm-temp-value">0.7</span></label>
+                        <input type="range" id="llm-temperature" min="0" max="1" step="0.1" value="0.7"
+                               oninput="document.getElementById('llm-temp-value').textContent=this.value">
+                    </div>
+                    <div class="form-group">
+                        <label>最大回复长度 (Tokens)</label>
+                        <input type="number" id="llm-max-tokens" value="2048" min="256" max="32768">
+                    </div>
+                    <!-- 2026-07-03 面板升级（批6）：连通性测试按钮，调 POST /llm/test 用表单
+                         当前值发1-token探活（依据 panel-llm.json"连通性测试按钮"审计项） -->
+                    <div class="form-group">
+                        <button class="btn-small" onclick="testLLMChannel('llm')">测试连通</button>
+                        <span id="llm-test-result-llm" style="font-size:12px;margin-left:8px;"></span>
+                    </div>
+                </div>
+                <div class="section">
+                    <h3>② 工具判断模型（Tool LLM）</h3>
+                    <p style="color:#4a5568;font-size:12px;margin-bottom:12px;">负责 Function Calling 决策，推荐用 DeepSeek（推理能力强）</p>
+                    <div class="form-group">
+                        <label>供应商</label>
+                        <select id="llm-tool-provider"><option value="">请选择供应商</option></select>
+                    </div>
+                    <div class="form-group">
+                        <label>API Key</label>
+                        <input type="password" id="llm-tool-api-key" placeholder="填入该供应商的 API Key">
+                        <button class="btn-small" onclick="togglePassword('llm-tool-api-key')">显示/隐藏</button>
+                    </div>
+                    <div class="form-group">
+                        <label>API 地址（留空 = 用预设供应商地址）</label>
+                        <input type="text" id="llm-tool-base-url" placeholder="https://api.example.com/v1">
+                    </div>
+                    <div class="form-group">
+                        <label>模型名称</label>
+                        <input type="text" id="llm-tool-model" placeholder="deepseek-chat">
+                    </div>
+                    <div class="form-group">
+                        <button class="btn-small" onclick="testLLMChannel('llm_tool')">测试连通</button>
+                        <span id="llm-test-result-llm_tool" style="font-size:12px;margin-left:8px;"></span>
+                    </div>
+                </div>
+                <div class="section">
+                    <h3>③ 记忆分析模型（Memory LLM）</h3>
+                    <p style="color:#4a5568;font-size:12px;margin-bottom:12px;">分析对话中值得记住的信息，推荐用 DeepSeek V3.2（分析能力强）</p>
+                    <div class="form-group">
+                        <label>供应商</label>
+                        <select id="llm-memory-provider"><option value="">请选择供应商</option></select>
+                    </div>
+                    <div class="form-group">
+                        <label>API Key</label>
+                        <input type="password" id="llm-memory-api-key" placeholder="填入该供应商的 API Key">
+                        <button class="btn-small" onclick="togglePassword('llm-memory-api-key')">显示/隐藏</button>
+                    </div>
+                    <div class="form-group">
+                        <label>API 地址（留空 = 用预设供应商地址）</label>
+                        <input type="text" id="llm-memory-base-url" placeholder="https://api.example.com/v1">
+                    </div>
+                    <div class="form-group">
+                        <label>模型名称</label>
+                        <input type="text" id="llm-memory-model" placeholder="deepseek-ai/DeepSeek-V3.2">
+                    </div>
+                    <div class="form-group">
+                        <button class="btn-small" onclick="testLLMChannel('llm_memory')">测试连通</button>
+                        <span id="llm-test-result-llm_memory" style="font-size:12px;margin-left:8px;"></span>
+                    </div>
+                </div>
+                <div class="section">
+                    <h3>④ 情感分析模型（Emotion LLM）</h3>
+                    <p style="color:#4a5568;font-size:12px;margin-bottom:12px;">理解用户情绪、调整回复语气，推荐用擅长情感理解的模型</p>
+                    <div class="form-group">
+                        <label>供应商</label>
+                        <select id="llm-emotion-provider"><option value="">请选择供应商</option></select>
+                    </div>
+                    <div class="form-group">
+                        <label>API Key</label>
+                        <input type="password" id="llm-emotion-api-key" placeholder="填入该供应商的 API Key">
+                        <button class="btn-small" onclick="togglePassword('llm-emotion-api-key')">显示/隐藏</button>
+                    </div>
+                    <div class="form-group">
+                        <label>API 地址（留空 = 用预设供应商地址）</label>
+                        <input type="text" id="llm-emotion-base-url" placeholder="https://api.example.com/v1">
+                    </div>
+                    <div class="form-group">
+                        <label>模型名称</label>
+                        <input type="text" id="llm-emotion-model" placeholder="deepseek-ai/DeepSeek-V3.2">
+                    </div>
+                    <div class="form-group">
+                        <button class="btn-small" onclick="testLLMChannel('llm_emotion')">测试连通</button>
+                        <span id="llm-test-result-llm_emotion" style="font-size:12px;margin-left:8px;"></span>
+                    </div>
+                </div>
+                <div class="section">
+                    <h3>⑤ 视觉理解模型（Vision LLM）</h3>
+                    <p style="color:#4a5568;font-size:12px;margin-bottom:12px;">看图/看屏幕，需要多模态能力，推荐 GLM-4.1V</p>
+                    <div class="form-group">
+                        <label>供应商</label>
+                        <select id="llm-vision-provider"><option value="">请选择供应商</option></select>
+                    </div>
+                    <div class="form-group">
+                        <label>API Key</label>
+                        <input type="password" id="llm-vision-api-key" placeholder="填入该供应商的 API Key">
+                        <button class="btn-small" onclick="togglePassword('llm-vision-api-key')">显示/隐藏</button>
+                    </div>
+                    <div class="form-group">
+                        <label>API 地址（留空 = 用预设供应商地址）</label>
+                        <input type="text" id="llm-vision-base-url" placeholder="https://api.example.com/v1">
+                    </div>
+                    <div class="form-group">
+                        <label>模型名称</label>
+                        <input type="text" id="llm-vision-model" placeholder="THUDM/GLM-4.1V-9B-Thinking">
+                    </div>
+                    <div class="form-group">
+                        <button class="btn-small" onclick="testLLMChannel('llm_vision')">测试连通</button>
+                        <span id="llm-test-result-llm_vision" style="font-size:12px;margin-left:8px;"></span>
+                    </div>
+                </div>
+                <div class="section">
+                    <h3>⑥ 后处理模型（Postprocess LLM）</h3>
+                    <p style="color:#4a5568;font-size:12px;margin-bottom:12px;">杂活、配文、快速辅助任务</p>
+                    <div class="form-group">
+                        <label>供应商</label>
+                        <select id="llm-postprocess-provider"><option value="">请选择供应商</option></select>
+                    </div>
+                    <div class="form-group">
+                        <label>API Key</label>
+                        <input type="password" id="llm-postprocess-api-key" placeholder="填入该供应商的 API Key">
+                        <button class="btn-small" onclick="togglePassword('llm-postprocess-api-key')">显示/隐藏</button>
+                    </div>
+                    <div class="form-group">
+                        <label>API 地址（留空 = 用预设供应商地址）</label>
+                        <input type="text" id="llm-postprocess-base-url" placeholder="https://api.example.com/v1">
+                    </div>
+                    <div class="form-group">
+                        <label>模型名称</label>
+                        <input type="text" id="llm-postprocess-model" placeholder="deepseek-ai/DeepSeek-V3.2">
+                    </div>
+                    <div class="form-group">
+                        <button class="btn-small" onclick="testLLMChannel('llm_postprocess')">测试连通</button>
+                        <span id="llm-test-result-llm_postprocess" style="font-size:12px;margin-left:8px;"></span>
+                    </div>
+                </div>
+                <div class="section">
+                    <h3>⑦ 检测防护模型（Detect LLM）</h3>
+                    <p style="color:#4a5568;font-size:12px;margin-bottom:12px;">对话安全检测、话题追踪、风格记忆</p>
+                    <div class="form-group">
+                        <label>供应商</label>
+                        <select id="llm-detect-provider"><option value="">请选择供应商</option></select>
+                    </div>
+                    <div class="form-group">
+                        <label>API Key</label>
+                        <input type="password" id="llm-detect-api-key" placeholder="填入该供应商的 API Key">
+                        <button class="btn-small" onclick="togglePassword('llm-detect-api-key')">显示/隐藏</button>
+                    </div>
+                    <div class="form-group">
+                        <label>API 地址（留空 = 用预设供应商地址）</label>
+                        <input type="text" id="llm-detect-base-url" placeholder="https://api.example.com/v1">
+                    </div>
+                    <div class="form-group">
+                        <label>模型名称</label>
+                        <input type="text" id="llm-detect-model" placeholder="deepseek-ai/deepseek-v3.1">
+                    </div>
+                    <div class="form-group">
+                        <button class="btn-small" onclick="testLLMChannel('llm_detect')">测试连通</button>
+                        <span id="llm-test-result-llm_detect" style="font-size:12px;margin-left:8px;"></span>
+                    </div>
+                </div>
+                <div class="section">
+                    <h3>⑧ 后台任务模型（Background LLM）</h3>
+                    <p style="color:#4a5568;font-size:12px;margin-bottom:12px;">不紧急的后台任务、自动聊天、QQ监控</p>
+                    <div class="form-group">
+                        <label>供应商</label>
+                        <select id="llm-background-provider"><option value="">请选择供应商</option></select>
+                    </div>
+                    <div class="form-group">
+                        <label>API Key</label>
+                        <input type="password" id="llm-background-api-key" placeholder="填入该供应商的 API Key">
+                        <button class="btn-small" onclick="togglePassword('llm-background-api-key')">显示/隐藏</button>
+                    </div>
+                    <div class="form-group">
+                        <label>API 地址（留空 = 用预设供应商地址）</label>
+                        <input type="text" id="llm-background-base-url" placeholder="https://api.example.com/v1">
+                    </div>
+                    <div class="form-group">
+                        <label>模型名称</label>
+                        <input type="text" id="llm-background-model" placeholder="meta/llama-3.3-70b-instruct">
+                    </div>
+                    <div class="form-group">
+                        <button class="btn-small" onclick="testLLMChannel('llm_background')">测试连通</button>
+                        <span id="llm-test-result-llm_background" style="font-size:12px;margin-left:8px;"></span>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ============ Voice Tab ============ -->
+            <!-- 2026-07-03 面板升级（批6）：语音页重做——原 tts.provider/voice/rate 三个键是
+                 批5删除的死配置（Pydantic直接丢弃），UI保留但改绑批5真实生效的字段
+                 （依据 panel-voice.json 全部审计项） -->
+            <section class="tab-panel" id="tab-voice">
+                <h2>语音设置</h2>
+                <div class="section">
+                    <h3>语音合成引擎</h3>
+                    <div class="form-group">
+                        <label>当前生效引擎（自动探测，只读）</label>
+                        <select id="tts-provider" disabled title="引擎由后端启动时自动探测：本地9880端口可用走GPT-SoVITS，否则SiliconFlow云端兜底">
+                            <option value="gpt_sovits">本地 GPT-SoVITS（最佳音质）</option>
+                            <option value="siliconflow">硅基流动 CosyVoice2（云端兜底）</option>
+                        </select>
+                        <p style="color:#4a5568;font-size:11px;margin-top:4px;">引擎不可手选：后端启动时探测本地TTS端口自动决定，此处展示当前实际生效引擎</p>
+                    </div>
+                    <div class="form-group">
+                        <label>基准语速 <span id="tts-speed-value">1.0</span>x</label>
+                        <input type="range" id="tts-speed" min="0.5" max="2.0" step="0.05" value="1.0"
+                               oninput="document.getElementById('tts-speed-value').textContent=this.value">
+                        <p style="color:#4a5568;font-size:11px;margin-top:4px;">0.5~2.0，情绪调速会在此基准上叠加（见「表情动作」页调节表）</p>
+                    </div>
+                </div>
+                <div class="section">
+                    <h3>本地 GPT-SoVITS</h3>
+                    <div class="form-group">
+                        <label>本地API地址</label>
+                        <input type="text" id="tts-local-api-url" placeholder="http://127.0.0.1:9880">
+                    </div>
+                    <div class="form-group">
+                        <label>参考音频路径（决定克隆音色）</label>
+                        <input type="text" id="tts-ref-audio" placeholder="assets/tts/ref_default.wav">
+                        <p style="color:#4a5568;font-size:11px;margin-top:4px;">相对项目根目录或绝对路径；环境变量 WS_TTS_REF_AUDIO 会覆盖此配置</p>
+                    </div>
+                    <div class="form-group">
+                        <label>参考音频文字内容</label>
+                        <input type="text" id="tts-ref-text" placeholder="参考音频里说的话">
+                    </div>
+                </div>
+                <div class="section">
+                    <h3>云端兜底（SiliconFlow）</h3>
+                    <div class="form-group">
+                        <label>兜底API密钥</label>
+                        <input type="password" id="tts-fallback-api-key" placeholder="留空 = 自动复用角色LLM里的SiliconFlow密钥">
+                        <button class="btn-small" onclick="togglePassword('tts-fallback-api-key')">显示/隐藏</button>
+                    </div>
+                    <div class="form-group">
+                        <label>兜底TTS模型</label>
+                        <input type="text" id="tts-fallback-model" placeholder="FunAudioLLM/CosyVoice2-0.5B">
+                    </div>
+                    <div class="form-group">
+                        <label>兜底音色ID</label>
+                        <input type="text" id="tts-fallback-voice" placeholder="speech:xxx 自定义克隆音色或预置音色ID">
+                    </div>
+                </div>
+                <div class="section">
+                    <h3>语音识别（ASR）</h3>
+                    <div class="form-group">
+                        <label>API密钥</label>
+                        <input type="password" id="asr-api-key" placeholder="留空 = 自动复用角色LLM里的SiliconFlow密钥">
+                        <button class="btn-small" onclick="togglePassword('asr-api-key')">显示/隐藏</button>
+                    </div>
+                    <div class="form-group">
+                        <label>识别模型</label>
+                        <input type="text" id="asr-model" placeholder="FunAudioLLM/SenseVoiceSmall">
+                    </div>
+                </div>
+            </section>
+
+            <!-- ============ Character Tab ============ -->
+            <section class="tab-panel" id="tab-character">
+                <h2>人设管理</h2>
+
+                <!-- 分区编辑器 -->
+                <div class="section">
+                    <h3>分区编辑（点击展开修改，改完点保存）</h3>
+                    <div id="prompt-sections-container">
+                        <div class="log-line">加载中...</div>
+                    </div>
+                </div>
+
+                <!-- 完整编辑 -->
+                <div class="section">
+                    <h3>完整编辑（高级）</h3>
+                    <p style="color:#4a5568;font-size:12px;margin-bottom:8px;">直接编辑整个系统提示词文件</p>
+                    <div class="form-group">
+                        <textarea id="char-prompt" rows="12" placeholder="在这里定义角色的性格、说话风格、背景故事..."></textarea>
+                    </div>
+                    <button class="btn-primary" onclick="savePrompt()">保存完整人设</button>
+                </div>
+
+                <!-- 模板库 -->
+                <div class="section">
+                <!-- 对话提示模板编辑 -->
+                <div class="section">
+                    <h3>对话提示模板（直接影响白说话的方式）</h3>
+                    <p style="color:#4a5568;font-size:12px;margin-bottom:8px;">改这里会实时影响白的对话语气和表达方式</p>
+
+                    <!-- 语气模式 -->
+                    <details style="margin-bottom:8px;border:1px solid rgba(0,153,204,0.2);border-radius:6px;padding:8px;">
+                        <summary style="cursor:pointer;color:#00d4ff;font-weight:bold;">语气模式（5种好感度对应的说话方式）</summary>
+                        <div style="margin-top:8px;">
+                            <label style="color:#4a5568;font-size:11px;">家人模式</label>
+                            <textarea id="tpl-persona-family" rows="2" style="width:100%;background:#f5f8fc;color:#1a1a2e;border:1px solid rgba(0,153,204,0.2);border-radius:4px;padding:6px;font-size:12px;margin-bottom:6px;"></textarea>
+                            <label style="color:#4a5568;font-size:11px;">亲密模式</label>
+                            <textarea id="tpl-persona-intimate" rows="2" style="width:100%;background:#f5f8fc;color:#1a1a2e;border:1px solid rgba(0,153,204,0.2);border-radius:4px;padding:6px;font-size:12px;margin-bottom:6px;"></textarea>
+                            <label style="color:#4a5568;font-size:11px;">友好模式</label>
+                            <textarea id="tpl-persona-friendly" rows="2" style="width:100%;background:#f5f8fc;color:#1a1a2e;border:1px solid rgba(0,153,204,0.2);border-radius:4px;padding:6px;font-size:12px;margin-bottom:6px;"></textarea>
+                            <label style="color:#4a5568;font-size:11px;">礼貌模式</label>
+                            <textarea id="tpl-persona-polite" rows="2" style="width:100%;background:#f5f8fc;color:#1a1a2e;border:1px solid rgba(0,153,204,0.2);border-radius:4px;padding:6px;font-size:12px;margin-bottom:6px;"></textarea>
+                            <label style="color:#4a5568;font-size:11px;">冷淡模式</label>
+                            <textarea id="tpl-persona-cold" rows="2" style="width:100%;background:#f5f8fc;color:#1a1a2e;border:1px solid rgba(0,153,204,0.2);border-radius:4px;padding:6px;font-size:12px;margin-bottom:6px;"></textarea>
+                            <button class="btn-primary" onclick="savePromptTemplateSection('affinity_persona')">保存语气模式</button>
+                        </div>
+                    </details>
+
+                    <!-- 禁用词 -->
+                    <details style="margin-bottom:8px;border:1px solid rgba(0,153,204,0.2);border-radius:6px;padding:8px;">
+                        <summary style="cursor:pointer;color:#00d4ff;font-weight:bold;">禁用词/禁用句式（防人机过滤规则）</summary>
+                        <div style="margin-top:8px;">
+                            <label style="color:#4a5568;font-size:11px;">禁用的字（每行一个）</label>
+                            <textarea id="tpl-banned-words" rows="2" style="width:100%;background:#f5f8fc;color:#1a1a2e;border:1px solid rgba(0,153,204,0.2);border-radius:4px;padding:6px;font-size:12px;margin-bottom:6px;"></textarea>
+                            <label style="color:#4a5568;font-size:11px;">禁用的说教句式（每行一个）</label>
+                            <textarea id="tpl-banned-lecture" rows="2" style="width:100%;background:#f5f8fc;color:#1a1a2e;border:1px solid rgba(0,153,204,0.2);border-radius:4px;padding:6px;font-size:12px;margin-bottom:6px;"></textarea>
+                            <button class="btn-primary" onclick="savePromptTemplateSection('human_like_filter')">保存禁用规则</button>
+                        </div>
+                    </details>
+                </div>
+
+                    <h3>人设模板库</h3>
+                    <p style="color:#4a5568;font-size:12px;margin-bottom:12px;">一键切换预设人设（会覆盖当前系统提示词）</p>
+                    <div id="template-list">
+                        <div class="log-line">加载中...</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ============ Chat Tab ============ -->
+            <section class="tab-panel" id="tab-chat">
+                <h2>对话设置</h2>
+                <div class="section">
+                    <h3>记忆系统</h3>
+                    <div class="form-group">
+                        <label>短期记忆保留轮数</label>
+                        <input type="number" id="mem-max-turns" value="20" min="5" max="100">
+                    </div>
+                    <div class="form-group">
+                        <label>长期记忆引擎</label>
+                        <select id="mem-provider">
+                            <option value="none">未启用</option>
+                            <option value="chroma">ChromaDB 向量数据库</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="section">
+                    <h3>主动聊天</h3>
+                    <div class="form-group">
+                        <label>主动聊天</label>
+                        <select id="auto-chat-enabled">
+                            <option value="true">开启</option>
+                            <option value="false">关闭</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>早安问候</label>
+                        <select id="auto-chat-morning">
+                            <option value="true">开启</option>
+                            <option value="false">关闭</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>晚安问候</label>
+                        <select id="auto-chat-night">
+                            <option value="true">开启</option>
+                            <option value="false">关闭</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>关心提醒（吃饭/喝水）</label>
+                        <select id="auto-chat-care">
+                            <option value="true">开启</option>
+                            <option value="false">关闭</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>随机话题</label>
+                        <select id="auto-chat-random">
+                            <option value="true">开启</option>
+                            <option value="false">关闭</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>每日主动聊天上限</label>
+                        <input type="number" id="auto-chat-limit" value="3" min="0" max="10">
+                    </div>
+                </div>
+                <div class="section">
+                    <h3>智能行为</h3>
+                    <div class="form-group">
+                        <label>话题追踪（防重复）</label>
+                        <select id="topic-tracker-enabled">
+                            <option value="true">开启</option>
+                            <option value="false">关闭</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>休息系统（AI也要休息）</label>
+                        <select id="rest-system-enabled">
+                            <option value="true">开启</option>
+                            <option value="false">关闭</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>用户学习（自动分析偏好）</label>
+                        <select id="user-learning-enabled">
+                            <option value="true">开启</option>
+                            <option value="false">关闭</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>记忆自动整理（每日凌晨）</label>
+                        <select id="mem-consolidation-enabled">
+                            <option value="true">开启</option>
+                            <option value="false">关闭</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>内容过滤</label>
+                        <select id="content-filter-enabled">
+                            <option value="true">开启</option>
+                            <option value="false">关闭</option>
+                        </select>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ============ Voice Clone Tab ============ -->
+            <section class="tab-panel" id="tab-voice_clone">
+                <h2>声音克隆</h2>
+                <div class="section">
+                    <h3>当前语音模型</h3>
+                    <!-- 2026-07-03 面板升级（批6）：状态卡从静态快照改为切页时调批6新端点
+                         GET /voice-clone/status 动态渲染（依据 panel-voiceclone.json
+                         "当前语音模型信息卡"审计项：换模型/重训后静态卡片会说谎） -->
+                    <div class="about-info" id="voiceclone-model-info">
+                        <div class="about-row"><span>加载中...</span><span></span></div>
+                    </div>
+                </div>
+                <div class="section">
+                    <h3>参考音频（决定克隆音色）</h3>
+                    <!-- 2026-07-03 面板升级（批6）：参考音频是克隆音色核心开关（批5已配置化
+                         真实生效），补UI（依据 panel-voiceclone.json"参考音频管理"审计项）。
+                         与「语音设置」页同字段双向同步，随底部"保存设置"写入 conf.yaml tts 节 -->
+                    <div class="form-group">
+                        <label>参考音频路径</label>
+                        <input type="text" id="vc-ref-audio" placeholder="assets/tts/ref_default.wav">
+                    </div>
+                    <div class="form-group">
+                        <label>参考音频文字内容</label>
+                        <input type="text" id="vc-ref-text" placeholder="参考音频里说的话">
+                    </div>
+                    <p style="color:#4a5568;font-size:11px;">与「语音设置」页的参考音频为同一配置（tts.ref_audio / tts.ref_text），点底部「保存设置」生效（重启后端）；注意环境变量 WS_TTS_REF_AUDIO / WS_TTS_REF_TEXT 会覆盖此配置</p>
+                </div>
+                <div class="section">
+                    <h3>训练新模型</h3>
+                    <p style="color:#7a8fa0;font-size:13px;line-height:1.8;">
+                        要训练新的声音模型，请准备一段3-10分钟的清晰语音音频（MP3/WAV），<br>
+                        放到 <code>D:\AI_Tools\GPT-SoVITS\input_audio\</code> 目录下，<br>
+                        然后运行 <code>D:\White Salary\scripts\train_voice.bat</code><br><br>
+                        训练脚本会自动完成：切片→降噪→ASR转录→特征提取→SoVITS训练→GPT训练→配置更新<br>
+                        整个过程约需10-20分钟（取决于GPU性能）。
+                    </p>
+                </div>
+            </section>
+
+            <!-- ============ Modules Tab ============ -->
+            <section class="tab-panel" id="tab-modules">
+                <h2>模块管理</h2>
+                <div class="section">
+                    <h3>记忆模块（自动发现）</h3>
+                    <p style="color:#4a5568;font-size:12px;margin-bottom:12px;">共48个模块，每个模块独立运行互不影响</p>
+                    <div id="modules-list" class="log-viewer" style="height:400px;">
+                        <div class="log-line">加载中...</div>
+                    </div>
+                    <button class="btn-primary" onclick="loadModules()" style="margin-top:10px;">刷新模块状态</button>
+                </div>
+            </section>
+
+            <!-- ============ Users Tab ============ -->
+            <section class="tab-panel" id="tab-users">
+                <h2>用户管理</h2>
+
+                <!-- 好感度排行 -->
+                <div class="section">
+                    <h3>好感度排行</h3>
+                    <div id="affinity-all-list" class="log-viewer" style="height:200px;">
+                        <div class="log-line">加载中...</div>
+                    </div>
+                    <button class="btn-primary" onclick="loadAllAffinity()" style="margin-top:8px;">刷新</button>
+                </div>
+
+                <!-- 黑名单管理 -->
+                <div class="section">
+                    <h3>用户过滤（黑名单）</h3>
+                    <div id="filter-status" style="margin-bottom:10px;color:#4a5568;font-size:12px;">加载中...</div>
+                    <div style="display:flex;gap:8px;margin-bottom:10px;">
+                        <input type="text" id="blacklist-user-id" placeholder="QQ号" style="flex:1;">
+                        <input type="text" id="blacklist-reason" placeholder="原因" style="flex:1;">
+                        <button class="btn-primary" onclick="addBlacklist()">拉黑</button>
+                    </div>
+                </div>
+
+                <!-- 秘密列表 -->
+                <div class="section">
+                    <h3>秘密列表</h3>
+                    <div id="secrets-list" class="log-viewer" style="height:150px;">
+                        <div class="log-line">加载中...</div>
+                    </div>
+                    <button class="btn-primary" onclick="loadSecrets()" style="margin-top:8px;">刷新</button>
+                </div>
+
+                <!-- 情感印象 -->
+                <div class="section">
+                    <h3>对每个人的印象</h3>
+                    <div id="impressions-list" class="log-viewer" style="height:200px;">
+                        <div class="log-line">加载中...</div>
+                    </div>
+                    <button class="btn-primary" onclick="loadImpressions()" style="margin-top:8px;">刷新</button>
+                </div>
+            </section>
+
+            <!-- ============ Stickers Tab ============ -->
+            <section class="tab-panel" id="tab-stickers">
+                <h2>表情包管理</h2>
+
+                <!-- 上传 -->
+                <div class="section">
+                    <h3>上传表情包</h3>
+                    <div style="display:flex;gap:8px;align-items:center;">
+                        <input type="file" id="sticker-upload-file" accept="image/*" style="flex:1;">
+                        <input type="text" id="sticker-upload-desc" placeholder="描述（可选）" style="width:200px;">
+                        <button class="btn-primary" onclick="uploadSticker()">上传</button>
+                    </div>
+                    <p style="color:#4a5568;font-size:11px;margin-top:6px;">支持 JPG/PNG/GIF/WEBP，上传后白在QQ聊天时会自动使用</p>
+                </div>
+
+                <!-- 表情包列表 -->
+                <div class="section">
+                    <h3>表情包库 <span id="sticker-count" style="color:#4a5568;font-size:12px;">(0)</span></h3>
+                    <div id="sticker-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(80px,1fr));gap:8px;max-height:500px;overflow-y:auto;padding:4px;">
+                        <div class="log-line">加载中...</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ============ Expressions Tab ============ -->
+            <section class="tab-panel" id="tab-expressions">
+                <h2>表情动作</h2>
+                <div class="section">
+                    <h3>情绪→表情映射（拖拽修改）</h3>
+                    <p style="color:#4a5568;font-size:12px;margin-bottom:16px;">
+                        将右侧的表情/动作拖拽到左侧情绪上，修改映射关系
+                    </p>
+                    <div style="display:flex;gap:20px;">
+                        <!-- 左侧：情绪列表（拖拽目标） -->
+                        <div style="flex:1;">
+                            <h4 style="color:#5ea3c8;margin-bottom:8px;">情绪</h4>
+                            <div id="emotion-slots"></div>
+                        </div>
+                        <!-- 右侧：可用表情/动作（拖拽源） -->
+                        <div style="flex:1;">
+                            <h4 style="color:#5ea3c8;margin-bottom:8px;">可用表情</h4>
+                            <div id="expression-pool" style="display:flex;flex-wrap:wrap;gap:6px;"></div>
+                            <h4 style="color:#5ea3c8;margin:12px 0 8px;">可用动作</h4>
+                            <div id="motion-pool" style="display:flex;flex-wrap:wrap;gap:6px;"></div>
+                            <!-- 2026-07-03 面板升级（批6）：当前模型 model3.json 的 Motions 为空，
+                                 动作组会安静降级跳过——如实标注避免误导（依据 panel-expressions.json
+                                 "可用动作池"审计项；UI保留，待模型补动作文件后即生效） -->
+                            <p style="color:#e67e22;font-size:11px;margin-top:6px;">注意：当前Live2D模型无动作文件（Motions为空），拖入的动作暂不生效，仅表情生效</p>
+                        </div>
+                    </div>
+                    <button class="btn-primary" style="margin-top:16px;" onclick="saveExpressionMapping()">保存映射</button>
+                </div>
+                <div class="section">
+                    <h3>语音情绪调节</h3>
+                    <div class="about-info">
+                        <div class="about-row"><span>开心/兴奋</span><span>语速 +10%</span></div>
+                        <div class="about-row"><span>难过/受伤</span><span>语速 -10%</span></div>
+                        <div class="about-row"><span>生气/沮丧</span><span>语速 +5%</span></div>
+                        <div class="about-row"><span>害羞/感动</span><span>语速 -5%</span></div>
+                        <div class="about-row"><span>平静/正常</span><span>语速 正常</span></div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ============ Memory Tab ============ -->
+            <section class="tab-panel" id="tab-memory">
+                <h2>记忆系统</h2>
+
+                <!-- 好感度和情绪概览 -->
+                <div class="status-cards">
+                    <div class="status-card">
+                        <div id="affinity-emoji" style="font-size:28px;">👤</div>
+                        <div class="status-label" id="affinity-level">加载中...</div>
+                        <div class="status-detail" id="affinity-points">--</div>
+                    </div>
+                    <div class="status-card">
+                        <div id="mood-emoji" style="font-size:28px;">😊</div>
+                        <div class="status-label" id="mood-desc">加载中...</div>
+                        <div class="status-detail" id="mood-score">--</div>
+                    </div>
+                </div>
+
+                <!-- 核心记忆列表 -->
+                <div class="section">
+                    <h3>核心记忆（永久事实）</h3>
+                    <div id="core-memory-list">
+                        <div class="log-line">加载中...</div>
+                    </div>
+                    <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;">
+                        <input type="text" id="new-mem-key" placeholder="键名 (如 user_hobby)" style="flex:1;min-width:120px;padding:6px 10px;background:#1a2332;border:1px solid #2a3a4a;border-radius:6px;color:#c8d6e5;font-size:12px;">
+                        <input type="text" id="new-mem-value" placeholder="内容 (如 喜欢打游戏)" style="flex:2;min-width:150px;padding:6px 10px;background:#1a2332;border:1px solid #2a3a4a;border-radius:6px;color:#c8d6e5;font-size:12px;">
+                        <button class="btn-small" onclick="addCoreMemory()">添加</button>
+                    </div>
+                </div>
+
+                <!-- 长期记忆统计 -->
+                <div class="section">
+                    <h3>长期记忆统计</h3>
+                    <div id="long-term-stats" class="about-info">
+                        <div class="about-row"><span>加载中...</span><span></span></div>
+                    </div>
+                </div>
+
+                <!-- 好感度管理 -->
+                <div class="section">
+                    <h3>好感度管理</h3>
+                    <div style="display:flex;gap:10px;align-items:center;margin-bottom:12px;">
+                        <button class="btn-small" onclick="setFamily(true)">设为家人</button>
+                        <button class="btn-small" onclick="setFamily(false)">取消家人</button>
+                        <input type="number" id="manual-points" placeholder="手动设置分数" style="width:120px;padding:5px 8px;background:#1a2332;border:1px solid #2a3a4a;border-radius:4px;color:#c8d6e5;font-size:12px;">
+                        <button class="btn-small" onclick="setPoints()">设置</button>
+                    </div>
+                    <h3>最近好感度变化</h3>
+                    <div id="affinity-history" class="log-viewer" style="height:120px;">
+                        <div class="log-line">加载中...</div>
+                    </div>
+                </div>
+
+                <!-- 情绪历史 -->
+                <div class="section">
+                    <h3>情绪变化历史</h3>
+                    <div id="emotion-history" class="log-viewer" style="height:150px;">
+                        <div class="log-line">加载中...</div>
+                    </div>
+                </div>
+
+                <!-- 记忆搜索 -->
+                <!-- 2026-07-03 面板升级（批6）：长期记忆搜索框，调批6新端点 GET /memory/search
+                     （依据 panel-memory.json"记忆搜索"审计项） -->
+                <div class="section">
+                    <h3>记忆搜索</h3>
+                    <div style="display:flex;gap:8px;margin-bottom:8px;">
+                        <input type="text" id="memory-search-input" placeholder="搜索长期记忆关键词..." style="flex:1;"
+                               onkeydown="if(event.key==='Enter')searchMemories()">
+                        <button class="btn-primary" onclick="searchMemories()">搜索</button>
+                    </div>
+                    <div id="memory-search-results" class="log-viewer" style="height:150px;display:none;"></div>
+                </div>
+
+                <!-- 最近记忆 -->
+                <div class="section">
+                    <h3>最近记忆</h3>
+                    <div id="recent-memories" class="log-viewer" style="height:200px;">
+                        <div class="log-line">加载中...</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ============ UI Tab ============ -->
+            <section class="tab-panel" id="tab-ui">
+                <h2>UI设置</h2>
+                <div class="section">
+                    <h3>虚拟形象</h3>
+                    <div class="form-group">
+                        <label>Live2D 模型路径</label>
+                        <input type="text" id="avatar-model-path" value="live2d_models/default">
+                    </div>
+                    <div class="form-group">
+                        <label>情感系统</label>
+                        <select id="emotion-enabled">
+                            <option value="true">已启用</option>
+                            <option value="false">已关闭</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="section">
+                    <h3>视觉系统</h3>
+                    <p style="color:#4a5568;font-size:12px;margin-bottom:12px;">让AI能看到你的屏幕或通过摄像头看到你</p>
+
+                    <div class="form-group">
+                        <label>🖥️ 桌面实时捕捉</label>
+                        <select id="vision-desktop-enabled" onchange="toggleDesktopVision(this.value)">
+                            <option value="false">已关闭</option>
+                            <option value="true">已开启（每30秒自动截屏发给AI）</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label>📹 摄像头实时捕捉</label>
+                        <select id="vision-camera-enabled" onchange="toggleCameraVision(this.value)">
+                            <option value="false">已关闭</option>
+                            <option value="true">已开启（实时捕捉摄像头画面）</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label>截屏间隔（秒）</label>
+                        <input type="number" id="vision-interval" value="30" min="10" max="300">
+                    </div>
+
+                    <div class="about-info">
+                        <div class="about-row"><span>📷 手动截屏</span><span>输入框旁的相机图标</span></div>
+                        <div class="about-row"><span>📋 粘贴图片</span><span>Ctrl+V 粘贴</span></div>
+                        <div class="about-row"><span>🖥️ 视觉模型</span><span>使用 llm_vision 通道</span></div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ============ QQ Tab ============ -->
+            <!-- ============ Bilibili Tab ============ -->
+            <section class="tab-panel" id="tab-bilibili">
+                <h2>B站设置</h2>
+
+                <!-- 登录状态 -->
+                <div class="section">
+                    <h3>登录状态</h3>
+                    <div id="bili-login-status" style="margin-bottom:10px;color:#4a5568;">检查中...</div>
+                    <button class="btn-primary" onclick="checkBiliLogin()">检查登录状态</button>
+                </div>
+
+                <!-- 一键自动登录（推荐） -->
+                <div class="section">
+                    <h3>🚀 一键自动登录（推荐）</h3>
+                    <p style="color:#4a5568;font-size:12px;margin-bottom:8px;">自动检测Chrome并读取Cookie。读不到会弹出B站登录窗口，登录后自动获取。</p>
+                    <button class="btn-primary" onclick="biliAutoCookie()" style="font-size:14px;padding:10px 24px;">🔑 一键登录B站</button>
+                    <div id="bili-auto-result" style="margin-top:8px;font-size:12px;"></div>
+                </div>
+
+                <!-- 扫码登录（备用） -->
+                <div class="section">
+                    <h3>备用：扫码登录</h3>
+                    <p style="color:#4a5568;font-size:12px;margin-bottom:8px;">用B站APP扫码登录</p>
+                    <button class="btn-primary" onclick="biliQrLogin()">生成二维码</button>
+                    <div id="bili-qr-container" style="margin-top:10px;text-align:center;display:none;">
+                        <img id="bili-qr-image" style="width:200px;height:200px;border:2px solid #1a2332;border-radius:8px;">
+                        <div id="bili-qr-status" style="margin-top:8px;font-size:12px;color:#4a5568;">等待扫码...</div>
+                    </div>
+                </div>
+
+                <!-- 方案C：手动填写 -->
+                <div class="section">
+                    <h3>方式三：手动填写</h3>
+                    <p style="color:#4a5568;font-size:12px;margin-bottom:8px;">浏览器F12→Application→Cookies→bilibili.com</p>
+                    <div class="form-group">
+                        <label>SESSDATA</label>
+                        <input type="text" id="bili-sessdata" placeholder="粘贴SESSDATA">
+                    </div>
+                    <div class="form-group">
+                        <label>bili_jct</label>
+                        <input type="text" id="bili-jct" placeholder="粘贴bili_jct">
+                    </div>
+                    <button class="btn-primary" onclick="biliManualSave()">保存Cookie</button>
+                </div>
+
+                <!-- 学习统计 -->
+                <div class="section">
+                    <h3>B站学习统计</h3>
+                    <div id="bili-learning-stats" class="log-viewer" style="height:100px;">
+                        <div class="log-line">加载中...</div>
+                    </div>
+                </div>
+            </section>
+
+            <section class="tab-panel" id="tab-qq">
+                <h2>QQ集成</h2>
+                <div class="section">
+                    <h3>NapCat OneBot v11</h3>
+                    <div class="form-group">
+                        <label>启用QQ</label>
+                        <select id="qq-enabled">
+                            <option value="false">已关闭</option>
+                            <option value="true">已开启</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>NapCat WebSocket地址</label>
+                        <input type="text" id="qq-ws-url" value="ws://127.0.0.1:3001" placeholder="ws://127.0.0.1:3001">
+                    </div>
+                    <div class="form-group">
+                        <label>机器人名字（群聊@时回复）</label>
+                        <input type="text" id="qq-bot-name" value="白" placeholder="白">
+                    </div>
+                    <div class="form-group">
+                        <label>鉴权Token（与NapCat WebSocket配置中的token一致）</label>
+                        <input type="password" id="qq-token" value="" placeholder="留空则不鉴权">
+                    </div>
+                </div>
+                <div class="section">
+                    <h3>家人QQ号</h3>
+                    <p style="color:#4a5568;font-size:12px;margin-bottom:10px;">家人不受休息模式、社交冷却等限制，白随时都会回应。支持多个。</p>
+                    <div style="display:flex;gap:8px;margin-bottom:10px;">
+                        <input type="text" id="qq-family-input" placeholder="输入QQ号（纯数字）" style="flex:1;">
+                        <button class="btn-primary" onclick="addFamilyQQ()">添加</button>
+                    </div>
+                    <div id="qq-family-list" style="display:flex;flex-wrap:wrap;gap:8px;"></div>
+                </div>
+                <div class="section">
+                    <h3>NapCat 控制</h3>
+                    <div style="display:flex;gap:10px;margin-bottom:12px;">
+                        <button class="btn-primary" onclick="startNapCat()">启动 NapCat</button>
+                        <button class="btn-small" onclick="openNapCatWebUI()">打开 WebUI (端口6099)</button>
+                    </div>
+                </div>
+                <div class="section">
+                    <h3>使用步骤</h3>
+                    <div class="about-info">
+                        <div class="about-row"><span>1</span><span>点击上方"启动NapCat"</span></div>
+                        <div class="about-row"><span>2</span><span>在NapCat WebUI(端口6099)扫码登录QQ</span></div>
+                        <div class="about-row"><span>3</span><span>上方开启QQ → 保存设置 → 重启后端</span></div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ============ QZone Tab ============ -->
+            <section class="tab-panel" id="tab-qzone">
+                <h2>QQ空间</h2>
+
+                <!-- Cookie配置 -->
+                <div class="section">
+                    <h3>Cookie配置</h3>
+                    <div id="qzone-status" style="margin-bottom:12px;font-size:13px;">检测中...</div>
+                    <div style="display:grid;gap:8px;">
+                        <div class="form-group">
+                            <label>QQ号 (uin)</label>
+                            <input type="text" id="qzone-uin" placeholder="你的QQ号">
+                        </div>
+                        <div class="form-group">
+                            <label>skey</label>
+                            <input type="text" id="qzone-skey" placeholder="从浏览器Cookie获取">
+                        </div>
+                        <div class="form-group">
+                            <label>p_skey</label>
+                            <input type="text" id="qzone-pskey" placeholder="从浏览器Cookie获取">
+                        </div>
+                    </div>
+                    <div style="display:flex;gap:8px;margin-top:12px;">
+                        <button class="btn-primary" onclick="qzoneAutoLogin()">一键登录获取Cookie</button>
+                        <button class="btn-small" onclick="saveQZoneCookie()">手动保存Cookie</button>
+                        <button class="btn-small" onclick="testQZone()">测试连接</button>
+                    </div>
+                    <div id="qzone-test-result" style="margin-top:8px;font-size:12px;"></div>
+                </div>
+
+                <!-- 发说说测试 -->
+                <!-- 2026-07-03 面板升级（批6）：发说说测试，调批6新端点 POST /qzone/test-post
+                     验证Cookie发布权限是否可用（依据 panel-qzone.json"发说说测试/监控设置"审计项） -->
+                <div class="section">
+                    <h3>发说说测试</h3>
+                    <div style="display:flex;gap:8px;align-items:flex-start;">
+                        <textarea id="qzone-test-post-content" rows="2" placeholder="要发布的说说内容（会真实发到QQ空间！）" style="flex:1;"></textarea>
+                        <button class="btn-primary" onclick="qzoneTestPost()">发说说测试</button>
+                    </div>
+                    <div id="qzone-post-result" style="margin-top:8px;font-size:12px;"></div>
+                </div>
+
+                <!-- 获取方法 -->
+                <div class="section">
+                    <h3>Cookie获取方法</h3>
+                    <details style="border:1px solid rgba(0,153,204,0.2);border-radius:6px;padding:10px;">
+                        <summary style="cursor:pointer;color:#0099cc;font-weight:bold;">如何获取QQ空间Cookie</summary>
+                        <div style="margin-top:10px;font-size:12px;line-height:2;color:#4a5568;">
+                            <p>1. 用浏览器打开 <b>user.qzone.qq.com</b> 并登录</p>
+                            <p>2. 按 <b>F12</b> 打开开发者工具</p>
+                            <p>3. 切到 <b>Application</b>（应用程序）标签</p>
+                            <p>4. 左侧找到 <b>Cookies</b> → <b>user.qzone.qq.com</b></p>
+                            <p>5. 找到并复制这三个值：<b>uin</b>（去掉前面的o）、<b>skey</b>、<b>p_skey</b></p>
+                            <p style="color:#e74c3c;margin-top:4px;">注意：Cookie会过期，过期后需要重新获取</p>
+                        </div>
+                    </details>
+                </div>
+
+                <!-- 功能说明 -->
+                <div class="section">
+                    <h3>支持的功能</h3>
+                    <div style="font-size:12px;line-height:2;color:#4a5568;">
+                        <div>发纯文字说说、发带图说说、回复评论（引用）</div>
+                        <div>获取说说列表、获取评论列表、逛别人空间</div>
+                        <div>QQ/桌面端都可以让白操作QQ空间</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ============ AI Generation Tab ============ -->
+            <section class="tab-panel" id="tab-aigen">
+                <h2>AI图片/视频生成</h2>
+
+                <!-- ComfyUI状态 -->
+                <div class="section">
+                    <h3>ComfyUI 本地生成引擎</h3>
+                    <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">
+                        <span id="comfyui-status" style="font-size:14px;">检测中...</span>
+                        <button class="btn-primary" onclick="startComfyUI()">启动 ComfyUI</button>
+                        <button class="btn-small" onclick="checkComfyUIStatus()">刷新状态</button>
+                    </div>
+                    <div id="comfyui-models" style="color:#4a5568;font-size:12px;"></div>
+                </div>
+
+                <!-- 图片生成（配置+外观+测试 一体） -->
+                <div class="section">
+                    <h3>图片生成</h3>
+
+                    <!-- 模型和模式 -->
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;">
+                        <div>
+                            <label>默认模型</label>
+                            <select id="aigen-model" style="width:100%;padding:6px;background:#f5f8fc;color:#1a1a2e;border:1px solid rgba(0,153,204,0.2);border-radius:4px;">
+                                <option value="">从ComfyUI动态加载...</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label>自画像专用模型</label>
+                            <select id="aigen-portrait-model" style="width:100%;padding:6px;background:#f5f8fc;color:#1a1a2e;border:1px solid rgba(0,153,204,0.2);border-radius:4px;">
+                                <option value="">从ComfyUI动态加载...</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label>生成质量</label>
+                            <select id="aigen-quality" style="width:100%;padding:6px;background:#f5f8fc;color:#1a1a2e;border:1px solid rgba(0,153,204,0.2);border-radius:4px;">
+                                <option value="pro">专业模式 (自动修脸修手+放大，约90秒)</option>
+                                <option value="hires">精细模式 (Hires Fix，约40秒)</option>
+                                <option value="fast">快速模式 (约15秒)</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label>默认尺寸</label>
+                            <select id="aigen-size" style="width:100%;padding:6px;background:#f5f8fc;color:#1a1a2e;border:1px solid rgba(0,153,204,0.2);border-radius:4px;">
+                                <option value="1024x1024">1024x1024 (正方形)</option>
+                                <option value="1024x768">1024x768 (横版)</option>
+                                <option value="768x1024">768x1024 (竖版)</option>
+                                <option value="512x512">512x512 (小图)</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- 白的外观（自画像用） -->
+                    <details style="margin-bottom:16px;">
+                        <summary style="cursor:pointer;color:#0099cc;font-weight:bold;margin-bottom:8px;">白的外观描述（自画像用，点击展开编辑）</summary>
+                        <p style="color:#4a5568;font-size:12px;margin-bottom:10px;">用户说"发自拍"时，下面的描述会自动拼到提示词前面。建议用英文。</p>
+                        <div style="display:flex;flex-direction:column;gap:8px;">
+                            <div>
+                                <label style="font-size:12px;color:#718096;">基础外观（脸、头发、身材等）</label>
+                                <textarea id="aigen-appearance" rows="3" style="width:100%;background:#f5f8fc;color:#1a1a2e;border:1px solid rgba(0,153,204,0.2);border-radius:4px;padding:8px;font-size:12px;" placeholder="1girl, silver white long hair, silver-gray eyes..."></textarea>
+                            </div>
+                            <div>
+                                <label style="font-size:12px;color:#718096;">默认服装</label>
+                                <textarea id="aigen-outfit" rows="2" style="width:100%;background:#f5f8fc;color:#1a1a2e;border:1px solid rgba(0,153,204,0.2);border-radius:4px;padding:8px;font-size:12px;" placeholder="futuristic sci-fi outfit..."></textarea>
+                            </div>
+                            <div>
+                                <label style="font-size:12px;color:#718096;">画质标签</label>
+                                <textarea id="aigen-quality-tags" rows="2" style="width:100%;background:#f5f8fc;color:#1a1a2e;border:1px solid rgba(0,153,204,0.2);border-radius:4px;padding:8px;font-size:12px;" placeholder="masterpiece, best quality..."></textarea>
+                            </div>
+                            <div>
+                                <label style="font-size:12px;color:#718096;">负面提示词</label>
+                                <textarea id="aigen-negative" rows="2" style="width:100%;background:#f5f8fc;color:#1a1a2e;border:1px solid rgba(0,153,204,0.2);border-radius:4px;padding:8px;font-size:12px;" placeholder="worst quality, bad anatomy..."></textarea>
+                            </div>
+                            <div>
+                                <label style="font-size:12px;color:#718096;">自拍触发关键词（逗号分隔）</label>
+                                <input type="text" id="aigen-trigger-keywords" style="width:100%;background:#f5f8fc;color:#1a1a2e;border:1px solid rgba(0,153,204,0.2);border-radius:4px;padding:8px;font-size:12px;" placeholder="自拍,自画像,你的照片...">
+                            </div>
+                        </div>
+                    </details>
+
+                    <!-- 保存 -->
+                    <button class="btn-primary" onclick="saveAIGenConfig()" style="margin-bottom:16px;">保存配置</button>
+
+                    <!-- 测试生成 -->
+                    <div style="border-top:1px solid rgba(0,153,204,0.15);padding-top:16px;">
+                        <label style="font-weight:bold;margin-bottom:8px;display:block;">测试生成</label>
+                        <textarea id="aigen-test-prompt" rows="3" placeholder="输入图片描述，如：1girl, silver hair, smile, upper body" style="width:100%;background:#f5f8fc;color:#1a1a2e;border:1px solid rgba(0,153,204,0.2);border-radius:4px;padding:8px;font-size:12px;margin-bottom:8px;"></textarea>
+                        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                            <select id="aigen-provider" style="padding:6px;background:#f5f8fc;color:#1a1a2e;border:1px solid rgba(0,153,204,0.2);border-radius:4px;">
+                                <option value="auto">自动（按优先级）</option>
+                                <option value="comfyui">本地 ComfyUI</option>
+                                <option value="dmxapi">DMXAPI (dall-e-3)</option>
+                                <option value="siliconflow">SiliconFlow (Qwen-Image)</option>
+                            </select>
+                            <select id="aigen-test-model" style="padding:6px;background:#f5f8fc;color:#1a1a2e;border:1px solid rgba(0,153,204,0.2);border-radius:4px;">
+                                <option value="">使用默认模型</option>
+                            </select>
+                            <button class="btn-primary" onclick="testGenerate()">生成</button>
+                            <span id="aigen-test-status" style="color:#4a5568;font-size:12px;line-height:32px;"></span>
+                        </div>
+                        <div id="aigen-test-result" style="margin-top:12px;text-align:center;"></div>
+                    </div>
+                </div>
+
+                <!-- 图片修改 (img2img) -->
+                <div class="section">
+                    <h3>图片修改 (img2img)</h3>
+                    <p style="color:#4a5568;font-size:12px;margin-bottom:8px;">上传一张图片，输入修改描述，AI在原图基础上修改</p>
+                    <div style="display:flex;gap:8px;margin-bottom:8px;">
+                        <input type="file" id="img2img-file" accept="image/*" style="flex:1;padding:6px;background:#f5f8fc;color:#1a1a2e;border:1px solid rgba(0,153,204,0.2);border-radius:4px;font-size:12px;">
+                    </div>
+                    <textarea id="img2img-prompt" rows="2" placeholder="修改描述，如：change clothes to red dress, add wings" style="width:100%;background:#f5f8fc;color:#1a1a2e;border:1px solid rgba(0,153,204,0.2);border-radius:4px;padding:8px;font-size:12px;"></textarea>
+                    <div style="display:flex;gap:8px;margin-top:8px;align-items:center;">
+                        <select id="img2img-strength" style="padding:6px;background:#f5f8fc;color:#1a1a2e;border:1px solid rgba(0,153,204,0.2);border-radius:4px;">
+                            <option value="0.3">轻微修改 (0.3)</option>
+                            <option value="0.5" selected>中等修改 (0.5)</option>
+                            <option value="0.7">大幅修改 (0.7)</option>
+                        </select>
+                        <button class="btn-primary" onclick="testImg2Img()">修改图片</button>
+                        <span id="img2img-status" style="color:#4a5568;font-size:12px;line-height:32px;"></span>
+                    </div>
+                    <div id="img2img-result" style="margin-top:12px;text-align:center;"></div>
+                </div>
+
+                <!-- 视频生成 -->
+                <div class="section">
+                    <h3>视频生成</h3>
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+                        <div>
+                            <label>生成方式</label>
+                            <select id="vgen-mode" style="width:100%;padding:6px;background:#f5f8fc;color:#1a1a2e;border:1px solid rgba(0,153,204,0.2);border-radius:4px;">
+                                <option value="auto">自动（按优先级）</option>
+                                <option value="cloud">云端 Wan2.2（快，~60秒，有安全过滤）</option>
+                                <option value="local_wan22">本地 Wan2.2 NSFW（慢，~20分钟，无过滤）</option>
+                                <option value="local_svd">本地 SVD（中，~2分钟，无过滤）</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label>视频尺寸</label>
+                            <select id="vgen-size" style="width:100%;padding:6px;background:#f5f8fc;color:#1a1a2e;border:1px solid rgba(0,153,204,0.2);border-radius:4px;">
+                                <option value="1280x720">1280x720 (横版)</option>
+                                <option value="720x1280">720x1280 (竖版)</option>
+                                <option value="960x960">960x960 (正方形)</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label>视频时长</label>
+                            <select id="vgen-duration" style="width:100%;padding:6px;background:#f5f8fc;color:#1a1a2e;border:1px solid rgba(0,153,204,0.2);border-radius:4px;">
+                                <option value="5">5秒（1段）</option>
+                                <option value="10">10秒（2段拼接）</option>
+                                <option value="15">15秒（3段拼接）</option>
+                                <option value="20">20秒（4段拼接）</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- 配音选项 -->
+                    <div style="display:grid;grid-template-columns:auto 1fr;gap:12px;margin-top:12px;align-items:center;">
+                        <div>
+                            <label>配音音色</label>
+                            <select id="vgen-voice" style="padding:6px;background:#f5f8fc;color:#1a1a2e;border:1px solid rgba(0,153,204,0.2);border-radius:4px;">
+                                <option value="">不配音</option>
+                                <option value="anna">Anna 温柔女声</option>
+                                <option value="bella">Bella 活力女声</option>
+                                <option value="claire">Claire 清澈女声</option>
+                                <option value="diana">Diana 优雅女声</option>
+                                <option value="alex">Alex 男声</option>
+                                <option value="benjamin">Benjamin 男声</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label>配音文本</label>
+                            <input id="vgen-voiceover" type="text" placeholder="输入配音台词（留空=不配音）" style="width:100%;padding:6px;background:#f5f8fc;color:#1a1a2e;border:1px solid rgba(0,153,204,0.2);border-radius:4px;">
+                        </div>
+                    </div>
+
+                    <div style="margin-top:12px;">
+                        <label>文字→视频</label>
+                        <textarea id="vgen-prompt" rows="2" placeholder="描述视频内容，如：银白长发少女在风中微笑" style="width:100%;background:#f5f8fc;color:#1a1a2e;border:1px solid rgba(0,153,204,0.2);border-radius:4px;padding:8px;font-size:12px;"></textarea>
+                        <button class="btn-primary" onclick="testVideoGenerate()" style="margin-top:6px;">测试生成视频</button>
+                        <span id="vgen-status" style="color:#4a5568;font-size:12px;margin-left:8px;"></span>
+                    </div>
+                    <div id="vgen-result" style="margin-top:12px;text-align:center;"></div>
+                    <div style="margin-top:12px;">
+                        <label>图片→视频</label>
+                        <div style="display:flex;gap:8px;align-items:center;">
+                            <input type="file" id="vgen-image-input" accept="image/*" style="font-size:11px;color:#4a5568;">
+                            <button class="btn-small" onclick="testSVDGenerate()">图片变视频</button>
+                        </div>
+                        <span id="vgen-svd-status" style="color:#4a5568;font-size:12px;"></span>
+                    </div>
+                    <div style="margin-top:8px;font-size:11px;color:#6b7b8d;">
+                        视频保存在 data/videos/ 目录
+                    </div>
+                </div>
+
+                <!-- API Key说明 -->
+                <div class="section" style="border:1px solid #1a4a2e;background:rgba(34,197,94,0.05);border-radius:8px;">
+                    <h3 style="color:#22c55e;">API Key 说明</h3>
+                    <div style="font-size:12px;line-height:2;color:#4a5568;">
+                        <p>云端图片生成、视频生成、配音、视觉识别、语音识别 <b style="color:#00d4ff;">共用同一个 SiliconFlow Key</b></p>
+                        <p>修改方式：左侧 <b style="color:#00d4ff;">🤖 LLM配置</b> → 视觉LLM(llm_vision) → 修改 API Key → 保存</p>
+                        <p>改一处，所有云端功能自动生效，无需单独配置。</p>
+                        <p style="margin-top:4px;">DMXAPI图片生成备选：<b style="color:#00d4ff;">🤖 LLM配置</b> → 主LLM(llm) → API Key</p>
+                        <p style="color:#f59e0b;margin-top:8px;">⚠️ 发布到仓库前请清空你的Key！其他用户需要用自己的Key。</p>
+                    </div>
+                </div>
+
+                <!-- 安装教程 -->
+                <div class="section">
+                    <h3>安装教程（给新用户）</h3>
+                    <details style="border:1px solid rgba(0,153,204,0.2);border-radius:6px;padding:10px;">
+                        <summary style="cursor:pointer;color:#00d4ff;font-weight:bold;">ComfyUI 本地图片生成安装指南</summary>
+                        <div style="margin-top:10px;font-size:12px;line-height:2;color:#4a5568;">
+                            <p><b>1. 下载 ComfyUI</b></p>
+                            <p>从 <span style="color:#00d4ff;">https://github.com/comfyanonymous/ComfyUI</span> 下载 Windows 便携版</p>
+                            <p>解压到 <code style="background:#1a2332;padding:2px 6px;border-radius:3px;">D:\cccccccccc\ComfyUI_windows_portable\</code></p>
+                            <p><b>2. 下载模型</b></p>
+                            <p>推荐模型: Illustrious-XL v2.0 或 hassakuXL（从 CivitAI 下载）</p>
+                            <p>放到 <code style="background:#1a2332;padding:2px 6px;border-radius:3px;">D:\cccccccccc\...\ComfyUI\models\checkpoints\</code></p>
+                            <p><b>3. 下载放大器（可选，提升画质）</b></p>
+                            <p>4x_foolhardy_Remacri.pth（64MB，推荐）或 RealESRGAN_x4plus_anime_6B.pth</p>
+                            <p>放到 <code style="background:#1a2332;padding:2px 6px;border-radius:3px;">D:\cccccccccc\...\ComfyUI\models\upscale_models\</code></p>
+                            <p><b>4. 启动</b></p>
+                            <p>双击 <code style="background:#1a2332;padding:2px 6px;border-radius:3px;">run_nvidia_gpu.bat</code> 或在此面板点"启动ComfyUI"</p>
+                            <p>首次启动加载模型需要30-60秒，之后每次约10秒</p>
+                            <p><b>5. 目录结构</b></p>
+                            <pre style="background:#f5f8fc;padding:8px;border-radius:4px;overflow-x:auto;">
+D:\cccccccccc\ComfyUI_windows_portable\
+├── run_nvidia_gpu.bat          ← 启动脚本
+├── ComfyUI\
+│   ├── main.py
+│   └── models\
+│       ├── checkpoints\        ← 主模型放这里
+│       ├── upscale_models\     ← 放大器模型放这里
+│       ├── controlnet\         ← ControlNet模型放这里
+│       ├── animatediff_models\ ← AnimateDiff模型放这里
+│       └── vae\                ← VAE模型放这里
+                            </pre>
+                        </div>
+                    </details>
+                    <details style="border:1px solid rgba(0,153,204,0.2);border-radius:6px;padding:10px;margin-top:8px;">
+                        <summary style="cursor:pointer;color:#00d4ff;font-weight:bold;">AnimateDiff 动画生成安装指南</summary>
+                        <div style="margin-top:10px;font-size:12px;line-height:2;color:#4a5568;">
+                            <p>需要在ComfyUI中安装 ComfyUI-AnimateDiff-Evolved 插件</p>
+                            <p>下载 motion module: v3_sd15_mm.ckpt（推荐v3）或 mm_sd_v15_v2.ckpt</p>
+                            <p>放到 <code style="background:#1a2332;padding:2px 6px;border-radius:3px;">ComfyUI\models\animatediff_models\</code></p>
+                        </div>
+                    </details>
+                    <details style="border:1px solid rgba(0,153,204,0.2);border-radius:6px;padding:10px;margin-top:8px;">
+                        <summary style="cursor:pointer;color:#00d4ff;font-weight:bold;">Wav2Lip 口型同步安装指南</summary>
+                        <div style="margin-top:10px;font-size:12px;line-height:2;color:#4a5568;">
+                            <p>下载 Wav2Lip: <span style="color:#00d4ff;">https://github.com/Rudrabha/Wav2Lip</span></p>
+                            <p>解压到 <code style="background:#1a2332;padding:2px 6px;border-radius:3px;">D:\AI\Wav2Lip\</code></p>
+                            <p>下载 wav2lip_gan.pth 放到 <code style="background:#1a2332;padding:2px 6px;border-radius:3px;">D:\AI\Wav2Lip\checkpoints\</code></p>
+                        </div>
+                    </details>
+                </div>
+            </section>
+
+            <!-- ============ Debug Tab ============ -->
+            <section class="tab-panel" id="tab-debug">
+                <h2>调试工具</h2>
+
+                <!-- 快捷操作 -->
+                <div class="section">
+                    <h3>快捷操作</h3>
+                    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                        <button class="btn-small" onclick="debugAction('test_llm')">🧠 测试LLM</button>
+                        <button class="btn-small" onclick="debugAction('check_memory')">💾 检查记忆</button>
+                        <button class="btn-small" onclick="debugAction('check_adapters')">🔌 检查适配器</button>
+                        <button class="btn-small" onclick="debugAction('system_info')">ℹ️ 系统信息</button>
+                        <button class="btn-small" onclick="debugAction('reload_tools')">🔄 重载工具</button>
+                        <button class="btn-small" onclick="debugAction('export_logs')">📋 导出日志</button>
+                        <button class="btn-small" onclick="debugAction('clear_cache')">🗑️ 清除缓存</button>
+                        <button class="btn-small" onclick="debugAction('reload_plugins')">🧩 重载插件</button>
+                    </div>
+                    <div id="debug-action-result" class="log-viewer" style="height:100px;margin-top:10px;display:none;"></div>
+                </div>
+
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+
+                    <!-- 工具测试器 -->
+                    <div class="section">
+                        <h3>🔧 工具测试器</h3>
+                        <select id="debug-tool-select" onchange="onDebugToolSelect()" style="width:100%;margin-bottom:8px;">
+                            <option value="">选择工具...</option>
+                        </select>
+                        <div id="debug-tool-desc" style="font-size:11px;color:#64748b;margin-bottom:8px;min-height:30px;"></div>
+                        <textarea id="debug-tool-params" rows="4" placeholder='参数（JSON格式）&#10;例: {"query": "Python教程"}'
+                                  style="width:100%;font-family:Consolas,monospace;font-size:12px;"></textarea>
+                        <div style="display:flex;gap:8px;margin-top:8px;">
+                            <button class="btn-primary" onclick="debugTestTool()" id="debug-tool-btn">执行</button>
+                            <span id="debug-tool-time" style="font-size:10px;color:#64748b;align-self:center;"></span>
+                        </div>
+                        <div id="debug-tool-result" class="log-viewer" style="height:150px;margin-top:10px;display:none;"></div>
+                    </div>
+
+                    <!-- API测试器 -->
+                    <div class="section">
+                        <h3>🌐 API测试器</h3>
+                        <div style="display:flex;gap:6px;margin-bottom:8px;">
+                            <select id="debug-api-method" style="width:90px;">
+                                <option value="GET">GET</option>
+                                <option value="POST">POST</option>
+                                <option value="PUT">PUT</option>
+                                <option value="DELETE">DELETE</option>
+                            </select>
+                            <input type="text" id="debug-api-url" placeholder="/api/settings/status" style="flex:1;">
+                        </div>
+                        <textarea id="debug-api-body" rows="3" placeholder='请求体（JSON，GET时忽略）'
+                                  style="width:100%;font-family:Consolas,monospace;font-size:12px;"></textarea>
+                        <div style="display:flex;gap:6px;margin-top:6px;margin-bottom:8px;flex-wrap:wrap;">
+                            <button class="btn-sm btn-small" onclick="debugApiQuick('/api/settings/status')">status</button>
+                            <button class="btn-sm btn-small" onclick="debugApiQuick('/api/settings/memory')">memory</button>
+                            <button class="btn-sm btn-small" onclick="debugApiQuick('/api/settings/knowledge')">knowledge</button>
+                            <button class="btn-sm btn-small" onclick="debugApiQuick('/api/settings/knowledge/stats')">kg stats</button>
+                            <button class="btn-sm btn-small" onclick="debugApiQuick('/api/settings/plugins/installed')">plugins</button>
+                        </div>
+                        <button class="btn-primary" onclick="debugTestApi()" id="debug-api-btn">发送</button>
+                        <div id="debug-api-status" style="font-size:11px;margin-top:6px;display:none;"></div>
+                        <div id="debug-api-result" class="log-viewer" style="height:150px;margin-top:8px;display:none;"></div>
+                    </div>
+                </div>
+
+                <!-- 记忆浏览器 -->
+                <div class="section">
+                    <h3>🧠 记忆浏览器</h3>
+                    <div style="display:flex;gap:8px;margin-bottom:10px;">
+                        <select id="debug-mem-type" onchange="loadDebugMemory()" style="width:150px;">
+                            <option value="core">核心记忆</option>
+                            <option value="longterm">长期记忆</option>
+                            <option value="conversation">对话日志</option>
+                            <option value="knowledge">知识图谱</option>
+                        </select>
+                        <input type="text" id="debug-mem-search" placeholder="搜索..." style="flex:1;" oninput="filterDebugMemory()">
+                        <button class="btn-small" onclick="loadDebugMemory()">🔄</button>
+                    </div>
+                    <div id="debug-mem-stats" style="font-size:11px;color:#64748b;margin-bottom:8px;"></div>
+                    <div id="debug-mem-list" class="log-viewer" style="height:250px;"></div>
+                </div>
+
+                <!-- 实时日志 -->
+                <div class="section">
+                    <h3>📜 实时日志</h3>
+                    <div style="display:flex;gap:8px;margin-bottom:8px;">
+                        <select id="debug-log-level" onchange="loadDebugLogs()" style="width:100px;">
+                            <option value="all">全部</option>
+                            <option value="DEBUG">DEBUG</option>
+                            <option value="INFO">INFO</option>
+                            <option value="WARNING">WARNING</option>
+                            <option value="ERROR">ERROR</option>
+                        </select>
+                        <input type="text" id="debug-log-search" placeholder="搜索日志..." style="flex:1;" oninput="filterDebugLogs()">
+                        <button class="btn-small" onclick="loadDebugLogs()">🔄</button>
+                        <button class="btn-small" onclick="document.getElementById('debug-log-viewer').innerHTML=''">清空</button>
+                    </div>
+                    <div id="debug-log-viewer" class="log-viewer" style="height:300px;"></div>
+                    <div style="font-size:10px;color:#64748b;margin-top:4px;">
+                        <span id="debug-log-count">0</span> 条日志 | 自动刷新每10秒
+                    </div>
+                </div>
+            </section>
+
+            <!-- ============ Terminal Tab ============ -->
+            <section class="tab-panel" id="tab-terminal">
+                <h2>终端控制室</h2>
+                <div class="status-cards">
+                    <div class="status-card">
+                        <div class="status-indicator" id="term-status-backend"></div>
+                        <div class="status-label">后端服务</div>
+                        <div class="status-detail" id="term-detail-backend">端口 12400</div>
+                    </div>
+                    <div class="status-card">
+                        <div class="status-indicator" id="term-status-tts"></div>
+                        <div class="status-label">语音合成</div>
+                        <div class="status-detail" id="term-detail-tts">端口 9880</div>
+                    </div>
+                    <div class="status-card">
+                        <div class="status-indicator" id="term-status-qq"></div>
+                        <div class="status-label">QQ/NapCat</div>
+                        <div class="status-detail" id="term-detail-qq">端口 3004</div>
+                    </div>
+                </div>
+                <div class="section">
+                    <h3>服务控制</h3>
+                    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;">
+                        <button class="btn-primary" onclick="restartBackend()">重启后端</button>
+                        <button class="btn-primary" onclick="startLocalTTS()">启动本地TTS</button>
+                        <button class="btn-primary" onclick="startNapCat()">启动NapCat</button>
+                    </div>
+                    <div style="display:flex;gap:10px;flex-wrap:wrap;">
+                        <button class="btn-small" onclick="openProjectDir()">项目目录</button>
+                        <button class="btn-small" onclick="openNapCatLogs()">NapCat日志</button>
+                        <button class="btn-small" onclick="openNapCatWebUI()">NapCat WebUI</button>
+                        <button class="btn-small" onclick="checkStatus();showHint('已刷新')">刷新状态</button>
+                    </div>
+                </div>
+                <div class="section">
+                    <h3>运行日志（最近100行）</h3>
+                    <div class="log-viewer" id="terminal-log-viewer">
+                        <div class="log-line">加载中...</div>
+                    </div>
+                    <div style="margin-top:12px;display:flex;gap:10px;">
+                        <button class="btn-small" onclick="loadLogs()">刷新日志</button>
+                        <button class="btn-small" onclick="document.getElementById('terminal-log-viewer').innerHTML=''">清空显示</button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ============ Knowledge Graph Tab ============ -->
+            <section class="tab-panel" id="tab-knowledge" style="padding:0;height:calc(100vh - 38px - 60px);">
+                <iframe id="knowledge-iframe" src="" style="width:100%;height:100%;border:none;background:#030510;"
+                        onload="this.contentWindow.focus()"></iframe>
+            </section>
+
+            <!-- ============ Plugins Market Tab ============ -->
+            <!-- ============ Developer Platform Tab ============ -->
+            <section class="tab-panel" id="tab-devplatform">
+                <h2>开发者平台</h2>
+
+                <!-- 登录/注册 -->
+                <div class="section">
+                    <h3>开发者登录</h3>
+                    <div style="display:flex;gap:8px;margin-bottom:10px;">
+                        <input type="text" id="dev-username" placeholder="用户名" style="flex:1;">
+                        <input type="password" id="dev-password" placeholder="密码" style="flex:1;">
+                        <button class="btn-primary" onclick="devLogin()">登录</button>
+                        <button class="btn-small" onclick="devRegister()">注册</button>
+                        <!-- 2026-07-03 面板升级（批6）：登出按钮调已有 POST /developers/logout；
+                             API文档按钮打开 FastAPI 自带 Swagger（依据 panel-developer.json
+                             "登出/会话保持"与"API文档入口"审计项） -->
+                        <button class="btn-small" onclick="devLogout()">登出</button>
+                        <button class="btn-small" onclick="openExternal(API_BASE + '/docs')">API文档</button>
+                    </div>
+                    <div id="dev-login-status" style="color:#4a5568;font-size:12px;"></div>
+                </div>
+
+                <!-- 管理员面板（登录后显示） -->
+                <div class="section" id="dev-admin-panel" style="display:none;">
+                    <h3>开发者管理 <span id="dev-stats" style="color:#4a5568;font-size:12px;"></span></h3>
+                    <div id="dev-list" class="log-viewer" style="height:250px;">
+                        <div class="log-line">请先登录</div>
+                    </div>
+                    <button class="btn-primary" onclick="loadDevelopers()" style="margin-top:8px;">刷新</button>
+                </div>
+            </section>
+
+            <section class="tab-panel" id="tab-plugins">
+                <h2>插件市场</h2>
+
+                <!-- 统计+操作栏 -->
+                <div class="section" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+                    <div style="display:flex;gap:16px;font-size:13px;">
+                        <span>可用 <b id="pm-available" style="color:#3b82f6;">0</b></span>
+                        <span>已装 <b id="pm-installed" style="color:#22c55e;">0</b></span>
+                    </div>
+                    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                        <button class="btn-primary" onclick="loadMarketPlugins()">🔄 刷新</button>
+                        <button class="btn-small" onclick="syncToGithub()">📤 同步到GitHub</button>
+                        <button class="btn-small" onclick="openExternal('https://whitesalary-plugins-view.vercel.app')">🌐 在线浏览</button>
+                        <button class="btn-small" onclick="openExternal('https://whitesalary-plugins-web.vercel.app')">📝 在线提交</button>
+                    </div>
+                </div>
+
+                <!-- 搜索+过滤 -->
+                <div class="section">
+                    <div style="display:flex;gap:8px;margin-bottom:12px;">
+                        <input type="text" id="pm-search" placeholder="搜索插件..." style="flex:1;" oninput="filterMarketPlugins()">
+                        <select id="pm-category" onchange="filterMarketPlugins()" style="width:120px;">
+                            <option value="">全部分类</option>
+                            <option value="工具">🔧 工具</option>
+                            <option value="游戏">🎮 游戏</option>
+                            <option value="社交">👥 社交</option>
+                            <option value="AI">🤖 AI</option>
+                            <option value="音乐">🎵 音乐</option>
+                            <option value="图片">🖼️ 图片</option>
+                            <option value="新闻">📰 新闻</option>
+                            <option value="自动化">⚡ 自动化</option>
+                            <option value="群管">🏠 群管</option>
+                            <option value="其他">📦 其他</option>
+                        </select>
+                        <select id="pm-sort" onchange="sortMarketPlugins()" style="width:120px;">
+                            <option value="default">默认排序</option>
+                            <option value="downloads">下载量↓</option>
+                            <option value="rating">评分↓</option>
+                            <option value="name">名称A-Z</option>
+                        </select>
+                    </div>
+                    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;">
+                        <span class="btn-small" style="font-size:10px;padding:3px 8px;cursor:pointer;" onclick="filterByTag('')">全部</span>
+                        <span class="btn-small" style="font-size:10px;padding:3px 8px;cursor:pointer;" onclick="filterByTag('featured')">⭐ 精选</span>
+                        <span class="btn-small" style="font-size:10px;padding:3px 8px;cursor:pointer;" onclick="filterByTag('installed')">✅ 已安装</span>
+                        <span class="btn-small" style="font-size:10px;padding:3px 8px;cursor:pointer;" onclick="filterByTag('not-installed')">📥 未安装</span>
+                    </div>
+                </div>
+
+                <!-- 插件列表 -->
+                <div id="pm-plugins" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px;">
+                    <div style="color:#4a5568;text-align:center;padding:40px;">加载中...</div>
+                </div>
+            </section>
+
+            <!-- ============ About Tab ============ -->
+            <section class="tab-panel" id="tab-about">
+                <h2>About White Salary</h2>
+                <div class="section">
+                    <!-- 2026-07-03 面板升级（批6）：版本/工具数/模块数改为切页时调批6新端点
+                         GET /about 动态填充，快照式硬编码不再随代码演进过期
+                         （依据 panel-about.json"版本/架构/技术栈信息表"审计项） -->
+                    <div class="about-info">
+                        <div class="about-row"><span>版本</span><span id="about-version">--</span></div>
+                        <div class="about-row"><span>Python</span><span id="about-python">--</span></div>
+                        <div class="about-row"><span>架构</span><span>六边形架构 (Ports & Adapters)</span></div>
+                        <div class="about-row"><span>后端</span><span>FastAPI + Uvicorn (Python)</span></div>
+                        <div class="about-row"><span>前端</span><span>Electron + pixi.js + Live2D</span></div>
+                        <div class="about-row"><span>TTS</span><span>GPT-SoVITS (本地) / SiliconFlow (云端)</span></div>
+                        <div class="about-row"><span>ASR</span><span>SiliconFlow SenseVoice</span></div>
+                        <div class="about-row"><span>LLM</span><span>多通道多角色 (<span id="about-tool-count">--</span>个工具)</span></div>
+                        <div class="about-row"><span>记忆</span><span>4层记忆 + ChromaDB向量检索（<span id="about-module-stats">--</span>）</span></div>
+                        <div class="about-row"><span>好感度</span><span>11级好感度 + 136个关键词</span></div>
+                        <div class="about-row"><span>QQ</span><span>NapCat OneBot v11 + 智能回复决策</span></div>
+                        <div class="about-row"><span>插件</span><span>可扩展插件系统</span></div>
+                    </div>
+                    <h3>快捷键</h3>
+                    <div class="about-info">
+                        <div class="about-row"><span>F12</span><span>开发者工具</span></div>
+                        <div class="about-row"><span>Ctrl+Q</span><span>退出应用</span></div>
+                        <div class="about-row"><span>Ctrl+Shift+R</span><span>重载前端</span></div>
+                        <div class="about-row"><span>Ctrl+,</span><span>打开设置面板</span></div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Save Bar -->
+            <div class="save-bar">
+                <button class="btn-primary" id="btn-save" onclick="saveAllSettings()">保存设置</button>
+                <button class="btn-small" style="background:rgba(255,100,50,0.15);color:#ff6432;border-color:rgba(255,100,50,0.3);" onclick="restartBackend()">重启后端</button>
+                <button class="btn-small" onclick="startLocalTTS()">启动TTS</button>
+                <span class="save-hint" id="save-hint"></span>
+            </div>
+        </main>
+    </div>
+
+    <script src="js/settings.js"></script>
+</body>
+</html>

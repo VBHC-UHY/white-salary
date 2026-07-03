@@ -1,0 +1,125 @@
+{
+  "modules": {
+    "disabled": [
+      "language_style",
+      "owner_style",
+      "natural_expression",
+      "dialogue_evolution",
+      "dialogue_depth",
+      "opinion_system",
+      "secret_system",
+      "nostalgia",
+      "habits",
+      "growth_tracker",
+      "memory_personality",
+      "relationship_milestone",
+      "relationship_expectation",
+      "expectation_system",
+      "disappointment_tracker",
+      "social_pattern",
+      "conversation_rhythm",
+      "condition_engine"
+    ],
+    "description": "2026-07-03 审计修复（批5）：模块启用开关（计划书9.2决策落地）。disabled按文件名(stem)禁用扩展模块，文件保留不删、想恢复从列表移除即可。2026-07-03 工具实现（批9）：slang_learner/expression_learner 从禁用列表移除——view_learned_style 工具需要这两个模块的学习数据，恢复学习"
+  },
+  "mem0_layers": {
+    "fact": {
+      "expire_days": null,
+      "description": "永久事实（名字/生日/喜好）"
+    },
+    "temp": {
+      "expire_days": 1,
+      "description": "临时信息（1天过期）"
+    },
+    "event": {
+      "expire_days": 365,
+      "description": "具体事件（1年过期）"
+    },
+    "emotion": {
+      "expire_days": 30,
+      "description": "情感记录（30天过期）"
+    }
+  },
+  "forgetting": {
+    "enabled": true,
+    "forgetting_rate": 0.1,
+    "cold_threshold": 0.2,
+    "emotional_retention": 0.5,
+    "access_boost": 0.1,
+    "protect_important": true,
+    "description": "Ebbinghaus遗忘曲线参数"
+  },
+  "search": {
+    "max_results": 20,
+    "keyword_weight": 0.3,
+    "memory_weight": 0.2,
+    "vector_weight": 0.5,
+    "vector_threshold": 0.7,
+    "rerank_enabled": true,
+    "rerank_top_k": 10
+  },
+  "compression": {
+    "enabled": true,
+    "trigger_threshold": 1000,
+    "compression_ratio": 0.6,
+    "min_interval_hours": 24,
+    "batch_size": 50,
+    "preserve_important": true
+  },
+  "smart_injection": {
+    "enabled": true,
+    "must_include_count": 3,
+    "conditional_count": 5,
+    "random_count": 2,
+    "recency_weight": 0.4,
+    "relevance_weight": 0.6
+  },
+  "cross_session": {
+    "enabled": true,
+    "private_to_group": true,
+    "group_to_group": true,
+    "max_inject_count": 10,
+    "relevance_threshold": 0.6
+  },
+  "context_reviewer": {
+    "enabled": true,
+    "review_interval_turns": 20,
+    "max_extract_per_review": 5
+  },
+  "temporal": {
+    "half_life_days": 7.0,
+    "min_weight": 0.1,
+    "periodic_check_enabled": true
+  },
+  "association": {
+    "enabled": true,
+    "max_edges_per_node": 20,
+    "auto_associate": true,
+    "min_similarity_for_link": 0.5
+  },
+  "classifier": {
+    "enabled": true,
+    "categories": [
+      "person",
+      "event",
+      "promise",
+      "secret",
+      "knowledge",
+      "emotion"
+    ],
+    "use_llm_fallback": true
+  },
+  "scene": {
+    "enabled": true,
+    "atmospheres": [
+      "casual",
+      "serious",
+      "playful",
+      "intimate",
+      "tense",
+      "supportive",
+      "celebratory",
+      "melancholic"
+    ]
+  }
+}

@@ -1,0 +1,280 @@
+{
+  "1": {
+    "class_type": "CheckpointLoaderSimple",
+    "inputs": {
+      "ckpt_name": "hassakuXLIllustrious_v34.safetensors"
+    }
+  },
+  "2": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "sdxl_vae.safetensors"
+    }
+  },
+  "3": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "{{prompt}}",
+      "clip": [
+        "1",
+        1
+      ]
+    }
+  },
+  "4": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "{{negative_prompt}}",
+      "clip": [
+        "1",
+        1
+      ]
+    }
+  },
+  "5": {
+    "class_type": "EmptyLatentImage",
+    "inputs": {
+      "width": 1024,
+      "height": 1024,
+      "batch_size": 1
+    }
+  },
+  "6": {
+    "class_type": "KSampler",
+    "inputs": {
+      "seed": 12345,
+      "steps": 65,
+      "cfg": 7.0,
+      "sampler_name": "euler_ancestral",
+      "scheduler": "normal",
+      "denoise": 1.0,
+      "model": [
+        "1",
+        0
+      ],
+      "positive": [
+        "3",
+        0
+      ],
+      "negative": [
+        "4",
+        0
+      ],
+      "latent_image": [
+        "5",
+        0
+      ]
+    }
+  },
+  "7": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "6",
+        0
+      ],
+      "vae": [
+        "2",
+        0
+      ]
+    }
+  },
+  "10": {
+    "class_type": "UltralyticsDetectorProvider",
+    "inputs": {
+      "model_name": "bbox/face_yolov8m.pt"
+    }
+  },
+  "12": {
+    "class_type": "BboxDetectorSEGS",
+    "inputs": {
+      "threshold": 0.5,
+      "dilation": 10,
+      "crop_factor": 3.0,
+      "drop_size": 10,
+      "labels": "all",
+      "bbox_detector": [
+        "10",
+        0
+      ],
+      "image": [
+        "7",
+        0
+      ]
+    }
+  },
+  "14": {
+    "class_type": "DetailerForEach",
+    "inputs": {
+      "image": [
+        "7",
+        0
+      ],
+      "segs": [
+        "12",
+        0
+      ],
+      "model": [
+        "1",
+        0
+      ],
+      "clip": [
+        "1",
+        1
+      ],
+      "vae": [
+        "2",
+        0
+      ],
+      "positive": [
+        "3",
+        0
+      ],
+      "negative": [
+        "4",
+        0
+      ],
+      "seed": 12345,
+      "steps": 14,
+      "cfg": 2.0,
+      "sampler_name": "euler_ancestral",
+      "scheduler": "normal",
+      "denoise": 0.35,
+      "guide_size": 512,
+      "guide_size_for": true,
+      "max_size": 1024,
+      "feather": 5,
+      "noise_mask": true,
+      "force_inpaint": true,
+      "drop_size": 10,
+      "wildcard": "",
+      "cycle": 1
+    }
+  },
+  "20": {
+    "class_type": "UltralyticsDetectorProvider",
+    "inputs": {
+      "model_name": "bbox/hand_yolov8s.pt"
+    }
+  },
+  "22": {
+    "class_type": "BboxDetectorSEGS",
+    "inputs": {
+      "threshold": 0.5,
+      "dilation": 10,
+      "crop_factor": 3.0,
+      "drop_size": 10,
+      "labels": "all",
+      "bbox_detector": [
+        "20",
+        0
+      ],
+      "image": [
+        "14",
+        0
+      ]
+    }
+  },
+  "24": {
+    "class_type": "DetailerForEach",
+    "inputs": {
+      "image": [
+        "14",
+        0
+      ],
+      "segs": [
+        "22",
+        0
+      ],
+      "model": [
+        "1",
+        0
+      ],
+      "clip": [
+        "1",
+        1
+      ],
+      "vae": [
+        "2",
+        0
+      ],
+      "positive": [
+        "3",
+        0
+      ],
+      "negative": [
+        "4",
+        0
+      ],
+      "seed": 12345,
+      "steps": 16,
+      "cfg": 2.0,
+      "sampler_name": "euler_ancestral",
+      "scheduler": "normal",
+      "denoise": 0.35,
+      "guide_size": 512,
+      "guide_size_for": true,
+      "max_size": 1024,
+      "feather": 5,
+      "noise_mask": true,
+      "force_inpaint": true,
+      "drop_size": 10,
+      "wildcard": "",
+      "cycle": 1
+    }
+  },
+  "31": {
+    "class_type": "UltimateSDUpscaleNoUpscale",
+    "inputs": {
+      "upscale_by": 1.5,
+      "seed": 12345,
+      "steps": 65,
+      "cfg": 2.0,
+      "sampler_name": "euler_ancestral",
+      "scheduler": "normal",
+      "denoise": 0.3,
+      "mode_type": "Linear",
+      "tile_width": 1024,
+      "tile_height": 1024,
+      "mask_blur": 8,
+      "tile_padding": 32,
+      "seam_fix_mode": "None",
+      "seam_fix_denoise": 0.0,
+      "seam_fix_width": 64,
+      "seam_fix_mask_blur": 8,
+      "seam_fix_padding": 16,
+      "force_uniform_tiles": true,
+      "tiled_decode": false,
+      "upscaled_image": [
+        "24",
+        0
+      ],
+      "model": [
+        "1",
+        0
+      ],
+      "positive": [
+        "3",
+        0
+      ],
+      "negative": [
+        "4",
+        0
+      ],
+      "vae": [
+        "2",
+        0
+      ]
+    }
+  },
+  "40": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "filename_prefix": "WhiteSalary_Pro",
+      "images": [
+        "31",
+        0
+      ]
+    }
+  }
+}

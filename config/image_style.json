@@ -1,0 +1,34 @@
+{
+    "base_appearance": "1girl, solo, extremely beautiful, silver white long flowing hair, waist-length hair, bright silver-gray eyes, perfect face, delicate features, soft skin, large breasts, slim waist, crescent moon hair clip, small star earrings, crescent moon pendant necklace",
+    "outfit_default": "white futuristic sci-fi crop top, short pleated skirt, thigh-highs, elegant, fashionable",
+    "quality_tags": "masterpiece, best quality, ultra-detailed, beautiful detailed eyes, beautiful detailed face, perfect anatomy, perfect hands, perfect fingers, 8k, highres",
+    "negative_prompt": "worst quality, low quality, blurry, deformed, bad anatomy, bad hands, missing fingers, extra fingers, fused fingers, too many fingers, mutated hands, malformed hands, ugly, disfigured, watermark, text, signature, jpeg artifacts, extra limbs, extra arms, missing arms, poorly drawn hands, poorly drawn face, mutation, deformed, ugly face, bad proportions, gross proportions, extra digits, fewer digits",
+    "trigger_keywords": [
+        "自拍",
+        "自画像",
+        "白的",
+        "你的照片",
+        "你的样子",
+        "看看你"
+    ],
+    "default_size": "1024x1024",
+    "default_style": "anime",
+    "default_quality": "pro",
+    "providers": {
+        "comfyui": {
+            "enabled": true,
+            "url": "http://127.0.0.1:8188",
+            "model": "illustriousXLV20_v20Stable.safetensors",
+            "self_portrait_model": "hassakuXLIllustrious_v34.safetensors",
+            "upscaler": "4x_foolhardy_Remacri.pth"
+        },
+        "dmxapi": {
+            "enabled": true,
+            "model": "dall-e-3"
+        },
+        "siliconflow": {
+            "enabled": true,
+            "model": "Qwen/Qwen-Image"
+        }
+    }
+}

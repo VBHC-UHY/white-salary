@@ -1,0 +1,7 @@
+{
+  "_README": "插件市场/开发者平台的 GitHub 配置模板。复制成同目录 github_config.json 再填。config/github_config.json 已被 .gitignore 忽略，不会进仓库。不用插件市场可不管本文件。",
+  "token": "",
+  "repo": "VBHC-UHY/whitesalary-plugins",
+  "admin_password": "",
+  "description": "token 需要有 repo 权限（GitHub Settings -> Developer settings -> Personal access tokens 生成）。admin_password 是管理员在插件市场删除插件时用的口令，自己设一个即可。repo 改成你自己的插件仓库。"
+}

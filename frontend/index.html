@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>White Salary</title>
+    <!-- Google Fonts: 科幻风格字体 -->
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Noto+Sans+SC:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <!-- 主样式表 -->
+    <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+    <!-- ============================================================ -->
+    <!-- Live2D 画布 - 渲染虚拟形象 -->
+    <!-- ============================================================ -->
+    <canvas id="canvas"></canvas>
+
+    <!-- ============================================================ -->
+    <!-- 字幕容器 - AI说话时底部显示文字 -->
+    <!-- ============================================================ -->
+    <div id="subtitle-container">
+        <div id="subtitle-glow"></div>
+        <p id="subtitle-text"></p>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- 聊天输入框 - 用户在这里打字 -->
+    <!-- ============================================================ -->
+    <div id="chat-container">
+        <!-- 折叠按钮 -->
+        <button id="chat-collapse-btn" onclick="toggleChatHistory()" title="折叠/展开聊天记录">▼</button>
+        <!-- 聊天历史消息区域 -->
+        <div id="chat-messages"></div>
+        <!-- 输入区域 -->
+        <div id="chat-input-area">
+            <div id="chat-input" contenteditable="true" placeholder="和 White Salary 说点什么..."></div>
+            <button id="chat-screenshot-btn" title="截屏发送给AI" onclick="sendScreenshot()">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="12" cy="13" r="4"/><path d="M5 3v2M19 3v2"/>
+                </svg>
+            </button>
+            <button id="chat-vision-toggle" title="实时视觉：已关闭" onclick="toggleVisionButton()" style="color:#666;">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>
+                </svg>
+            </button>
+            <button id="chat-interrupt-toggle" title="语音打断：已开启" onclick="toggleInterrupt()">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/>
+                </svg>
+            </button>
+            <button id="chat-listen-toggle" title="开启持续监听">
+                <svg class="icon-off" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M1 1l22 22"/>
+                    <path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6"/>
+                    <path d="M17 16.95A7 7 0 0 1 5 12v-2m14 0v2c0 .76-.12 1.5-.35 2.18"/>
+                </svg>
+                <svg class="icon-on" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:none">
+                    <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+                    <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                    <line x1="12" y1="19" x2="12" y2="23"/>
+                    <line x1="8" y1="23" x2="16" y2="23"/>
+                </svg>
+            </button>
+            <button id="chat-mic-btn" title="按住说话">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+                    <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                    <line x1="12" y1="19" x2="12" y2="23"/>
+                    <line x1="8" y1="23" x2="16" y2="23"/>
+                </svg>
+            </button>
+            <button id="chat-send-btn">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M22 2L11 13M22 2L15 22L11 13M22 2L2 9L11 13"/>
+                </svg>
+            </button>
+        </div>
+        <!-- 状态指示器 -->
+        <div id="status-indicator">
+            <div id="status-dot"></div>
+            <span id="status-text">等待连接...</span>
+        </div>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- 气泡框 - 跟随模型位置显示AI的回复 -->
+    <!-- ============================================================ -->
+    <div id="bubble-container">
+        <div id="bubble-text"></div>
+        <div id="bubble-tail"></div>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- 粒子背景 - 科幻氛围粒子效果 -->
+    <!-- ============================================================ -->
+    <canvas id="particles-canvas"></canvas>
+
+    <!-- ============================================================ -->
+    <!-- 依赖库 -->
+    <!-- ============================================================ -->
+    <!-- Live2D 核心库 -->
+    <script src="libs/live2d.min.js"></script>
+    <script src="libs/live2dcubismcore.min.js"></script>
+    <!-- PixiJS 渲染引擎 -->
+    <script src="libs/pixi.min.js"></script>
+    <!-- Live2D PixiJS 插件 -->
+    <script src="libs/pixi-live2d-display.min.js"></script>
+
+    <!-- ============================================================ -->
+    <!-- 应用脚本 -->
+    <!-- ============================================================ -->
+    <script src="js/particles.js"></script>
+    <script src="js/live2d-manager.js"></script>
+    <script src="js/chat-controller.js"></script>
+    <script>
+    // ============ Vision System Globals ============
+    let _desktopVisionInterval = null;
+    let _desktopVisionOn = false;
+    let _cameraVisionStream = null;
+    let _cameraVisionInterval = null;
+
+    // 主界面的实时视觉开关按钮
+    function toggleVisionButton() {
+        const btn = document.getElementById('chat-vision-toggle');
+        if (!btn) return;
+
+        if (_desktopVisionOn) {
+            // 关闭
+            toggleDesktopVision('false');
+            _desktopVisionOn = false;
+            btn.style.color = '#666';
+            btn.title = '实时视觉：已关闭';
+        } else {
+            // 先测试一次截屏能不能用
+            toggleDesktopVision('true');
+            _desktopVisionOn = true;
+            btn.style.color = '#00d4ff';
+            btn.title = '实时视觉：已开启（每30秒）';
+        }
+    }
+
+    function toggleDesktopVision(enabled) {
+        // 视觉系统不再自动定时截屏
+        // 只在用户明确要求时（点截屏按钮/说"看看屏幕"）才触发
+        if (enabled === 'true') {
+            _desktopVisionOn = true;
+            console.log('[Vision] Desktop vision enabled (on-demand only)');
+            if (window._chatController) {
+                window._chatController._addChatMessage('system', '视觉系统已就绪（点截屏按钮或说"看看我屏幕"触发）');
+            }
+        } else {
+            _desktopVisionOn = false;
+            if (_desktopVisionInterval) { clearInterval(_desktopVisionInterval); _desktopVisionInterval = null; }
+            console.log('[Vision] Desktop vision disabled');
+            if (window._chatController) {
+                window._chatController._addChatMessage('system', '视觉系统已关闭');
+            }
+        }
+    }
+
+    async function toggleCameraVision(enabled) {
+        if (enabled === 'true') {
+            try {
+                _cameraVisionStream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
+                const video = document.createElement('video');
+                video.srcObject = _cameraVisionStream;
+                video.play();
+
+                _cameraVisionInterval = setInterval(async () => {
+                    if (!_cameraVisionStream || !window._chatController) return;
+                    const canvas = document.createElement('canvas');
+                    canvas.width = 640; canvas.height = 480;
+                    canvas.getContext('2d').drawImage(video, 0, 0);
+                    const base64 = canvas.toDataURL('image/jpeg', 0.7).split(',')[1];
+
+                    const cc = window._chatController;
+                    if (cc.isConnected && cc.ws) {
+                        cc.ws.send(JSON.stringify({
+                            type: 'image',
+                            content: base64,
+                            prompt: '通过摄像头看到了什么？简短描述。',
+                        }));
+                    }
+                }, 30000);
+
+                console.log('[Vision] Camera ON');
+                if (window._chatController) {
+                    window._chatController._addChatMessage('system', '摄像头实时捕捉已开启（每30秒）');
+                }
+            } catch (err) {
+                console.error('[Vision] Camera access failed:', err);
+                if (window._chatController) {
+                    window._chatController._addChatMessage('system', `摄像头开启失败: ${err.message}`);
+                } else {
+                    alert('无法访问摄像头: ' + err.message);
+                }
+            }
+        } else {
+            if (_cameraVisionStream) {
+                _cameraVisionStream.getTracks().forEach(t => t.stop());
+                _cameraVisionStream = null;
+            }
+            if (_cameraVisionInterval) { clearInterval(_cameraVisionInterval); _cameraVisionInterval = null; }
+            console.log('[Vision] Camera OFF');
+            if (window._chatController) {
+                window._chatController._addChatMessage('system', '摄像头实时捕捉已关闭');
+            }
+        }
+    }
+
+    async function sendScreenshot() {
+        const cc = window._chatController;
+        if (!cc || !cc.isConnected || !cc.ws) {
+            if (cc) cc._addChatMessage('system', '未连接后端，无法发送截屏');
+            return;
+        }
+
+        try {
+            const { ipcRenderer } = require('electron');
+            const base64 = await ipcRenderer.invoke('take-screenshot');
+            if (!base64) {
+                cc._addChatMessage('system', '截屏失败（返回空数据）');
+                return;
+            }
+
+            const prompt = cc.chatInput?.innerText?.trim() || '看看我的屏幕上有什么';
+            if (cc.chatInput) cc.chatInput.innerText = '';
+
+            cc._addChatMessage('user', `[截屏] ${prompt}`);
+            cc._sentences = {};
+            cc._nextPlayIndex = 0;
+            cc._isPlaying = false;
+            cc._fullReply = '';
+            cc._replyDone = false;
+
+            cc.ws.send(JSON.stringify({
+                type: 'image',
+                content: base64,
+                prompt: prompt,
+            }));
+            console.log(`[Vision] Screenshot sent (${(base64.length / 1024).toFixed(0)}KB)`);
+        } catch (err) {
+            console.error('[Vision] Screenshot failed:', err);
+            if (cc) cc._addChatMessage('system', `截屏失败: ${err.message}`);
+        }
+    }
+
+    function toggleInterrupt() {
+        const btn = document.getElementById('chat-interrupt-toggle');
+        if (!window._chatController) return;
+        const cc = window._chatController;
+        cc._interruptEnabled = !cc._interruptEnabled;
+        if (cc._interruptEnabled) {
+            btn.style.color = '#00d4ff';
+            btn.title = '语音打断：已开启';
+        } else {
+            btn.style.color = '#666';
+            btn.title = '语音打断：已关闭';
+        }
+    }
+
+    function toggleChatHistory() {
+        const msgs = document.getElementById('chat-messages');
+        const btn = document.getElementById('chat-collapse-btn');
+        if (msgs.style.display === 'none') {
+            msgs.style.display = 'block';
+            btn.textContent = '▼';
+            btn.title = '折叠聊天记录';
+        } else {
+            msgs.style.display = 'none';
+            btn.textContent = '▲';
+            btn.title = '展开聊天记录';
+        }
+    }
+    </script>
+    <script>
+    // Expose vision toggles globally for settings panel IPC
+    window.toggleDesktopVision = typeof toggleDesktopVision !== 'undefined' ? toggleDesktopVision : () => {};
+    window.toggleCameraVision = typeof toggleCameraVision !== 'undefined' ? toggleCameraVision : () => {};
+    </script>
+    <script src="js/app.js"></script>
+</body>
+</html>

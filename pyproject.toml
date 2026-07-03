@@ -1,0 +1,153 @@
+# =============================================================================
+# White Salary - 项目配置文件
+# =============================================================================
+# 这个文件定义了整个项目的元数据、依赖库、构建方式和开发工具配置。
+# 相当于项目的"身份证"和"购物清单"。
+# =============================================================================
+
+[project]
+name = "white-salary"
+version = "0.1.0"
+description = "White Salary - 超强AI智能体，对标Neuro-sama级别的AI VTuber"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+
+# ---------------------------------------------------------------------------
+# 项目依赖（运行时必须安装的库）
+# ---------------------------------------------------------------------------
+dependencies = [
+    # --- Web框架 ---
+    "fastapi>=0.115.0",          # 高性能异步Web框架
+    "uvicorn[standard]>=0.32.0", # ASGI服务器（运行FastAPI用的）
+    "websockets>=13.0",          # WebSocket支持
+
+    # --- 配置管理 ---
+    "pydantic>=2.9.0",           # 数据验证和配置模型
+    "pydantic-settings>=2.6.0",  # 从环境变量/文件加载配置
+    "pyyaml>=6.0",               # 读取YAML配置文件
+
+    # --- 日志 ---
+    "loguru>=0.7.0",             # 比标准logging更好用的日志库
+
+    # --- 异步工具 ---
+    "aiofiles>=24.0",            # 异步文件读写
+    "aiohttp>=3.10.0",           # 异步HTTP客户端
+
+    # --- AI/ML 基础 ---
+    "numpy>=1.26.0",             # 数值计算（音频处理等会用到）
+
+    # --- 2026-07-03 审计修复（批5）补齐实际在用但未声明的依赖 ---
+    "python-multipart>=0.0.9",   # FastAPI 解析 multipart 表单（设置面板图片上传）
+    "ddgs>=9.0",                 # DuckDuckGo 搜索库（web_search 工具后端，带反爬处理）
+
+    # --- 2026-07-03 工具实现（批9）---
+    "yt-dlp>=2026.1.0",          # 视频下载工具（download_video）后端
+]
+
+# ---------------------------------------------------------------------------
+# 可选依赖（按功能分组，需要什么装什么）
+# ---------------------------------------------------------------------------
+[project.optional-dependencies]
+
+# LLM适配器
+llm-openai = ["openai>=1.50.0"]
+llm-anthropic = ["anthropic>=0.37.0"]
+
+# 语音识别（ASR）
+asr-whisper = ["faster-whisper>=1.0.0"]
+asr-funasr = ["funasr>=1.0.0"]
+
+# 语音合成（TTS）
+tts-edge = ["edge-tts>=6.1.0"]
+tts-azure = ["azure-cognitiveservices-speech>=1.40.0"]
+
+# 向量数据库（长期记忆用）
+memory-vector = ["chromadb>=0.5.0"]
+
+# 全部安装（开发用）
+all = [
+    "openai>=1.50.0",
+    "anthropic>=0.37.0",
+    "faster-whisper>=1.0.0",
+    "edge-tts>=6.1.0",
+    "chromadb>=0.5.0",
+]
+
+# 开发工具
+dev = [
+    "pytest>=8.3.0",             # 测试框架
+    "pytest-asyncio>=0.24.0",    # 异步测试支持
+    "pytest-cov>=5.0.0",         # 测试覆盖率
+    "ruff>=0.7.0",               # 代码格式化 + lint（比black+flake8更快）
+    "mypy>=1.12.0",              # 静态类型检查
+    "pre-commit>=4.0.0",         # Git提交前自动检查
+]
+
+# ---------------------------------------------------------------------------
+# 构建系统配置
+# ---------------------------------------------------------------------------
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/white_salary"]
+
+# ---------------------------------------------------------------------------
+# ruff 配置（代码格式化 + 代码检查）
+# ---------------------------------------------------------------------------
+[tool.ruff]
+# 每行最大字符数
+line-length = 100
+# 目标Python版本
+target-version = "py311"
+# 源代码目录
+src = ["src"]
+
+[tool.ruff.lint]
+# 启用的检查规则
+select = [
+    "E",    # pycodestyle 错误
+    "W",    # pycodestyle 警告
+    "F",    # pyflakes（未使用的import等）
+    "I",    # isort（import排序）
+    "N",    # pep8-naming（命名规范）
+    "UP",   # pyupgrade（使用新语法）
+    "B",    # bugbear（常见bug检测）
+    "SIM",  # simplify（代码简化建议）
+    "ANN",  # annotations（类型注解检查）
+    "ASYNC",# async相关检查
+]
+# 忽略的规则
+ignore = [
+    "ANN101",  # 不要求self的类型注解
+    "ANN102",  # 不要求cls的类型注解
+    "ANN401",  # 允许使用Any类型
+]
+
+[tool.ruff.lint.isort]
+# import分组：标准库 → 第三方 → 本项目
+known-first-party = ["white_salary"]
+
+# ---------------------------------------------------------------------------
+# mypy 配置（静态类型检查）
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.11"
+strict = true                    # 最严格模式
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true     # 所有函数必须有类型注解
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false    # 测试文件可以宽松一点
+
+# ---------------------------------------------------------------------------
+# pytest 配置（测试框架）
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"            # 自动识别异步测试
+addopts = "-v --tb=short"        # 详细输出，简短错误信息

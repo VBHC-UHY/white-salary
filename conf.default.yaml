@@ -1,0 +1,274 @@
+# =============================================================================
+# White Salary - 默认配置模板
+# =============================================================================
+# 这个文件包含所有配置项的默认值和说明。
+# 不要直接修改这个文件！请复制到 conf.yaml 后再修改。
+# conf.yaml 中的配置会覆盖这里的默认值。
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# 系统基础配置
+# ---------------------------------------------------------------------------
+system:
+  # 项目名称（不要改）
+  name: "White Salary"
+  # 版本号
+  version: "0.1.0"
+  # 调试模式（true=输出更多日志，false=正常模式）
+  debug: false
+  # 日志级别：DEBUG / INFO / WARNING / ERROR
+  log_level: "INFO"
+
+# ---------------------------------------------------------------------------
+# 服务器配置
+# ---------------------------------------------------------------------------
+server:
+  # 监听地址（localhost=只能本机访问，0.0.0.0=局域网可访问）
+  host: "localhost"
+  # 端口号
+  port: 12400
+  # 是否允许跨域请求（前端和后端不在同一个地址时需要开启）
+  cors_enabled: true
+  # 允许跨域的来源地址
+  cors_origins:
+    - "http://localhost:3000"
+    - "http://localhost:5173"
+
+# ---------------------------------------------------------------------------
+# LLM（大语言模型）配置 - 多角色架构
+# 每个角色使用最适合该任务的模型，提升整体质量和效率
+# ---------------------------------------------------------------------------
+
+# ① 主对话模型（Main Brain）：日常聊天，最核心的模型
+# ⚠️ 安全规则：本文件是默认模板，禁止写入任何真实密钥！真实密钥只放 conf.yaml（已被 .gitignore 忽略）。
+#    （2026-07-02 审计修复：此处原来写死了一把真实 SiliconFlow 密钥，已清除；该密钥建议前往
+#      SiliconFlow 控制台吊销重发，因为它已经随模板文件存在泄露风险。）
+llm:
+  provider: "siliconflow"
+  api_key: ""
+  model: "deepseek-ai/DeepSeek-V3.2"
+  base_url: "https://api.siliconflow.cn/v1"
+  temperature: 0.7
+  max_tokens: 2048
+
+# ② 工具判断模型（Tool LLM）：Function Calling决策，需要强推理能力
+llm_tool:
+  provider: "deepseek"
+  api_key: ""
+  model: "deepseek-chat"
+  base_url: "https://api.deepseek.com/v1"
+
+# ③ 记忆分析模型（Memory LLM）：提取值得记住的信息，需要分析能力
+llm_memory:
+  provider: "siliconflow"
+  api_key: ""
+  model: "deepseek-ai/DeepSeek-V3.2"
+  base_url: "https://api.siliconflow.cn/v1"
+
+# ④ 情感分析模型（Emotion LLM）：理解情绪、调整语气
+llm_emotion:
+  provider: "siliconflow"
+  api_key: ""
+  model: "deepseek-ai/DeepSeek-V3.2"
+  base_url: "https://api.siliconflow.cn/v1"
+
+# ⑤ 视觉理解模型（Vision LLM）：看图/看屏幕，需要多模态能力
+llm_vision:
+  provider: "siliconflow"
+  api_key: ""
+  # 2026-07-03 修复：原 THUDM/GLM-4.1V-9B-Thinking 已被 SiliconFlow 停用（403），
+  # 新用户开箱即坏——换为在架的 Qwen3-VL（与主项目 conf.yaml 一致，带真图验证过）
+  model: "Qwen/Qwen3-VL-8B-Instruct"
+  base_url: "https://api.siliconflow.cn/v1"
+
+# ⑥ 后处理模型（Postprocess LLM）：杂活、配文、快速辅助任务
+llm_postprocess:
+  provider: ""
+  api_key: ""
+  model: ""
+  base_url: ""
+
+# ⑦ 检测防护模型（Detect LLM）：对话安全检测、话题追踪、风格记忆
+llm_detect:
+  provider: ""
+  api_key: ""
+  model: ""
+  base_url: ""
+
+# ⑧ 后台任务模型（Background LLM）：不紧急的后台任务、自动聊天
+llm_background:
+  provider: ""
+  api_key: ""
+  model: ""
+  base_url: ""
+
+# ---------------------------------------------------------------------------
+# ASR（语音识别）配置
+# 2026-07-03 审计修复（批5）：原 provider/model_size/language 是"写了没人读"的
+# 死配置（真实行为硬编码在 run_server.py），已重写为真实生效字段，
+# 默认值 = 原硬编码值（依据 docs/audit-2026-07-02/config-audit.json）
+# ---------------------------------------------------------------------------
+asr:
+  # ASR引擎（当前仅支持 siliconflow）
+  provider: "siliconflow"
+  # API密钥（留空 = 自动从已配置的角色LLM中扫一把SiliconFlow密钥）
+  api_key: ""
+  # 语音识别模型
+  model: "FunAudioLLM/SenseVoiceSmall"
+
+# ---------------------------------------------------------------------------
+# TTS（语音合成）配置
+# 2026-07-03 审计修复（批5）：原 provider/voice/rate/pitch 是"写了没人读"的
+# 死配置（真实行为硬编码在 run_server.py：本地 GPT-SoVITS 优先、SiliconFlow
+# 云端兜底），已重写为真实生效字段，默认值 = 原硬编码值
+# ---------------------------------------------------------------------------
+tts:
+  # 本地 GPT-SoVITS API 地址（主TTS，启动时探测该端口决定是否走本地）
+  local_api_url: "http://127.0.0.1:9880"
+  # 声音克隆参考音频路径（相对项目根目录；也支持绝对路径；
+  # 环境变量 WS_TTS_REF_AUDIO 优先级更高）
+  ref_audio: "assets/tts/ref_default.wav"
+  # 参考音频对应的文字内容（环境变量 WS_TTS_REF_TEXT 优先级更高）
+  ref_text: "你怎么不会想让我去试辣子鸡丁吧"
+  # 本地TTS不可用时的云端兜底引擎（当前仅支持 siliconflow）
+  fallback_provider: "siliconflow"
+  # 兜底引擎API密钥（留空 = 自动从已配置的角色LLM中扫一把SiliconFlow密钥）
+  fallback_api_key: ""
+  # 兜底TTS模型
+  fallback_model: "FunAudioLLM/CosyVoice2-0.5B"
+  # 兜底音色ID（预置音色开箱即用；有自己克隆音色的填 speech:xxx 格式的专属音色ID）
+  # 2026-07-03 修复：原默认值是项目作者账号专属的克隆音色，其他账号的 key 调用会失败，
+  # 已换成 SiliconFlow 公共预置音色（anna=温柔女声，可换 alex/bella/claire 等）
+  fallback_voice: "FunAudioLLM/CosyVoice2-0.5B:anna"
+
+# ---------------------------------------------------------------------------
+# VAD（语音活动检测）配置
+# ---------------------------------------------------------------------------
+vad:
+  # 使用哪个VAD引擎：silero
+  provider: "silero"
+  # 检测阈值（0.0~1.0，越高越严格，太高会漏掉小声说话）
+  threshold: 0.5
+
+# ---------------------------------------------------------------------------
+# 记忆系统配置
+# ---------------------------------------------------------------------------
+memory:
+  # 短期记忆：保留最近多少轮对话
+  short_term_max_turns: 20
+  # 长期记忆：使用的向量数据库类型（chroma / none）
+  long_term_provider: "none"
+  # 长期记忆：检索时返回多少条相关记忆
+  long_term_top_k: 5
+
+# ---------------------------------------------------------------------------
+# 情感系统配置
+# ---------------------------------------------------------------------------
+emotion:
+  # 是否启用情感系统
+  enabled: true
+  # 情绪变化的灵敏度（0.0~1.0，越高情绪变化越频繁）
+  sensitivity: 0.6
+
+# ---------------------------------------------------------------------------
+# 人格配置
+# ---------------------------------------------------------------------------
+personality:
+  # 系统提示词文件路径（定义White Salary的性格）
+  system_prompt_file: "prompts/system_prompt.txt"
+  # 角色名称
+  character_name: "White Salary"
+
+# ---------------------------------------------------------------------------
+# QQ集成配置（NapCat OneBot v11）
+# ---------------------------------------------------------------------------
+qq:
+  # 是否启用QQ集成
+  enabled: false
+  # NapCat正向WebSocket地址（在NapCat WebUI中配置）
+  ws_url: "ws://127.0.0.1:3001"
+  # 机器人在群聊中的名字（@或提到这个名字时回复）
+  bot_name: "白"
+  # NapCat鉴权token（与NapCat WebSocket配置中的token一致）
+  token: ""
+  # 家人QQ号列表（这些QQ号自动设为"家人"关系，不受好感度衰减影响；
+  # 第一个号同时作为主人的统一user_id，桌面端与QQ端共用身份）
+  family_qq: []
+  # 2026-07-03 审计修复（批5）：对主人的称呼（可选）。留空 = 按用户画像的
+  # user_name 回退，再没有就交给模型自然称呼（绝不硬编码"主人"）
+  owner_name: ""
+
+# ---------------------------------------------------------------------------
+# 内容过滤配置
+# ---------------------------------------------------------------------------
+filter:
+  # 是否启用内容过滤
+  enabled: true
+  # 过滤规则文件路径
+  rules_file: "prompts/filter_rules.yaml"
+
+# ---------------------------------------------------------------------------
+# 虚拟形象配置
+# ---------------------------------------------------------------------------
+avatar:
+  # 使用哪种形象：live2d / none
+  provider: "none"
+  # Live2D模型路径
+  model_path: "live2d_models/default"
+
+# ---------------------------------------------------------------------------
+# 主动聊天配置
+# ---------------------------------------------------------------------------
+auto_chat:
+  enabled: true
+  morning_greeting: true
+  night_greeting: true
+  care_reminder: true
+  random_chat: true
+  daily_limit: 3
+
+# ---------------------------------------------------------------------------
+# 功能开关
+# ---------------------------------------------------------------------------
+features:
+  topic_tracker: true
+  rest_system: true
+  user_learning: true
+  memory_consolidation: true
+  content_filter: true
+
+# ---------------------------------------------------------------------------
+# 唱歌模块配置
+# ---------------------------------------------------------------------------
+singing:
+  # 是否启用唱歌功能
+  enabled: false
+  # 使用哪个引擎：rvc
+  provider: "rvc"
+  # RVC模型路径
+  model_path: "models/singing/default.pth"
+
+# ---------------------------------------------------------------------------
+# 外部本地工具路径（2026-07-03 外部依赖优化 批8）
+# ---------------------------------------------------------------------------
+# 【只用云端的用户可以整节留空/忽略】这些路径只有用"本地进阶功能"才需要
+# （本地生图/生视频/口型同步/本地TTS）。云端方向（填 API key 就能用）不依赖它们。
+#
+# 解析顺序：环境变量(如 WS_COMFYUI_BAT) → 本节配置 → 程序内置默认值(见下方注释)。
+# 留空 = 不覆盖，沿用环境变量或内置默认值——保持现有行为，老用户无需改动。
+# 进阶用户把本地工具装在别的位置时，改这里对应字段即可，无需改源码。
+external_tools:
+  # ComfyUI 启动脚本(.bat)。内置默认: D:/cccccccccc/ComfyUI_windows_portable/run_nvidia_gpu.bat
+  comfyui_bat: ""
+  # ComfyUI 的 input 目录（图生视频时把输入图复制进去）。
+  # 内置默认: D:/cccccccccc/ComfyUI_windows_portable/ComfyUI/input
+  comfyui_input: ""
+  # GPT-SoVITS 安装目录（本地高质量TTS/声音克隆）。内置默认: D:/AI_Tools/GPT-SoVITS
+  gpt_sovits_dir: ""
+  # CosyVoice 启动脚本(.bat)（本地无过滤TTS）。内置默认: D:/AI_Tools/CosyVoice/start_cosyvoice.bat
+  cosyvoice_bat: ""
+  # Wav2Lip 安装目录（视频口型同步）。内置默认: D:/AI/Wav2Lip
+  wav2lip_dir: ""
+  # ffmpeg.exe 完整路径（视频/音频转码）。留空 = 用系统 PATH 或内置候选路径
+  # （D:/AI_Tools/ffmpeg-8.0.1-essentials_build/bin/ffmpeg.exe 或 D:/AI/ffmpeg/ffmpeg.exe）
+  ffmpeg_path: ""

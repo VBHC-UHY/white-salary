@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "12400:12400"
+    volumes:
+      - ./data:/app/data
+      - ./conf.yaml:/app/conf.yaml
+      - ./prompts:/app/prompts
+    environment:
+      - PYTHONPATH=src
+    restart: unless-stopped
+
+  # ChromaDB vector database (optional, for semantic memory search)
+  chromadb:
+    image: chromadb/chroma:latest
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data/chroma:/chroma/chroma
+    restart: unless-stopped

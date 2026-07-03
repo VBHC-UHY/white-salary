@@ -1,0 +1,18 @@
+{
+  "happy":      {"expression": "happy",     "motion_group": "idle", "mouth_form": 0.3},
+  "excited":    {"expression": "happy",     "motion_group": "tap",  "mouth_form": 0.5},
+  "grateful":   {"expression": "happy",     "motion_group": "idle", "mouth_form": 0.2},
+  "touched":    {"expression": "shy",       "motion_group": "idle", "mouth_form": 0.1},
+  "playful":    {"expression": "happy",     "motion_group": "tap",  "mouth_form": 0.4},
+  "shy":        {"expression": "shy",       "motion_group": "idle", "mouth_form": 0.1},
+  "calm":       {"expression": "default",   "motion_group": "idle", "mouth_form": 0.0},
+  "neutral":    {"expression": "default",   "motion_group": "idle", "mouth_form": 0.0},
+  "bored":      {"expression": "default",   "motion_group": "idle", "mouth_form": 0.0},
+  "confused":   {"expression": "surprised", "motion_group": "idle", "mouth_form": 0.2},
+  "sad":        {"expression": "sad",       "motion_group": "idle", "mouth_form": 0.0},
+  "angry":      {"expression": "angry",     "motion_group": "tap",  "mouth_form": 0.3},
+  "frustrated": {"expression": "angry",     "motion_group": "idle", "mouth_form": 0.2},
+  "hurt":       {"expression": "sad",       "motion_group": "idle", "mouth_form": 0.0},
+  "scared":     {"expression": "surprised", "motion_group": "idle", "mouth_form": 0.1},
+  "surprised":  {"expression": "surprised", "motion_group": "tap",  "mouth_form": 0.4}
+}

@@ -1,0 +1,41 @@
+MIT License
+
+------------------------------------------------------------------------------
+说明（2026-07-03 开源准备）：
+本项目默认采用 MIT 许可证，目的是让任何人都能自由下载、使用、修改、二次分发
+White Salary 的源代码，符合"让别人能用起来"的开源目标。
+
+如果你（项目所有者）希望保留更多控制权，可以自行更换许可证，例如：
+  - AGPL-3.0：要求任何基于本项目提供网络服务的人也必须开源其修改；
+  - GPL-3.0 ：要求分发衍生作品时必须同样开源；
+  - 自定义条款：限制商用等。
+更换时请同步修改 pyproject.toml 的 [project].license 字段与 README 的许可证声明。
+
+【重要——不在本许可范围内的内容】
+下列内容属于第三方或个人创作，不随 MIT 许可证一并授权，请以各自的说明/来源为准：
+  - prompts/ 下的"白"人设文本（system_prompt.txt 等）——原创人设，版权归项目作者；
+  - live2d_models/ 下的第三方 Live2D 模型贴图与模型文件——遵循其原作者授权；
+  - assets/tts/ 与语音相关的参考音频——遵循其原始来源授权；
+  - NapCat / NapCat_OneKey 等第三方组件——遵循各自仓库的许可证。
+分发本项目前，请自行确认上述资源是否允许再分发。
+------------------------------------------------------------------------------
+
+Copyright (c) 2026 White Salary 项目作者
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

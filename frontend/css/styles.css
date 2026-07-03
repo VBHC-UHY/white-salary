@@ -1,0 +1,595 @@
+/*
+ * =============================================================================
+ * White Salary - 科幻冰晶风格主题
+ * =============================================================================
+ *
+ * 配色方案：
+ *   - 主色调：冰蓝 #00d4ff / #00a8cc
+ *   - 辅助色：银白 #e0f0ff / #b0d4f1
+ *   - 强调色：极光紫 #7b68ee / #9b59b6
+ *   - 背景色：深空黑 #0a0a1a / #1a1a2e（透明模式下不可见）
+ *   - 文字色：冰白 #e0f0ff
+ *
+ * 设计理念：
+ *   匹配 White Salary 的银白色长发形象，
+ *   营造冰晶般清冽、科幻感十足的视觉体验。
+ * =============================================================================
+ */
+
+/* ============================================================
+   基础重置
+   ============================================================ */
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    background: transparent;
+    overflow: hidden;
+    user-select: none;
+    -webkit-user-select: none;
+    font-family: 'Noto Sans SC', 'Microsoft YaHei', sans-serif;
+}
+
+/* ============================================================
+   Live2D 画布 - 全屏渲染
+   ============================================================ */
+#canvas {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 1;
+}
+
+/* ============================================================
+   粒子背景画布 - 营造科幻氛围
+   ============================================================ */
+#particles-canvas {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 0;
+    pointer-events: none;
+    opacity: 0.4;
+}
+
+/* ============================================================
+   字幕容器 - AI说话时底部显示
+   科幻风格：冰蓝发光文字 + 底部渐变光晕
+   ============================================================ */
+#subtitle-container {
+    position: fixed;
+    bottom: 30px;
+    left: 50%;
+    transform: translateX(-50%);
+    max-width: 75%;
+    padding: 14px 32px;
+    z-index: 1000;
+    display: none;
+    text-align: center;
+    pointer-events: none;
+}
+
+/* 字幕底部光晕效果 */
+#subtitle-glow {
+    position: absolute;
+    bottom: -10px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 120%;
+    height: 60px;
+    background: radial-gradient(ellipse at center, rgba(0, 212, 255, 0.15) 0%, transparent 70%);
+    filter: blur(10px);
+    pointer-events: none;
+}
+
+#subtitle-text {
+    color: #e0f0ff;
+    font-size: 26px;
+    font-weight: 700;
+    font-family: 'Noto Sans SC', sans-serif;
+    line-height: 1.6;
+    letter-spacing: 1px;
+    /* 冰蓝发光描边效果 */
+    text-shadow:
+        0 0 10px rgba(0, 212, 255, 0.8),
+        0 0 20px rgba(0, 212, 255, 0.4),
+        0 0 40px rgba(0, 212, 255, 0.2),
+        -1px -1px 0 rgba(0, 0, 20, 0.8),
+        1px -1px 0 rgba(0, 0, 20, 0.8),
+        -1px 1px 0 rgba(0, 0, 20, 0.8),
+        1px 1px 0 rgba(0, 0, 20, 0.8);
+}
+
+/* ============================================================
+   聊天容器 - 右下角输入框区域
+   科幻风格：毛玻璃 + 冰蓝边框 + 光晕
+   ============================================================ */
+#chat-container {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    width: 380px;
+    z-index: 1000;
+    pointer-events: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+/* 聊天历史消息 */
+#chat-messages {
+    max-height: 320px;
+    overflow-y: auto;
+    display: none;
+    padding: 12px;
+    border-radius: 16px;
+    background: rgba(10, 10, 30, 0.75);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(0, 212, 255, 0.2);
+    scrollbar-width: thin;
+    scrollbar-color: rgba(0, 212, 255, 0.3) transparent;
+}
+
+/* 自定义滚动条 */
+#chat-messages::-webkit-scrollbar {
+    width: 4px;
+}
+
+#chat-messages::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+#chat-messages::-webkit-scrollbar-thumb {
+    background: rgba(0, 212, 255, 0.3);
+    border-radius: 2px;
+}
+
+/* 单条消息样式 */
+.chat-message {
+    margin-bottom: 10px;
+    padding: 8px 14px;
+    border-radius: 12px;
+    font-size: 14px;
+    line-height: 1.5;
+    animation: message-fade-in 0.3s ease-out;
+}
+
+.chat-message.user {
+    background: rgba(0, 212, 255, 0.12);
+    color: #b0d4f1;
+    border: 1px solid rgba(0, 212, 255, 0.15);
+    margin-left: 40px;
+    text-align: right;
+}
+
+.chat-message.assistant {
+    background: rgba(123, 104, 238, 0.1);
+    color: #e0f0ff;
+    border: 1px solid rgba(123, 104, 238, 0.15);
+    margin-right: 40px;
+}
+
+.chat-message.system {
+    background: rgba(46, 204, 113, 0.08);
+    color: #7dcea0;
+    border: 1px solid rgba(46, 204, 113, 0.15);
+    font-size: 12px;
+    text-align: center;
+    margin-left: 20px;
+    margin-right: 20px;
+    padding: 5px 12px;
+}
+
+.chat-message .sender {
+    font-size: 11px;
+    color: rgba(0, 212, 255, 0.6);
+    margin-bottom: 4px;
+    font-family: 'Orbitron', monospace;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+@keyframes message-fade-in {
+    from {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* 输入区域 */
+#chat-input-area {
+    display: flex;
+    gap: 0;
+    /* 冰蓝边框 + 深色毛玻璃背景 */
+    background: rgba(10, 10, 30, 0.8);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border-radius: 20px;
+    border: 1.5px solid rgba(0, 212, 255, 0.3);
+    overflow: hidden;
+    /* 外发光效果 */
+    box-shadow:
+        0 0 15px rgba(0, 212, 255, 0.1),
+        0 8px 32px rgba(0, 0, 0, 0.3),
+        inset 0 1px 0 rgba(255, 255, 255, 0.05);
+    transition: border-color 0.3s ease, box-shadow 0.3s ease;
+}
+
+/* 输入框获得焦点时增强光晕 */
+#chat-input-area:focus-within {
+    border-color: rgba(0, 212, 255, 0.6);
+    box-shadow:
+        0 0 25px rgba(0, 212, 255, 0.2),
+        0 0 50px rgba(0, 212, 255, 0.05),
+        0 8px 32px rgba(0, 0, 0, 0.3),
+        inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+/* 输入框 */
+#chat-input {
+    flex: 1;
+    padding: 14px 20px;
+    background: transparent;
+    border: none;
+    outline: none;
+    color: #e0f0ff;
+    font-size: 15px;
+    font-family: 'Noto Sans SC', sans-serif;
+    min-height: 24px;
+    max-height: 120px;
+    overflow-y: auto;
+    line-height: 1.5;
+    caret-color: #00d4ff;
+}
+
+/* 占位符文字 */
+#chat-input:empty:before {
+    content: attr(placeholder);
+    color: rgba(0, 212, 255, 0.35);
+    pointer-events: none;
+}
+
+/* 发送按钮 */
+/* 截屏按钮 */
+#chat-screenshot-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    min-height: 48px;
+    background: rgba(255, 255, 255, 0.05);
+    border: none;
+    cursor: pointer;
+    color: #888;
+    transition: all 0.3s ease;
+}
+
+#chat-screenshot-btn:hover {
+    background: rgba(0, 212, 255, 0.1);
+    color: #00d4ff;
+}
+
+/* 实时视觉开关 */
+#chat-vision-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    min-height: 48px;
+    background: rgba(255, 255, 255, 0.05);
+    border: none;
+    cursor: pointer;
+    color: #666;
+    transition: all 0.3s ease;
+}
+
+#chat-vision-toggle:hover {
+    background: rgba(0, 212, 255, 0.1);
+    color: #00d4ff;
+}
+
+/* 打断开关 */
+#chat-interrupt-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    min-height: 48px;
+    background: rgba(255, 255, 255, 0.05);
+    border: none;
+    cursor: pointer;
+    color: #00d4ff;
+    transition: all 0.3s ease;
+}
+
+#chat-interrupt-toggle:hover {
+    background: rgba(0, 212, 255, 0.1);
+}
+
+/* 持续监听开关 */
+#chat-listen-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 38px;
+    min-height: 48px;
+    background: rgba(255, 255, 255, 0.05);
+    border: none;
+    cursor: pointer;
+    color: #666;
+    transition: all 0.3s ease;
+}
+
+#chat-listen-toggle:hover {
+    background: rgba(0, 212, 255, 0.1);
+    color: #00d4ff;
+}
+
+#chat-listen-toggle.active {
+    background: rgba(0, 212, 255, 0.15);
+    color: #00d4ff;
+    transition: box-shadow 0.15s ease;
+}
+
+#chat-listen-toggle.active svg path[d*="1 1l22"] {
+    display: none;
+}
+
+/* 折叠按钮 */
+#chat-collapse-btn {
+    position: absolute;
+    top: -28px;
+    right: 10px;
+    width: 50px;
+    height: 24px;
+    background: rgba(0, 20, 40, 0.7);
+    border: 1px solid rgba(0, 212, 255, 0.3);
+    border-radius: 8px 8px 0 0;
+    color: #00d4ff;
+    font-size: 10px;
+    cursor: pointer;
+    z-index: 100;
+    transition: all 0.2s;
+}
+
+#chat-collapse-btn:hover {
+    background: rgba(0, 212, 255, 0.2);
+}
+
+/* 麦克风按钮 */
+#chat-mic-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 42px;
+    min-height: 48px;
+    background: rgba(0, 212, 255, 0.1);
+    border: none;
+    cursor: pointer;
+    color: #00d4ff;
+    transition: all 0.3s ease;
+}
+
+#chat-mic-btn:hover {
+    background: rgba(0, 212, 255, 0.2);
+}
+
+#chat-mic-btn.recording {
+    background: rgba(255, 60, 60, 0.3);
+    color: #ff4444;
+    animation: micPulse 1s ease-in-out infinite;
+}
+
+@keyframes micPulse {
+    0%, 100% { box-shadow: inset 0 0 10px rgba(255, 60, 60, 0.2); }
+    50% { box-shadow: inset 0 0 20px rgba(255, 60, 60, 0.4); }
+}
+
+#chat-send-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 48px;
+    min-height: 48px;
+    background: linear-gradient(135deg, #00d4ff 0%, #0088cc 50%, #7b68ee 100%);
+    border: none;
+    cursor: pointer;
+    color: white;
+    transition: all 0.3s ease;
+    position: relative;
+    overflow: hidden;
+}
+
+/* 发送按钮悬停效果 */
+#chat-send-btn:hover {
+    background: linear-gradient(135deg, #00e8ff 0%, #00a8cc 50%, #9b59b6 100%);
+    box-shadow: 0 0 20px rgba(0, 212, 255, 0.4);
+}
+
+/* 发送按钮点击效果 */
+#chat-send-btn:active {
+    transform: scale(0.95);
+}
+
+/* 发送按钮扫光动画 */
+#chat-send-btn::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -100%;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.3), transparent);
+    transition: left 0.5s ease;
+}
+
+#chat-send-btn:hover::before {
+    left: 100%;
+}
+
+/* 状态指示器 */
+#status-indicator {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 8px;
+    opacity: 0.7;
+}
+
+#status-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #555;
+    transition: background 0.3s ease, box-shadow 0.3s ease;
+}
+
+/* 已连接状态 */
+#status-dot.connected {
+    background: #00d4ff;
+    box-shadow: 0 0 8px rgba(0, 212, 255, 0.6);
+    animation: status-pulse 2s ease-in-out infinite;
+}
+
+/* 连接中状态 */
+#status-dot.connecting {
+    background: #ffa500;
+    animation: status-pulse 1s ease-in-out infinite;
+}
+
+/* 断开状态 */
+#status-dot.disconnected {
+    background: #ff4444;
+}
+
+@keyframes status-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+}
+
+#status-text {
+    font-size: 11px;
+    color: rgba(0, 212, 255, 0.5);
+    font-family: 'Orbitron', monospace;
+    letter-spacing: 0.5px;
+}
+
+/* ============================================================
+   气泡框 - 跟随Live2D模型位置显示AI回复
+   冰晶科幻风格
+   ============================================================ */
+#bubble-container {
+    position: fixed;
+    top: 0;
+    left: 0;
+    z-index: 999;
+    display: none;
+    pointer-events: none;
+    transition: none;
+}
+
+#bubble-text {
+    position: relative;
+    display: inline-block;
+    min-width: 120px;
+    max-width: 300px;
+    padding: 14px 20px;
+
+    /* 冰晶背景 */
+    background: linear-gradient(145deg,
+        rgba(10, 20, 40, 0.85) 0%,
+        rgba(15, 30, 60, 0.9) 50%,
+        rgba(10, 20, 50, 0.85) 100%
+    );
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1.5px solid rgba(0, 212, 255, 0.4);
+    border-radius: 16px;
+
+    /* 冰蓝光晕阴影 */
+    box-shadow:
+        0 0 15px rgba(0, 212, 255, 0.15),
+        0 8px 24px rgba(0, 0, 0, 0.3),
+        inset 0 1px 0 rgba(0, 212, 255, 0.1);
+
+    /* 文字样式 */
+    font-family: 'Noto Sans SC', sans-serif;
+    font-size: 14px;
+    font-weight: 500;
+    color: #e0f0ff;
+    line-height: 1.6;
+    text-align: left;
+    word-wrap: break-word;
+    white-space: pre-line;
+    letter-spacing: 0.3px;
+
+    animation: bubble-float 3s ease-in-out infinite;
+}
+
+/* 气泡尾巴（三角形指向角色） */
+#bubble-tail {
+    position: absolute;
+    bottom: -8px;
+    left: 30px;
+    width: 0;
+    height: 0;
+    border-style: solid;
+    border-width: 8px 8px 0 0;
+    border-color: rgba(0, 212, 255, 0.4) transparent transparent transparent;
+}
+
+/* 气泡漂浮动画 */
+@keyframes bubble-float {
+    0%, 100% {
+        transform: translateY(0px);
+    }
+    50% {
+        transform: translateY(-5px);
+    }
+}
+
+/* 气泡出现动画 */
+@keyframes bubble-appear {
+    from {
+        opacity: 0;
+        transform: translateY(10px) scale(0.9);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
+}
+
+/* ============================================================
+   通用动画
+   ============================================================ */
+
+/* 呼吸灯效果（用于各种发光元素） */
+@keyframes glow-breathe {
+    0%, 100% {
+        opacity: 0.6;
+        filter: brightness(1);
+    }
+    50% {
+        opacity: 1;
+        filter: brightness(1.2);
+    }
+}
+
+/* 扫光效果 */
+@keyframes scan-line {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(100%); }
+}

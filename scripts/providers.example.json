@@ -1,0 +1,76 @@
+{
+  "_README": [
+    "这是 scripts/test_apis.py 和 scripts/test_futureppo.py 使用的 API 密钥模板。",
+    "用法：把本文件复制成同目录下的 providers.json，再把你自己的 api_key 填进去。",
+    "  Windows: copy scripts\\providers.example.json scripts\\providers.json",
+    "  Linux/Mac: cp scripts/providers.example.json scripts/providers.json",
+    "providers.json 已被 .gitignore 忽略，不会进入 git 仓库，可放心填真实密钥。",
+    "没有的通道 api_key 留空即可，脚本会自动跳过。",
+    "也可以把 api_key 留空、改用环境变量：例如 name=deepseek 对应 DEEPSEEK_API_KEY 或 PROVIDER_DEEPSEEK。"
+  ],
+  "providers": [
+    {
+      "name": "futureppo",
+      "api_key": "",
+      "base_url": "https://91vip.futureppo.top/v1",
+      "model": "claude-sonnet-4-6",
+      "description": "futureppo（dmxapi备用通道） - Claude Sonnet 4.6"
+    },
+    {
+      "name": "dmxapi",
+      "api_key": "",
+      "base_url": "https://www.dmxapi.cn/v1",
+      "model": "gpt-4o",
+      "description": "dmxapi主力通道 - GPT-4o"
+    },
+    {
+      "name": "deepseek",
+      "api_key": "",
+      "base_url": "https://api.deepseek.com/v1",
+      "model": "deepseek-chat",
+      "description": "DeepSeek官方 - deepseek-chat"
+    },
+    {
+      "name": "kimi",
+      "api_key": "",
+      "base_url": "https://api.moonshot.cn/v1",
+      "model": "kimi-k2.5",
+      "description": "Kimi/Moonshot官方 - kimi-k2.5"
+    },
+    {
+      "name": "siliconflow",
+      "api_key": "",
+      "base_url": "https://api.siliconflow.cn/v1",
+      "model": "deepseek-ai/DeepSeek-V3.2",
+      "description": "硅基流动 - DeepSeek V3.2"
+    },
+    {
+      "name": "nvidia1",
+      "api_key": "",
+      "base_url": "https://integrate.api.nvidia.com/v1",
+      "model": "deepseek-ai/deepseek-v3.1",
+      "description": "英伟达#1免费 - DeepSeek V3.1"
+    },
+    {
+      "name": "nvidia2",
+      "api_key": "",
+      "base_url": "https://integrate.api.nvidia.com/v1",
+      "model": "deepseek-ai/deepseek-v3.1",
+      "description": "英伟达#2免费 - DeepSeek V3.1"
+    },
+    {
+      "name": "openrouter",
+      "api_key": "",
+      "base_url": "https://openrouter.ai/api/v1",
+      "model": "deepseek/deepseek-chat",
+      "description": "OpenRouter - DeepSeek Chat"
+    },
+    {
+      "name": "siliconflow_tts",
+      "api_key": "",
+      "base_url": "https://api.siliconflow.cn/v1",
+      "model": "deepseek-ai/DeepSeek-V3.2",
+      "description": "硅基流动(TTS用同一家) - 测试LLM能力，TTS测试也复用此key"
+    }
+  ]
+}

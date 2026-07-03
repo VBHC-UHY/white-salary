@@ -1,0 +1,1291 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>White Salary - 知识图谱</title>
+    <!-- 2026-07-03 面板升级（批6）：三个 3D 图谱渲染库本地化到 libs/，摆脱外网 CDN 依赖，断网也能渲染
+         （three@0.160.0 build/three.min.js、d3 v7.9.0、3d-force-graph@1.73.0 dist UMD 构建） -->
+    <script src="libs/three.min.js"></script>
+    <script src="libs/d3.v7.min.js"></script>
+    <script src="libs/3d-force-graph.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Microsoft YaHei', sans-serif;
+            background: #030510;
+            color: #fff;
+            overflow: hidden;
+            height: 100vh;
+        }
+
+        /* 星空背景 */
+        #starfield { position: fixed; inset: 0; z-index: 0; }
+
+        /* 图谱容器 */
+        #graph-container { position: fixed; inset: 0; z-index: 1; }
+
+        /* 控制面板 */
+        .panel {
+            position: fixed;
+            background: rgba(3,5,16,0.92);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 12px;
+            padding: 16px;
+            z-index: 100;
+            max-height: 80vh;
+            overflow-y: auto;
+        }
+        .panel::-webkit-scrollbar { width: 3px; }
+        .panel::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 2px; }
+
+        /* 左上控制 */
+        #controls {
+            top: 16px; left: 16px; width: 260px;
+        }
+        #controls h2 {
+            font-size: 16px;
+            background: linear-gradient(90deg, #3b82f6, #a855f7);
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+            margin-bottom: 12px;
+        }
+
+        /* 搜索 */
+        #search {
+            width: 100%; padding: 8px 12px;
+            background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.15);
+            border-radius: 8px; color: #fff; font-size: 13px; outline: none;
+            margin-bottom: 10px;
+        }
+        #search:focus { border-color: #3b82f6; }
+        #search-results {
+            display: none; position: absolute; width: calc(100% - 32px);
+            background: rgba(3,5,16,0.98); border: 1px solid rgba(255,255,255,0.15);
+            border-radius: 8px; max-height: 200px; overflow-y: auto; z-index: 200;
+        }
+        .search-item {
+            padding: 8px 12px; cursor: pointer; font-size: 12px;
+            border-bottom: 1px solid rgba(255,255,255,0.05);
+        }
+        .search-item:hover { background: rgba(59,130,246,0.2); }
+
+        /* 按钮组 */
+        .btn-group { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+        .btn {
+            padding: 6px 12px; border-radius: 6px; border: none;
+            font-size: 11px; cursor: pointer; color: #fff; transition: all 0.2s;
+        }
+        .btn-blue { background: rgba(59,130,246,0.3); }
+        .btn-blue:hover { background: rgba(59,130,246,0.5); }
+        .btn-green { background: rgba(34,197,94,0.3); }
+        .btn-green:hover { background: rgba(34,197,94,0.5); }
+        .btn-purple { background: rgba(168,85,247,0.3); }
+        .btn-purple:hover { background: rgba(168,85,247,0.5); }
+        .btn-red { background: rgba(239,68,68,0.3); }
+        .btn-red:hover { background: rgba(239,68,68,0.5); }
+        .btn-sm { padding: 4px 8px; font-size: 10px; }
+
+        /* 类型过滤 */
+        .type-filters { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 10px; }
+        .type-tag {
+            padding: 3px 8px; border-radius: 10px; font-size: 10px;
+            cursor: pointer; border: 1px solid rgba(255,255,255,0.2);
+            transition: all 0.2s; opacity: 0.6;
+        }
+        .type-tag.active { opacity: 1; border-color: currentColor; }
+
+        /* 统计 */
+        .stats {
+            display: flex; gap: 12px; font-size: 11px; color: rgba(255,255,255,0.5);
+            margin-bottom: 10px;
+        }
+        .stats span { color: #3b82f6; font-weight: bold; }
+
+        /* 右上详情 */
+        #detail {
+            top: 16px; right: 16px; width: 300px;
+            display: none;
+        }
+        #detail h3 { font-size: 15px; margin-bottom: 8px; }
+        .detail-section { margin-bottom: 12px; }
+        .detail-label { font-size: 10px; color: rgba(255,255,255,0.4); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; }
+        .detail-item {
+            padding: 6px 10px; background: rgba(255,255,255,0.04);
+            border-radius: 6px; font-size: 12px; margin-bottom: 4px;
+        }
+        .detail-rel {
+            padding: 5px 8px; font-size: 11px; border-left: 2px solid #3b82f6;
+            margin-bottom: 3px; padding-left: 10px;
+        }
+
+        /* 弹窗 */
+        .modal-overlay {
+            display: none; position: fixed; inset: 0;
+            background: rgba(0,0,0,0.7); z-index: 500;
+            justify-content: center; align-items: center;
+        }
+        .modal-overlay.show { display: flex; }
+        .modal {
+            background: rgba(10,15,30,0.98); border: 1px solid rgba(255,255,255,0.15);
+            border-radius: 14px; padding: 24px; width: 400px; max-width: 90%;
+        }
+        .modal h3 { font-size: 16px; margin-bottom: 16px; }
+        .modal input, .modal select, .modal textarea {
+            width: 100%; padding: 8px 12px; background: rgba(255,255,255,0.05);
+            border: 1px solid rgba(255,255,255,0.15); border-radius: 8px;
+            color: #fff; font-size: 13px; margin-bottom: 12px; outline: none;
+        }
+        .modal input:focus, .modal select:focus { border-color: #3b82f6; }
+        .modal-btns { display: flex; gap: 8px; justify-content: flex-end; }
+
+        /* Toast */
+        #toast {
+            position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+            padding: 10px 24px; background: rgba(34,197,94,0.9); border-radius: 8px;
+            font-size: 13px; z-index: 999; display: none;
+        }
+
+        /* 图例 */
+        #legend {
+            position: fixed; bottom: 16px; left: 16px;
+            background: rgba(3,5,16,0.85); backdrop-filter: blur(10px);
+            border: 1px solid rgba(255,255,255,0.1); border-radius: 10px;
+            padding: 12px; z-index: 100; font-size: 11px;
+        }
+        .legend-item { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+        .legend-dot { width: 10px; height: 10px; border-radius: 50%; }
+    </style>
+</head>
+<body>
+    <canvas id="starfield"></canvas>
+    <div id="graph-container"></div>
+
+    <!-- 左上控制面板 -->
+    <div class="panel" id="controls">
+        <h2>🕸️ 知识图谱</h2>
+        <input type="text" id="search" placeholder="搜索实体..." oninput="doSearch(this.value)">
+        <div id="search-results"></div>
+        <div class="stats">
+            实体 <span id="stat-entities">0</span>
+            关系 <span id="stat-relations">0</span>
+        </div>
+        <div class="btn-group">
+            <button class="btn btn-green" onclick="showModal('add-entity')">➕ 添加实体</button>
+            <button class="btn btn-blue" onclick="showModal('add-relation')">🔗 添加关系</button>
+            <button class="btn btn-purple" onclick="showModal('path-query')">🗺️ 路径查询</button>
+        </div>
+        <div class="type-filters" id="type-filters"></div>
+        <div class="btn-group">
+            <button class="btn btn-sm btn-blue" onclick="zoomIn()">🔍+</button>
+            <button class="btn btn-sm btn-blue" onclick="zoomOut()">🔍-</button>
+            <button class="btn btn-sm btn-blue" onclick="resetView()">🎯 重置</button>
+            <button class="btn btn-sm btn-blue" onclick="fitToScreen()">📐 适应</button>
+        </div>
+        <div class="btn-group">
+            <button class="btn btn-sm btn-blue" onclick="toggleLinks()">🔗 切换链接</button>
+            <button class="btn btn-sm btn-blue" onclick="showModal('list-view')">📋 列表视图</button>
+            <button class="btn btn-sm btn-blue" onclick="exportImage()">📷 导出图片</button>
+        </div>
+        <div class="btn-group">
+            <button class="btn btn-sm btn-blue" onclick="toggleSimulation()" id="btn-sim">⏸️ 暂停</button>
+        </div>
+        <div style="margin-top:8px;">
+            <div style="font-size:10px;color:rgba(255,255,255,0.4);margin-bottom:4px;">标签透明度</div>
+            <input type="range" min="0" max="100" value="90" style="width:100%;accent-color:#3b82f6;"
+                   oninput="setLabelOpacity(this.value/100)">
+        </div>
+        <div id="hidden-links-info" style="font-size:10px;color:rgba(255,255,255,0.4);margin-top:6px;display:none;">
+            已隐藏 <span id="hidden-count">0</span> 条关系
+            <a href="#" onclick="showAllLinks();return false;" style="color:#3b82f6;margin-left:6px;">显示全部</a>
+        </div>
+    </div>
+
+    <!-- 右上详情面板 -->
+    <div class="panel" id="detail">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+            <h3 id="detail-name"></h3>
+            <button class="btn btn-sm btn-red" onclick="closeDetail()" style="padding:2px 8px;">✕</button>
+        </div>
+        <div id="detail-type" style="font-size:11px;color:#64748b;margin-bottom:12px;"></div>
+        <div class="detail-section" id="detail-attrs"></div>
+        <div class="detail-section" id="detail-rels"></div>
+        <div class="btn-group">
+            <button class="btn btn-blue" onclick="editSelectedEntity()">编辑</button>
+            <button class="btn btn-red" onclick="deleteSelectedEntity()">删除</button>
+        </div>
+    </div>
+
+    <!-- 图例 -->
+    <div id="legend"></div>
+
+    <!-- Toast -->
+    <div id="toast"></div>
+
+    <!-- 弹窗：添加实体 -->
+    <div class="modal-overlay" id="modal-add-entity">
+        <div class="modal">
+            <h3>➕ 添加实体</h3>
+            <input id="ae-name" placeholder="名称">
+            <select id="ae-type"></select>
+            <textarea id="ae-attrs" rows="3" placeholder='属性（JSON格式，如 {"qq":"123"}）'></textarea>
+            <div class="modal-btns">
+                <button class="btn btn-blue" onclick="doAddEntity()">添加</button>
+                <button class="btn" onclick="hideModal('add-entity')">取消</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 弹窗：添加关系 -->
+    <div class="modal-overlay" id="modal-add-relation">
+        <div class="modal">
+            <h3>🔗 添加关系</h3>
+            <select id="ar-from"></select>
+            <input id="ar-type" placeholder="关系类型（如：朋友、喜欢）">
+            <select id="ar-to"></select>
+            <div class="modal-btns">
+                <button class="btn btn-blue" onclick="doAddRelation()">添加</button>
+                <button class="btn" onclick="hideModal('add-relation')">取消</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 弹窗：路径查询 -->
+    <div class="modal-overlay" id="modal-path-query">
+        <div class="modal">
+            <h3>🗺️ 路径查询</h3>
+            <select id="pq-start"></select>
+            <input id="pq-relation" placeholder="关系过滤（留空=全部）">
+            <input id="pq-depth" type="number" value="2" min="1" max="5" placeholder="最大深度">
+            <div id="pq-results" style="max-height:200px;overflow-y:auto;margin-bottom:12px;font-size:12px;"></div>
+            <div class="modal-btns">
+                <button class="btn btn-purple" onclick="doPathQuery()">查询</button>
+                <button class="btn" onclick="hideModal('path-query')">关闭</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 弹窗：列表视图 -->
+    <div class="modal-overlay" id="modal-list-view">
+        <div class="modal" style="width:700px;max-width:95%;max-height:80vh;">
+            <h3>📋 列表视图</h3>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+                <!-- 实体列表 -->
+                <div>
+                    <div style="font-size:12px;color:#64748b;margin-bottom:8px;">实体</div>
+                    <input id="lv-entity-search" placeholder="搜索实体..." oninput="filterListView('entity')"
+                           style="width:100%;padding:6px 10px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.15);border-radius:6px;color:#fff;font-size:12px;margin-bottom:8px;outline:none;">
+                    <div id="lv-entities" style="max-height:400px;overflow-y:auto;"></div>
+                </div>
+                <!-- 关系列表 -->
+                <div>
+                    <div style="font-size:12px;color:#64748b;margin-bottom:8px;">关系</div>
+                    <input id="lv-rel-search" placeholder="搜索关系..." oninput="filterListView('relation')"
+                           style="width:100%;padding:6px 10px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.15);border-radius:6px;color:#fff;font-size:12px;margin-bottom:8px;outline:none;">
+                    <div id="lv-relations" style="max-height:400px;overflow-y:auto;"></div>
+                </div>
+            </div>
+            <div class="modal-btns" style="margin-top:12px;">
+                <button class="btn" onclick="hideModal('list-view')">关闭</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 弹窗：编辑实体 -->
+    <div class="modal-overlay" id="modal-edit-entity">
+        <div class="modal">
+            <h3>✏️ 编辑实体</h3>
+            <input id="ee-name" placeholder="名称">
+            <select id="ee-type"></select>
+            <textarea id="ee-attrs" rows="4" placeholder="属性（JSON）"></textarea>
+            <div class="modal-btns">
+                <button class="btn btn-blue" onclick="doSaveEditEntity()">保存</button>
+                <button class="btn" onclick="hideModal('edit-entity')">取消</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 弹窗：编辑关系 -->
+    <div class="modal-overlay" id="modal-edit-relation">
+        <div class="modal">
+            <h3>✏️ 编辑关系</h3>
+            <input id="er-from" placeholder="起点" readonly style="opacity:0.6;">
+            <input id="er-type" placeholder="关系类型">
+            <input id="er-to" placeholder="终点" readonly style="opacity:0.6;">
+            <div class="modal-btns">
+                <button class="btn btn-blue" onclick="doSaveEditRelation()">保存</button>
+                <button class="btn btn-red" onclick="doDeleteEditRelation()">删除</button>
+                <button class="btn" onclick="hideModal('edit-relation')">取消</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+    const API = new URLSearchParams(window.location.search).get('api') || 'http://localhost:12400';
+
+    // 类型颜色映射
+    const TYPE_COLORS = {
+        person: '#3b82f6', food: '#eab308', hobby: '#ec4899', event: '#f97316',
+        concept: '#a855f7', group: '#06b6d4', skill: '#f59e0b', emotion: '#f43f5e',
+        media: '#6366f1', thing: '#64748b', activity: '#14b8a6', behavior: '#fb923c',
+        work: '#8b5cf6',
+    };
+    const TYPE_LABELS = {
+        person:'人物', food:'食物', hobby:'爱好', event:'事件', concept:'概念',
+        group:'群组', skill:'技能', emotion:'情感', media:'影视/游戏', thing:'物品',
+        activity:'活动', behavior:'行为', work:'作品',
+    };
+    const LINK_COLORS = {
+        '最重要的家人': '#f472b6', '創造者': '#f472b6', '创造者': '#f472b6',
+        '很重要的人': '#c084fc', '關心白': '#c084fc', '关心白': '#c084fc',
+        '好朋友': '#818cf8', '喜欢': '#60a5fa', '喜歡': '#60a5fa',
+        '认识': '#64748b', '認識': '#64748b', '群友': '#64748b', '所在群': '#64748b',
+    };
+
+    // 类型图标
+    const TYPE_ICONS = {
+        person:'👤', food:'🍰', hobby:'🎨', event:'📅', concept:'💡',
+        group:'👥', skill:'⚡', emotion:'💖', media:'🎮', thing:'📦',
+        activity:'🏃', behavior:'🔔', work:'💼',
+    };
+
+    let graph, entities = [], relations = [], selectedNode = null;
+    let activeTypes = new Set(Object.keys(TYPE_COLORS));
+    let focusedNodeId = null;
+    let manualOverride = false;
+    let smoothFollowRAF = null;
+
+    // ============================================================
+    // 初始化
+    // ============================================================
+
+    async function init() {
+        drawStarfield();
+        await loadData();
+        initGraph();
+        buildTypeFilters();
+        buildLegend();
+        populateSelects();
+    }
+
+    function drawStarfield() {
+        const canvas = document.getElementById('starfield');
+        const ctx = canvas.getContext('2d');
+        const w = canvas.width = window.innerWidth;
+        const h = canvas.height = window.innerHeight;
+
+        // 背景渐变（v2同款：三级渐变）
+        const grad = ctx.createRadialGradient(w/2, h/2, 0, w/2, h/2, w*0.7);
+        grad.addColorStop(0, '#0d1525');
+        grad.addColorStop(0.5, '#080d18');
+        grad.addColorStop(1, '#030508');
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, w, h);
+
+        // 4个星云（v2同款颜色+位置）
+        const nebulas = [
+            { x: w*0.2, y: h*0.3, rx: 200, ry: 150, color: 'rgba(99,102,241,0.15)' },
+            { x: w*0.8, y: h*0.7, rx: 180, ry: 120, color: 'rgba(236,72,153,0.12)' },
+            { x: w*0.5, y: h*0.5, rx: 250, ry: 180, color: 'rgba(59,130,246,0.08)' },
+            { x: w*0.3, y: h*0.8, rx: 150, ry: 100, color: 'rgba(168,85,247,0.1)' },
+        ];
+        for (const n of nebulas) {
+            const ng = ctx.createRadialGradient(n.x, n.y, 0, n.x, n.y, Math.max(n.rx, n.ry));
+            ng.addColorStop(0, n.color);
+            ng.addColorStop(1, 'transparent');
+            ctx.fillStyle = ng;
+            ctx.fillRect(0, 0, w, h);
+        }
+
+        // 200个小白星（v2同款参数）
+        for (let i = 0; i < 200; i++) {
+            const x = Math.random() * w;
+            const y = Math.random() * h;
+            const r = Math.random() * 1.5 + 0.5;
+            const a = Math.random() * 0.7 + 0.3;
+            ctx.beginPath();
+            ctx.arc(x, y, r, 0, Math.PI * 2);
+            ctx.fillStyle = `rgba(255,255,255,${a})`;
+            ctx.fill();
+        }
+
+        // 15个彩色亮星+发光光晕（v2同款）
+        const starColors = [
+            'rgba(99,102,241,0.9)',  // 靛蓝
+            'rgba(236,72,153,0.9)',  // 粉红
+            'rgba(59,130,246,0.9)',  // 蓝
+            'rgba(34,197,94,0.9)',   // 绿
+            'rgba(251,191,36,0.9)',  // 黄
+        ];
+        for (let i = 0; i < 15; i++) {
+            const x = Math.random() * w;
+            const y = Math.random() * h;
+            const size = Math.random() * 2 + 2;
+            const color = starColors[i % starColors.length];
+
+            // 发光光晕
+            const glow = ctx.createRadialGradient(x, y, 0, x, y, size * 4);
+            glow.addColorStop(0, color);
+            glow.addColorStop(0.3, color.replace('0.9', '0.3'));
+            glow.addColorStop(1, 'transparent');
+            ctx.fillStyle = glow;
+            ctx.fillRect(x - size*4, y - size*4, size*8, size*8);
+
+            // 白色核心
+            ctx.beginPath();
+            ctx.arc(x, y, size * 0.4, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(255,255,255,0.95)';
+            ctx.fill();
+        }
+    }
+
+    async function loadData() {
+        try {
+            const resp = await fetch(`${API}/api/settings/knowledge`);
+            const data = await resp.json();
+            entities = data.entities || [];
+            relations = data.relations || [];
+            document.getElementById('stat-entities').textContent = entities.length;
+            document.getElementById('stat-relations').textContent = relations.length;
+        } catch (e) {
+            console.error('加载失败:', e);
+        }
+    }
+
+    function initGraph() {
+        const container = document.getElementById('graph-container');
+
+        // 构建图数据
+        const nodes = entities.filter(e => activeTypes.has(e.type)).map(e => ({
+            id: e.id, name: e.name, type: e.type,
+            color: TYPE_COLORS[e.type] || '#737373',
+            attributes: e.attributes || {},
+            val: e.name === '白' ? 15 : 8,
+        }));
+
+        const nodeIds = new Set(nodes.map(n => n.id));
+        const links = relations
+            .filter(r => nodeIds.has(r.from_id) && nodeIds.has(r.to_id))
+            .map(r => ({
+                source: r.from_id, target: r.to_id,
+                relation: r.relation_type, importance: r.importance || 50,
+                id: r.id,
+                color: LINK_COLORS[r.relation_type] || 'rgba(100,116,139,0.4)',
+            }));
+
+        if (graph) graph._destructor();
+
+        graph = ForceGraph3D()(container)
+            .graphData({ nodes, links })
+            .backgroundColor('rgba(0,0,0,0)')
+            .nodeVal(n => n.val)
+            .nodeColor(n => n.color)
+            .nodeLabel(n => {
+                return `<div style="background:rgba(15,23,42,0.95);padding:12px 16px;border-radius:12px;border:2px solid ${n.color};color:white;font-size:14px;box-shadow:0 8px 32px rgba(0,0,0,0.5);">
+                    <div style="font-weight:700;font-size:16px;color:${n.color};margin-bottom:4px;">${n.name}</div>
+                    <div style="color:#94a3b8;">${TYPE_LABELS[n.type]||n.type}</div>
+                </div>`;
+            })
+            .nodeOpacity(0.9)
+            .nodeResolution(32)
+            .linkColor(l => {
+                // v2同款：聚焦时相关1.0，不相关0.05，无聚焦0.6
+                const baseColor = l.color || 'rgba(100,116,139,0.6)';
+                if (focusedNodeId) {
+                    const src = typeof l.source === 'object' ? l.source.id : l.source;
+                    const tgt = typeof l.target === 'object' ? l.target.id : l.target;
+                    if (src === focusedNodeId || tgt === focusedNodeId) {
+                        return baseColor; // 相关：全亮
+                    }
+                    return 'rgba(50,50,70,0.05)'; // 不相关：近乎透明
+                }
+                return baseColor;
+            })
+            .linkOpacity(0.6)
+            .linkWidth(l => {
+                // v2同款：按关系类型设宽度
+                const rt = l.relation || '';
+                if (['最重要的家人','創造者','创造者'].includes(rt)) return 4;
+                if (['很重要的人','關心白','关心白','關心','关心'].includes(rt)) return 3;
+                if (['好朋友','最喜歡','最喜欢','喜歡','喜欢','妹妹'].includes(rt)) return 2;
+                return 1;
+            })
+            .linkDirectionalParticles(3)
+            .linkDirectionalParticleWidth(3)
+            .linkDirectionalParticleSpeed(0.006)
+            .linkDirectionalParticleColor(l => l.color || '#64748b')
+            .linkLabel(l => {
+                const src = typeof l.source === 'object' ? l.source.name : (entities.find(e=>e.id===l.source)?.name||'?');
+                const tgt = typeof l.target === 'object' ? l.target.name : (entities.find(e=>e.id===l.target)?.name||'?');
+                return `<div style="background:rgba(15,23,42,0.95);padding:10px 14px;border-radius:10px;border:2px solid #22d3ee;color:white;font-size:14px;box-shadow:0 8px 32px rgba(0,0,0,0.5);">
+                    <div style="color:#f472b6;">${src}</div>
+                    <div style="color:#22d3ee;font-weight:600;margin:4px 0;">↓ ${l.relation} ↓</div>
+                    <div style="color:#a78bfa;">${tgt}</div>
+                </div>`;
+            })
+            .linkVisibility(l => {
+                // 隐藏的链接不显示
+                if (hiddenLinks.has(l.id)) return false;
+                // v2同款：聚焦时只显示相关链接
+                if (!focusedNodeId) return true;
+                const src = typeof l.source === 'object' ? l.source.id : l.source;
+                const tgt = typeof l.target === 'object' ? l.target.id : l.target;
+                return src === focusedNodeId || tgt === focusedNodeId;
+            })
+            .onNodeClick(onNodeClick)
+            .onLinkClick(onLinkClick)
+            .onBackgroundClick(onBackgroundClick)
+            .d3AlphaDecay(0.02)
+            .d3VelocityDecay(0.3)
+            .warmupTicks(50)
+            .cooldownTicks(100);
+
+        // 力模拟增强（v2同款参数）
+        graph.d3Force('charge').strength(-400);
+        graph.d3Force('link').distance(300).strength(0.4);
+        graph.d3Force('collision', d3.forceCollide(50));
+        // 不加显式光照（v2靠MeshPhong的emissive自发光，效果更好）
+        // 启用节点拖拽+导航控制
+        graph.enableNodeDrag(true);
+        graph.enableNavigationControls(true);
+
+        // 右键菜单
+        setupRightClick();
+
+        // z-index修复（3d-force-graph会重置z-index）
+        setTimeout(() => fixZIndex(), 100);
+        setTimeout(() => fixZIndex(), 1000);
+
+        // 自动聚焦"白"节点
+        setTimeout(() => {
+            const baiNode = nodes.find(n => n.name === '白');
+            if (baiNode) {
+                graph.cameraPosition(
+                    { x: baiNode.x + 200, y: baiNode.y + 100, z: baiNode.z + 300 },
+                    baiNode, 1500
+                );
+            }
+        }, 500);
+
+        // 平滑相机跟随（requestAnimationFrame循环）
+        startSmoothFollow();
+
+        // 自定义节点（v2同款：高精度发光球体+图标标签+外发光光晕）
+        graph.nodeThreeObject(node => {
+            const group = new THREE.Group();
+            const size = node.name === '白' ? 12 : 8;
+
+            // 主球体（48段高精度+shininess100高光泽）
+            const geo = new THREE.SphereGeometry(size, 48, 48);
+            const mat = new THREE.MeshPhongMaterial({
+                color: node.color,
+                emissive: node.color,
+                emissiveIntensity: 0.4,
+                transparent: true,
+                opacity: 0.9,
+                shininess: 100,
+            });
+            group.add(new THREE.Mesh(geo, mat));
+
+            // 外发光光晕（1.3倍大小）
+            const glowGeo = new THREE.SphereGeometry(size * 1.3, 32, 32);
+            const glowMat = new THREE.MeshBasicMaterial({
+                color: node.color,
+                transparent: true,
+                opacity: 0.2,
+            });
+            group.add(new THREE.Mesh(glowGeo, glowMat));
+
+            // 文字标签（v2同款：图标+名字+颜色边框+圆角背景）
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            canvas.width = 256; canvas.height = 64;
+
+            // 圆角背景
+            ctx.fillStyle = `rgba(15, 23, 42, ${labelOpacity})`;
+            ctx.beginPath();
+            ctx.roundRect(0, 0, 256, 64, 8);
+            ctx.fill();
+
+            // 彩色边框
+            ctx.strokeStyle = node.color;
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.roundRect(0, 0, 256, 64, 8);
+            ctx.stroke();
+
+            // 类型图标
+            const icon = TYPE_ICONS[node.type] || '📌';
+            ctx.font = '24px Arial';
+            ctx.fillText(icon, 12, 40);
+
+            // 名字（超长截断）
+            let displayName = node.name;
+            if (displayName.length > 8) displayName = displayName.substring(0, 8) + '...';
+            ctx.fillStyle = '#ffffff';
+            ctx.font = 'bold 20px "Microsoft YaHei", sans-serif';
+            ctx.fillText(displayName, 45, 40);
+
+            const texture = new THREE.CanvasTexture(canvas);
+            const spriteMat = new THREE.SpriteMaterial({
+                map: texture, transparent: true, opacity: labelOpacity,
+            });
+            const sprite = new THREE.Sprite(spriteMat);
+            sprite.scale.set(40, 10, 1);
+            sprite.position.set(0, size + 12, 0);
+            group.add(sprite);
+
+            return group;
+        });
+    }
+
+    // ============================================================
+    // 交互
+    // ============================================================
+
+    function onNodeClick(node) {
+        if (!node) return;
+        selectedNode = node;
+        focusedNodeId = node.id;
+        manualOverride = (node.name !== '白');
+
+        // 刷新链接可见性+颜色（v2同款：只显示相关链接）
+        if (graph) {
+            graph.linkVisibility(graph.linkVisibility());
+            graph.linkColor(graph.linkColor());
+        }
+
+        // v2同款相机计算：基于节点到原点距离计算相机位置
+        const distance = 200;
+        const nodeDistance = Math.hypot(node.x||0, node.y||0, node.z||0);
+        if (nodeDistance < 10) {
+            graph.cameraPosition({x:0, y:0, z:distance}, node, 1000);
+        } else {
+            const distRatio = 1 + distance / nodeDistance;
+            graph.cameraPosition(
+                {x: node.x*distRatio, y: node.y*distRatio, z: node.z*distRatio},
+                node, 1000
+            );
+        }
+
+        // 显示详情面板
+        const panel = document.getElementById('detail');
+        panel.style.display = 'block';
+        const icon = TYPE_ICONS[node.type] || '📌';
+        document.getElementById('detail-name').innerHTML = `${icon} ${node.name}`;
+        document.getElementById('detail-type').textContent =
+            `${TYPE_LABELS[node.type] || node.type} | ID: ${node.id}`;
+
+        // 属性
+        const attrsDiv = document.getElementById('detail-attrs');
+        const attrs = node.attributes || {};
+        const attrKeys = Object.keys(attrs);
+        if (attrKeys.length) {
+            attrsDiv.innerHTML = '<div class="detail-label">属性</div>' +
+                attrKeys.map(k => `<div class="detail-item"><b>${k}:</b> ${attrs[k]}</div>`).join('');
+        } else {
+            attrsDiv.innerHTML = '';
+        }
+
+        // 关系
+        const relsDiv = document.getElementById('detail-rels');
+        const nodeRels = relations.filter(r => r.from_id === node.id || r.to_id === node.id);
+        if (nodeRels.length) {
+            relsDiv.innerHTML = '<div class="detail-label">关系 (' + nodeRels.length + ')</div>' +
+                nodeRels.slice(0, 20).map(r => {
+                    const fromName = r.from_name || entities.find(e => e.id === r.from_id)?.name || '?';
+                    const toName = r.to_name || entities.find(e => e.id === r.to_id)?.name || '?';
+                    return `<div class="detail-rel" style="cursor:pointer;" onclick="editRelation('${r.id}')" title="点击编辑">${fromName} → <b style="color:${LINK_COLORS[r.relation_type]||'#64748b'}">${r.relation_type}</b> → ${toName}</div>`;
+                }).join('');
+        } else {
+            relsDiv.innerHTML = '<div class="detail-label">暂无关系</div>';
+        }
+
+        // 聚焦相机
+        const dist = 200;
+        graph.cameraPosition(
+            { x: node.x + dist, y: node.y + dist/2, z: node.z + dist },
+            node, 1000
+        );
+    }
+
+    function closeDetail() {
+        selectedNode = null;
+        document.getElementById('detail').style.display = 'none';
+    }
+
+    // 链接点击导航（v2核心功能：点击链接跳到另一端的节点）
+    function onLinkClick(link) {
+        if (!link) return;
+        const srcId = typeof link.source === 'object' ? link.source.id : link.source;
+        const tgtId = typeof link.target === 'object' ? link.target.id : link.target;
+
+        // 如果当前聚焦在source，跳到target；否则跳到source
+        let targetNodeId;
+        if (focusedNodeId === srcId) {
+            targetNodeId = tgtId;
+        } else if (focusedNodeId === tgtId) {
+            targetNodeId = srcId;
+        } else {
+            targetNodeId = tgtId; // 默认跳到target
+        }
+
+        const targetNode = graph.graphData().nodes.find(n => n.id === targetNodeId);
+        if (targetNode) {
+            onNodeClick(targetNode);
+        }
+    }
+
+    // 背景点击：清除聚焦+恢复所有链接（v2同款）
+    function onBackgroundClick() {
+        closeDetail();
+        selectedNode = null;
+        focusedNodeId = null;
+        manualOverride = false;
+        // 刷新链接可见性+颜色（全部恢复正常）
+        if (graph) {
+            graph.linkVisibility(graph.linkVisibility());
+            graph.linkColor(graph.linkColor());
+        }
+    }
+
+    // v2同款平滑相机跟随（操作controls().target实现lerp）
+    function startSmoothFollow() {
+        if (smoothFollowRAF) cancelAnimationFrame(smoothFollowRAF);
+
+        let cachedControls = null;
+        let cachedBaiNode = null;
+        const lerpSpeed = 0.02;
+        let targetX = 0, targetY = 0, targetZ = 0;
+
+        function smoothUpdate() {
+            if (!graph || manualOverride) {
+                smoothFollowRAF = requestAnimationFrame(smoothUpdate);
+                return;
+            }
+
+            if (!cachedControls) {
+                try { cachedControls = graph.controls(); } catch {}
+            }
+
+            const graphNodes = graph.graphData().nodes;
+
+            if (allLinksVisible) {
+                // 链接可见：跟随"白"节点
+                if (!cachedBaiNode || !cachedBaiNode.x) {
+                    cachedBaiNode = graphNodes.find(n => n.name === '白');
+                }
+                if (cachedBaiNode) {
+                    targetX = cachedBaiNode.x || 0;
+                    targetY = cachedBaiNode.y || 0;
+                    targetZ = cachedBaiNode.z || 0;
+                }
+            } else {
+                // 链接隐藏：跟随几何中心
+                if (graphNodes.length > 0) {
+                    let cx=0, cy=0, cz=0;
+                    graphNodes.forEach(n => { cx+=n.x||0; cy+=n.y||0; cz+=n.z||0; });
+                    targetX = cx/graphNodes.length;
+                    targetY = cy/graphNodes.length;
+                    targetZ = cz/graphNodes.length;
+                }
+            }
+
+            // lerp平滑过渡
+            if (cachedControls && cachedControls.target) {
+                const t = cachedControls.target;
+                t.x += (targetX - t.x) * lerpSpeed;
+                t.y += (targetY - t.y) * lerpSpeed;
+                t.z += (targetZ - t.z) * lerpSpeed;
+            }
+
+            smoothFollowRAF = requestAnimationFrame(smoothUpdate);
+        }
+        smoothFollowRAF = requestAnimationFrame(smoothUpdate);
+    }
+
+    // z-index修复
+    function fixZIndex() {
+        document.querySelectorAll('.panel').forEach(el => {
+            el.style.zIndex = '100';
+        });
+        document.querySelectorAll('.modal-overlay').forEach(el => {
+            el.style.zIndex = '500';
+        });
+    }
+
+    // ============================================================
+    // 搜索
+    // ============================================================
+
+    function doSearch(query) {
+        const results = document.getElementById('search-results');
+        if (!query || query.length < 1) { results.style.display = 'none'; return; }
+
+        const matches = entities.filter(e =>
+            e.name.toLowerCase().includes(query.toLowerCase())
+        ).slice(0, 10);
+
+        if (!matches.length) { results.style.display = 'none'; return; }
+
+        results.style.display = 'block';
+        results.innerHTML = matches.map(e =>
+            `<div class="search-item" onclick="focusEntity('${e.id}')">${e.name} (${TYPE_LABELS[e.type]||e.type})</div>`
+        ).join('');
+    }
+
+    function navigateToNode(id) { focusEntity(id); }
+    function focusEntity(id) {
+        document.getElementById('search-results').style.display = 'none';
+        document.getElementById('search').value = '';
+        const node = graph.graphData().nodes.find(n => n.id === id);
+        if (node) onNodeClick(node);
+    }
+
+    // ============================================================
+    // 类型过滤
+    // ============================================================
+
+    function buildTypeFilters() {
+        const container = document.getElementById('type-filters');
+        const typeCounts = {};
+        entities.forEach(e => { typeCounts[e.type] = (typeCounts[e.type]||0) + 1; });
+
+        container.innerHTML = Object.entries(TYPE_COLORS)
+            .filter(([t]) => typeCounts[t])
+            .map(([type, color]) =>
+                `<span class="type-tag active" style="color:${color};background:${color}20"
+                       onclick="toggleType('${type}',this)"
+                       data-type="${type}">
+                    ${TYPE_LABELS[type]||type} ${typeCounts[type]||0}
+                </span>`
+            ).join('');
+    }
+
+    function toggleType(type, el) {
+        if (activeTypes.has(type)) {
+            activeTypes.delete(type);
+            el.classList.remove('active');
+        } else {
+            activeTypes.add(type);
+            el.classList.add('active');
+        }
+        initGraph(); // 重新渲染
+    }
+
+    // ============================================================
+    // 图例
+    // ============================================================
+
+    function buildLegend() {
+        const legend = document.getElementById('legend');
+        const typeCounts = {};
+        entities.forEach(e => { typeCounts[e.type] = (typeCounts[e.type]||0) + 1; });
+
+        legend.innerHTML = Object.entries(TYPE_COLORS)
+            .filter(([t]) => typeCounts[t])
+            .map(([type, color]) =>
+                `<div class="legend-item">
+                    <div class="legend-dot" style="background:${color}"></div>
+                    <span>${TYPE_LABELS[type]||type}</span>
+                </div>`
+            ).join('');
+    }
+
+    // ============================================================
+    // 视图控制
+    // ============================================================
+
+    function zoomIn() {
+        const pos = graph.cameraPosition();
+        graph.cameraPosition({ x: pos.x*0.7, y: pos.y*0.7, z: pos.z*0.7 });
+    }
+    function zoomOut() {
+        const pos = graph.cameraPosition();
+        graph.cameraPosition({ x: pos.x*1.4, y: pos.y*1.4, z: pos.z*1.4 });
+    }
+    function resetView() {
+        graph.cameraPosition({ x: 0, y: 0, z: 600 }, { x: 0, y: 0, z: 0 }, 1000);
+    }
+
+    // ============================================================
+    // CRUD
+    // ============================================================
+
+    async function doAddEntity() {
+        const name = document.getElementById('ae-name').value.trim();
+        const type = document.getElementById('ae-type').value;
+        let attrs = {};
+        try { attrs = JSON.parse(document.getElementById('ae-attrs').value || '{}'); } catch {}
+
+        if (!name) return;
+        await fetch(`${API}/api/settings/knowledge/entity`, {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ name, type, attributes: attrs }),
+        });
+        hideModal('add-entity');
+        showToast(`已添加: ${name}`);
+        await loadData(); initGraph(); populateSelects();
+    }
+
+    async function doAddRelation() {
+        const from_name = document.getElementById('ar-from').value;
+        const to_name = document.getElementById('ar-to').value;
+        const relation_type = document.getElementById('ar-type').value.trim();
+        if (!from_name || !to_name || !relation_type) return;
+
+        await fetch(`${API}/api/settings/knowledge/relation`, {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ from_name, to_name, relation_type }),
+        });
+        hideModal('add-relation');
+        showToast(`已添加关系: ${from_name} → ${relation_type} → ${to_name}`);
+        await loadData(); initGraph();
+    }
+
+    function editSelectedEntity() {
+        if (!selectedNode) return;
+        // 用弹窗编辑
+        document.getElementById('ee-name').value = selectedNode.name;
+        // 填充类型下拉
+        const sel = document.getElementById('ee-type');
+        sel.innerHTML = Object.entries(TYPE_LABELS).map(([k,v]) =>
+            `<option value="${k}" ${k === selectedNode.type ? 'selected' : ''}>${v}</option>`
+        ).join('');
+        document.getElementById('ee-attrs').value = JSON.stringify(selectedNode.attributes || {}, null, 2);
+        showModal('edit-entity');
+    }
+
+    async function doSaveEditEntity() {
+        if (!selectedNode) return;
+        const name = document.getElementById('ee-name').value.trim();
+        const type = document.getElementById('ee-type').value;
+        let attrs = {};
+        try { attrs = JSON.parse(document.getElementById('ee-attrs').value || '{}'); } catch {}
+
+        await fetch(`${API}/api/settings/knowledge/entity/${selectedNode.id}`, {
+            method: 'PUT', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ name, type, attributes: attrs }),
+        });
+        hideModal('edit-entity');
+        showToast(`已更新: ${name}`);
+        closeDetail();
+        await loadData(); initGraph(); populateSelects();
+    }
+
+    async function deleteSelectedEntity() {
+        if (!selectedNode) return;
+        if (!confirm(`确定删除 "${selectedNode.name}" 及其所有关系？`)) return;
+        await fetch(`${API}/api/settings/knowledge/entity/${selectedNode.id}`, { method: 'DELETE' });
+        closeDetail();
+        showToast(`已删除: ${selectedNode.name}`);
+        await loadData(); initGraph(); populateSelects();
+    }
+
+    // 编辑关系
+    let editingRelationId = '';
+    function editRelation(relId) {
+        const rel = relations.find(r => r.id === relId);
+        if (!rel) return;
+        editingRelationId = relId;
+        document.getElementById('er-from').value = rel.from_name || entities.find(e => e.id === rel.from_id)?.name || '?';
+        document.getElementById('er-type').value = rel.relation_type;
+        document.getElementById('er-to').value = rel.to_name || entities.find(e => e.id === rel.to_id)?.name || '?';
+        showModal('edit-relation');
+    }
+
+    async function doSaveEditRelation() {
+        if (!editingRelationId) return;
+        const relation_type = document.getElementById('er-type').value.trim();
+        await fetch(`${API}/api/settings/knowledge/relation/${editingRelationId}`, {
+            method: 'PUT', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ relation_type }),
+        });
+        hideModal('edit-relation');
+        showToast('关系已更新');
+        await loadData(); initGraph();
+    }
+
+    async function doDeleteEditRelation() {
+        if (!editingRelationId) return;
+        if (!confirm('确定删除这条关系？')) return;
+        await fetch(`${API}/api/settings/knowledge/relation/${editingRelationId}`, { method: 'DELETE' });
+        hideModal('edit-relation');
+        showToast('关系已删除');
+        await loadData(); initGraph();
+    }
+
+    // ============================================================
+    // 路径查询
+    // ============================================================
+
+    async function doPathQuery() {
+        const start = document.getElementById('pq-start').value;
+        const relation = document.getElementById('pq-relation').value.trim();
+        const depth = parseInt(document.getElementById('pq-depth').value) || 2;
+        const resultsDiv = document.getElementById('pq-results');
+
+        try {
+            // 用我们的工具API
+            const resp = await fetch(`${API}/api/settings/knowledge/query`, {
+                method: 'POST', headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({ question: `${start}的${relation||'所有'}关系路径` }),
+            });
+            const data = await resp.json();
+            resultsDiv.innerHTML = `<div style="white-space:pre-wrap;color:#c8d6e5;">${data.answer || '未找到'}</div>`;
+        } catch (e) {
+            resultsDiv.innerHTML = `<div style="color:#f43f5e;">查询失败: ${e}</div>`;
+        }
+    }
+
+    // ============================================================
+    // 工具函数
+    // ============================================================
+
+    // ============================================================
+    // 模拟控制+透明度
+    // ============================================================
+
+    let simulationRunning = true;
+    let labelOpacity = 0.9;
+
+    function toggleSimulation() {
+        simulationRunning = !simulationRunning;
+        const btn = document.getElementById('btn-sim');
+        if (simulationRunning) {
+            graph.d3ReheatSimulation();
+            btn.textContent = '⏸️ 暂停';
+        } else {
+            graph.d3AlphaTarget(0); // 冻结
+            btn.textContent = '▶️ 继续';
+        }
+    }
+
+    function setLabelOpacity(val) {
+        labelOpacity = val;
+        // 更新所有sprite的透明度
+        if (graph) {
+            graph.graphData().nodes.forEach(node => {
+                const obj = graph.nodeThreeObject()(node);
+                // 标签是group的第三个子元素（sprite）
+            });
+        }
+    }
+
+    // ============================================================
+    // 隐藏链接管理
+    // ============================================================
+
+    let hiddenLinks = new Set();
+    let allLinksVisible = true;
+
+    function toggleLinks() {
+        allLinksVisible = !allLinksVisible;
+        if (graph) {
+            graph.linkVisibility(l => allLinksVisible && !hiddenLinks.has(l.id));
+            // v2同款：切换力模拟参数
+            if (allLinksVisible) {
+                graph.d3Force('charge').strength(-400);
+                graph.d3Force('link').distance(300).strength(0.4);
+                graph.d3Force('collision', d3.forceCollide(50));
+                graph.d3Force('center', null);
+            } else {
+                graph.d3Force('charge').strength(-80);
+                graph.d3Force('link').distance(50).strength(0);
+                graph.d3Force('collision', d3.forceCollide(30));
+                graph.d3Force('center', d3.forceCenter(0,0,0).strength(0.1));
+            }
+            graph.d3ReheatSimulation();
+        }
+        showToast(allLinksVisible ? '链接已显示' : '链接已隐藏（紧凑模式）');
+    }
+
+    function hideLink(relId) {
+        hiddenLinks.add(relId);
+        updateHiddenInfo();
+        if (graph) graph.linkVisibility(l => allLinksVisible && !hiddenLinks.has(l.id));
+    }
+
+    function showAllLinks() {
+        hiddenLinks.clear();
+        updateHiddenInfo();
+        if (graph) graph.linkVisibility(l => allLinksVisible);
+    }
+
+    function updateHiddenInfo() {
+        const info = document.getElementById('hidden-links-info');
+        const count = document.getElementById('hidden-count');
+        if (hiddenLinks.size > 0) {
+            info.style.display = 'block';
+            count.textContent = hiddenLinks.size;
+        } else {
+            info.style.display = 'none';
+        }
+    }
+
+    // ============================================================
+    // 列表视图
+    // ============================================================
+
+    function renderListView() {
+        const entDiv = document.getElementById('lv-entities');
+        const relDiv = document.getElementById('lv-relations');
+
+        entDiv.innerHTML = entities.map(e =>
+            `<div class="detail-item" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;"
+                  onclick="focusEntity('${e.id}');hideModal('list-view')">
+                <span><span style="color:${TYPE_COLORS[e.type]||'#999'}">●</span> ${e.name} <span style="color:#64748b;font-size:10px;">(${TYPE_LABELS[e.type]||e.type})</span></span>
+                <span style="display:flex;gap:4px;">
+                    <button class="btn btn-sm btn-red" onclick="event.stopPropagation();deleteEntityById('${e.id}','${e.name}')">删</button>
+                </span>
+            </div>`
+        ).join('');
+
+        relDiv.innerHTML = relations.map(r => {
+            const fn = r.from_name || entities.find(e => e.id === r.from_id)?.name || '?';
+            const tn = r.to_name || entities.find(e => e.id === r.to_id)?.name || '?';
+            return `<div class="detail-item" style="font-size:11px;display:flex;justify-content:space-between;align-items:center;">
+                <span>${fn} → <b style="color:${LINK_COLORS[r.relation_type]||'#64748b'}">${r.relation_type}</b> → ${tn}</span>
+                <span style="display:flex;gap:4px;">
+                    <button class="btn btn-sm btn-blue" onclick="editRelation('${r.id}')">编</button>
+                    <button class="btn btn-sm btn-red" onclick="deleteRelationById('${r.id}')">删</button>
+                </span>
+            </div>`;
+        }).join('');
+    }
+
+    function filterListView(type) {
+        const query = document.getElementById(type === 'entity' ? 'lv-entity-search' : 'lv-rel-search').value.toLowerCase();
+        const container = document.getElementById(type === 'entity' ? 'lv-entities' : 'lv-relations');
+        Array.from(container.children).forEach(el => {
+            el.style.display = el.textContent.toLowerCase().includes(query) ? '' : 'none';
+        });
+    }
+
+    async function deleteEntityById(id, name) {
+        if (!confirm(`确定删除 "${name}"？`)) return;
+        await fetch(`${API}/api/settings/knowledge/entity/${id}`, { method: 'DELETE' });
+        showToast(`已删除: ${name}`);
+        await loadData(); initGraph(); populateSelects(); renderListView();
+    }
+
+    async function deleteRelationById(id) {
+        if (!confirm('确定删除这条关系？')) return;
+        await fetch(`${API}/api/settings/knowledge/relation/${id}`, { method: 'DELETE' });
+        showToast('关系已删除');
+        await loadData(); initGraph(); renderListView();
+    }
+
+    // ============================================================
+    // 导出图片
+    // ============================================================
+
+    function exportImage() {
+        if (!graph) return;
+        try {
+            const renderer = graph.renderer();
+            renderer.render(graph.scene(), graph.camera());
+            const dataUrl = renderer.domElement.toDataURL('image/png');
+
+            const link = document.createElement('a');
+            link.download = `knowledge_graph_${new Date().toISOString().slice(0,10)}.png`;
+            link.href = dataUrl;
+            link.click();
+            showToast('图片已导出');
+        } catch (e) {
+            showToast('导出失败: ' + e.message);
+        }
+    }
+
+    // ============================================================
+    // 适应屏幕
+    // ============================================================
+
+    function fitToScreen() {
+        if (!graph) return;
+        graph.zoomToFit(1000, 50);
+    }
+
+    // ============================================================
+    // 右键菜单（链接）
+    // ============================================================
+
+    function setupRightClick() {
+        if (!graph) return;
+        graph.onLinkRightClick((link, event) => {
+            event.preventDefault();
+            const srcName = typeof link.source === 'object' ? link.source.name : '?';
+            const tgtName = typeof link.target === 'object' ? link.target.name : '?';
+            // v2同款：prompt三选一
+            const action = prompt(
+                `🔗 ${srcName} → ${link.relation} → ${tgtName}\n\n` +
+                `管理此关系线:\n` +
+                `1 - 👁️ 暂时隐藏（可恢复）\n` +
+                `2 - 🗑️ 彻底删除\n` +
+                `0 - 取消`, '0'
+            );
+            if (action === '1') {
+                hideLink(link.id);
+            } else if (action === '2') {
+                if (confirm(`⚠️ 确定要彻底删除这条关系吗？\n\n${srcName} → ${link.relation} → ${tgtName}`)) {
+                    // 找到关系ID
+                    const rel = relations.find(r =>
+                        r.from_id === (link.source.id||link.source) &&
+                        r.to_id === (link.target.id||link.target) &&
+                        r.relation_type === link.relation
+                    );
+                    if (rel) deleteRelationById(rel.id);
+                }
+            }
+        });
+        graph.onNodeRightClick((node, event) => {
+            event.preventDefault();
+            if (confirm(`确定删除 "${node.name}" 及其所有关系？`)) {
+                fetch(`${API}/api/settings/knowledge/entity/${node.id}`, { method: 'DELETE' })
+                    .then(() => { showToast(`已删除: ${node.name}`); loadData().then(() => { initGraph(); populateSelects(); }); });
+            }
+        });
+    }
+
+    // ============================================================
+    // 工具函数
+    // ============================================================
+
+    function showModal(name) {
+        document.getElementById('modal-' + name).classList.add('show');
+        if (name === 'add-entity') populateTypeSelect();
+        if (name === 'add-relation' || name === 'path-query') populateSelects();
+        if (name === 'list-view') renderListView();
+    }
+    function hideModal(name) { document.getElementById('modal-' + name).classList.remove('show'); }
+
+    function populateTypeSelect() {
+        const sel = document.getElementById('ae-type');
+        sel.innerHTML = Object.entries(TYPE_LABELS).map(([k,v]) =>
+            `<option value="${k}">${v}</option>`
+        ).join('');
+    }
+
+    function populateSelects() {
+        const names = entities.map(e => e.name).sort();
+        const opts = names.map(n => `<option value="${n}">${n}</option>`).join('');
+        ['ar-from', 'ar-to', 'pq-start'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.innerHTML = opts;
+        });
+    }
+
+    function showToast(msg) {
+        const t = document.getElementById('toast');
+        t.textContent = msg; t.style.display = 'block';
+        setTimeout(() => { t.style.display = 'none'; }, 3000);
+    }
+
+    // 启动
+    window.addEventListener('DOMContentLoaded', init);
+    window.addEventListener('resize', () => {
+        drawStarfield();
+        if (graph) graph.width(window.innerWidth).height(window.innerHeight);
+    });
+    </script>
+</body>
+</html>
