@@ -21,9 +21,9 @@ if errorlevel 1 (
     pause
     exit /b 1
 )
-python -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)" >nul 2>&1
+python -c "import sys; raise SystemExit(0 if (3, 10) <= sys.version_info < (3, 13) else 1)" >nul 2>&1
 if errorlevel 1 (
-    echo   [ERROR] Python 3.10+ is required. Python 3.11+ is recommended.
+    echo   [ERROR] Python 3.10-3.12 is required. Python 3.11+ is recommended.
     pause
     exit /b 1
 )
@@ -66,7 +66,7 @@ for /f "tokens=*" %%v in ('"%PROJECT_PYTHON%" --version') do echo   [OK] .venv u
 echo.
 
 echo [4/6] Installing Python backend dependencies...
-"%PROJECT_PYTHON%" -c "import fastapi, uvicorn, pydantic, yaml, loguru, aiohttp, httpx, numpy, multipart, ddgs, openai, yt_dlp, PIL, mss" >nul 2>&1
+"%PROJECT_PYTHON%" -c "import fastapi, uvicorn, websockets, aiofiles, pydantic, yaml, loguru, aiohttp, httpx, numpy, multipart, ddgs, openai, yt_dlp, PIL, mss" >nul 2>&1
 if not errorlevel 1 (
     echo   [OK] Python dependencies are already installed.
     goto :deps_done

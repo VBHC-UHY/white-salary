@@ -9,8 +9,9 @@ services:
       - "12400:12400"
     volumes:
       - ./data:/app/data
-      - ./conf.yaml:/app/conf.yaml
       - ./prompts:/app/prompts
+      # Optional: create conf.yaml first, then uncomment the next line.
+      # - ./conf.yaml:/app/conf.yaml:ro
     environment:
       - PYTHONPATH=src
     restart: unless-stopped

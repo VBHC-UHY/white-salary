@@ -9,7 +9,7 @@ B站直播弹幕互动 — 连接B站直播间读取弹幕并回复。
   - 通过ChatAgent生成回复
   - 发送弹幕回复（需要登录cookie）
 
-依赖: bilibili-api-python（pip install bilibili-api-python）
+依赖: bilibili extra（pip install -e ".[bilibili]"）
 如果没有安装，优雅降级为不可用。
 
 2026-07-03 功能大项（批11二波）：本适配器早已实现 connect()/on_danmaku 回调，
@@ -204,8 +204,8 @@ class BilibiliLiveAdapter:
             from bilibili_api import live
         except ImportError:
             logger.warning(
-                "[Bilibili] bilibili-api-python 未安装。"
-                "请运行: pip install bilibili-api-python"
+                "[Bilibili] B站可选依赖未安装。"
+                "请在项目根目录运行: pip install -e \".[bilibili]\""
             )
             return
 

@@ -9,7 +9,7 @@
 
 ## [未发布 / 开发中] · 功能大项（发布时定为 0.2.0）
 
-在 0.1.2 之后陆续加入的新功能（累积中，达到里程碑后打 0.2.0 标签）：
+在 0.1.3 之后陆续加入的新功能（累积中，达到里程碑后打 0.2.0 标签）：
 
 - **游戏对接接口**：`POST /api/game/event` + `GET /api/game/ping`——外部游戏（如 Aurora Forge）在打 Boss / 升级 / 收伙伴等事件时上报，白在桌面实时道喜/吐槽（fire-and-forget，穿透忙碌模式）。
 - **插件热加载**：`on_message`/`on_reply` 钩子接进 QQ/桌面消息链路（此前定义了从不触发）；插件市场装完即生效不用重启；坏插件隔离 + 超时保护。
@@ -18,6 +18,26 @@
 - **稳定性**：LLM 通道从不稳定的 NVIDIA 免费接口迁移到更稳定的供应商（默认模板配置更新）。
 
 测试：677 个单元 + 集成测试全绿。
+
+---
+
+## [0.1.3] - 2026-07-03 · 服务器安装与依赖冲突修复
+
+面向公开仓库下载用户的安装修复版：重点解决 `uv sync --extra all` / `white-salary[all]`
+在 Python 3.13 环境下因 RVC 依赖链导致的 `numpy` 解析冲突，并补齐 Linux/服务器后端安装入口。
+
+### 修复
+- **RVC 依赖冲突拆分**：`rvc-python` 需要 `numpy<=1.25.3`，主项目需要 `numpy>=1.26.0`，因此不再放入 `singing-rvc` / `all` extra；RVC 改为文档说明的独立环境/外部服务接入。
+- **Python 版本边界明确**：项目声明改为 `>=3.10,<3.13`，安装脚本优先使用 Python 3.12 / 3.11 / 3.10，避免新用户用 3.13 踩到未适配依赖。
+- **Linux/服务器安装脚本**：新增 `install.sh`，支持只安装后端运行环境，并提供 `--with-memory` 安装 ChromaDB 长期记忆 extra。
+- **B 站依赖说明修正**：文档和运行时提示统一为 `pip install -e ".[bilibili]"`，同时安装扫码登录和 Cookie 解密所需依赖。
+- **安装检测补漏**：Windows 安装器和首次运行自检补入 `websockets`、`aiofiles` 检查。
+- **Docker Compose 修复**：不再默认挂载缺失的 `conf.yaml`，避免 Linux 上把文件路径创建成目录。
+
+### 验证
+- `python -m pytest tests/unit/test_project_structure.py tests/unit/test_vad_fallback.py`
+- `cmd /c "安装.bat /check"`
+- `uv sync --extra all --dry-run`
 
 ---
 

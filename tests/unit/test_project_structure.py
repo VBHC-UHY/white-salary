@@ -45,10 +45,11 @@ class TestDirectoryStructure:
             assert (infra / d).is_dir(), f"缺少目录: infrastructure/{d}"
 
     def test_config_files_exist(self) -> None:
-        """配置文件必须存在。"""
+        """公开仓库应提交配置模板，而不是用户私密配置。"""
         assert (PROJECT_ROOT / "pyproject.toml").is_file()
         assert (PROJECT_ROOT / "conf.default.yaml").is_file()
-        assert (PROJECT_ROOT / "conf.yaml").is_file()
+        gitignore = (PROJECT_ROOT / ".gitignore").read_text(encoding="utf-8")
+        assert "conf.yaml" in gitignore
 
     def test_docker_files_keep_dependencies_and_secrets_separate(self) -> None:
         """Docker 构建应走 pyproject 依赖，并排除本地隐私/大文件上下文。"""
@@ -77,7 +78,7 @@ class TestDirectoryStructure:
     def test_pyproject_runtime_dependency_baseline(self) -> None:
         """uv sync should install the runtime LLM SDK without optional extras."""
         text = (PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
-        assert 'requires-python = ">=3.10"' in text
+        assert 'requires-python = ">=3.10,<3.13"' in text
         dependencies_block = text.split("dependencies = [", 1)[1].split(
             "[project.optional-dependencies]", 1
         )[0]
@@ -117,8 +118,10 @@ class TestDirectoryStructure:
         assert '"cryptography>=42.0.0"' in text
         assert "vad-silero = [" in text
         assert '"torch>=2.0.0"' in text
-        assert "singing-rvc = [" in text
-        assert '"rvc-python>=0.1.0"' in text
+        assert "singing-rvc = []" in text
+        assert '"rvc-python>=0.1.0"' not in text
+        all_block = text.split("all = [", 1)[1].split("]", 1)[0]
+        assert "rvc-python" not in all_block
 
     def test_windows_launcher_uses_project_venv(self) -> None:
         """Install/start scripts should use the Windows project .venv."""
@@ -152,13 +155,11 @@ class TestDirectoryStructure:
         assert (PROJECT_ROOT / "run_server.py").is_file()
 
     def test_data_directories_exist(self) -> None:
-        """数据目录必须存在。"""
-        data = PROJECT_ROOT / "data"
-        assert (data / "chat_history").is_dir()
-        assert (data / "memory").is_dir()
-        assert (data / "knowledge").is_dir()
+        """运行时数据目录应由程序创建，不随公开仓库提交。"""
+        gitignore = (PROJECT_ROOT / ".gitignore").read_text(encoding="utf-8")
+        assert "data/" in gitignore
 
     def test_prompts_directory_exists(self) -> None:
-        """提示词目录和默认提示词文件必须存在。"""
+        """提示词目录和可复制模板必须存在。"""
         assert (PROJECT_ROOT / "prompts").is_dir()
-        assert (PROJECT_ROOT / "prompts" / "system_prompt.txt").is_file()
+        assert (PROJECT_ROOT / "prompts" / "system_prompt.example.txt").is_file()

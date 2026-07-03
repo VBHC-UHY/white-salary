@@ -9,11 +9,11 @@
 
 <!-- 徽章行（2026-07-03 新手体验（批10）：静态徽章，不接 CI） -->
 ![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)
-![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)
+![Python 3.10-3.12](https://img.shields.io/badge/Python-3.10--3.12-blue.svg)
 ![Tests](https://img.shields.io/badge/tests-695%20passed-brightgreen.svg)
 ![PRs Welcome](https://img.shields.io/badge/PRs-welcome-ff69b4.svg)
 
-Python 3.10+ · FastAPI · Electron · Live2D · 六边形架构
+Python 3.10-3.12 · FastAPI · Electron · Live2D · 六边形架构
 
 <!-- 2026-07-03：交流群。二维码图放到 docs/assets/qq-group.png 后可取消下一行注释显示图片 -->
 <p>
@@ -73,7 +73,7 @@ Python 3.10+ · FastAPI · Electron · Live2D · 六边形架构
 | 🖥️ **Electron 桌面宠物** | 透明全屏置顶、鼠标穿透、Live2D 形象 + 口型同步、科幻冰晶 UI、语音对话 | 必装（主形态） |
 | 💬 **QQ 机器人** | 经 NapCat（OneBot v11）私聊 + 群聊，多用户好感度 | 需装 NapCat（可选） |
 | 🌐 **QQ 空间社交** | 自动发说说 / 评论 / 逛空间 / 兴趣匹配 / 限流 | 需 QQ 登录（可选） |
-| 📺 **B 站直播** | 弹幕监听 + 回复 | 需 `bilibili-api-python`（可选） |
+| 📺 **B 站直播** | 弹幕监听 + 回复 | 需 `pip install -e ".[bilibili]"`（可选） |
 
 <!-- 2026-07-03 便捷化文档：破除"语音必须本地"误解，强调一把云端 key 全功能 -->
 > ⭐ **一把云端 key 点亮全部 AI 能力**：只要一把[硅基流动](https://cloud.siliconflow.cn) key，**聊天 / 语音识别 / 语音合成 / 看图 / 生图 全部开箱即用，无需安装任何本地模型**。默认配置全走云端，不吃你的显卡。下面这些"本地版"都是**可选进阶**，不装照样全功能：
@@ -109,7 +109,7 @@ Python 3.10+ · FastAPI · Electron · Live2D · 六边形架构
 
 | 层 | 技术 |
 |----|------|
-| 后端 | Python 3.10+ · FastAPI · Uvicorn · WebSocket · Pydantic · PyYAML · loguru |
+| 后端 | Python 3.10-3.12 · FastAPI · Uvicorn · WebSocket · Pydantic · PyYAML · loguru |
 | 前端 | Electron 28 · PixiJS · pixi-live2d-display · Three.js · D3 |
 | LLM | OpenAI 兼容适配器（支持 SiliconFlow / DeepSeek / Claude / NVIDIA / Ollama 等 13+ 提供商），主模型 + 7 个分角色模型 |
 | 语音 | GPT-SoVITS（本地 TTS）/ SiliconFlow CosyVoice2（云端兜底）/ faster-whisper（本地 ASR）/ Silero VAD |
@@ -157,7 +157,7 @@ Python 3.10+ · FastAPI · Electron · Live2D · 六边形架构
 > 新手请直接用最上面的 [✨ 三步上手](#-三步上手完全新手照这个来)（双击 `安装.bat`）。
 > 本节是给想**手动控制每一步**的开发者的。完整说明见 **[docs/INSTALL.md](docs/INSTALL.md)**；配置项详解见 **[docs/CONFIG.md](docs/CONFIG.md)**。
 
-**环境要求**：Windows 10/11 · Python 3.10+（建议 3.11+）· Node.js 18+
+**环境要求**：Windows 10/11 · Python 3.10-3.12（建议 3.11+）· Node.js 18+
 
 ```bash
 # 1. 装后端依赖（在项目根目录）
@@ -178,6 +178,16 @@ copy conf.default.yaml conf.yaml        # PowerShell/CMD
 # 5. 一键启动（会拉起后端 + 前端桌宠）
 Start.bat
 ```
+
+**Linux / 服务器只跑后端**：
+
+```bash
+./install.sh
+source .venv/bin/activate
+PYTHONPATH=src python run_server.py --host 0.0.0.0 --port 12400
+```
+
+> Linux 脚本会优先使用 Python 3.12 / 3.11 / 3.10，暂不选择 Python 3.13，避免部分可选 AI 依赖还没跟上新版解释器。
 
 **不确定配好了没？** 跑一次首次运行自检：
 
@@ -205,7 +215,7 @@ python scripts/first_run_check.py
 在控制面板（`Ctrl+,`）的 QQ 空间页扫码 / Cookie 登录后即可自动发说说、逛空间。
 
 ### 📺 B 站直播
-安装可选依赖 `bilibili-api-python`，在控制面板 B 站页登录后开启弹幕监听。框架完整，属可选增强。
+安装可选依赖 `pip install -e ".[bilibili]"`，在控制面板 B 站页登录后开启弹幕监听。框架完整，属可选增强。
 
 ---
 

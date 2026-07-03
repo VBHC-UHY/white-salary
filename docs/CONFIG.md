@@ -49,7 +49,7 @@ llm:
 ```yaml
 system:
   name: "White Salary"    # 项目名（别改）
-  version: "0.1.2"
+  version: "0.1.3"
   debug: false            # true=更多日志
   log_level: "INFO"       # DEBUG / INFO / WARNING / ERROR
 
@@ -226,6 +226,8 @@ singing:
   provider: "rvc"
   model_path: "models/singing/default.pth"
 ```
+
+> 当前 RVC 依赖链与主环境 `numpy` 版本冲突，不建议把 `rvc-python` 装进 White Salary 的 `.venv`。需要唱歌/变声时，请把 RVC 放到独立环境或外部服务中。
 
 ---
 

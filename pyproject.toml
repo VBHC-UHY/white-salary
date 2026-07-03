@@ -7,11 +7,11 @@
 
 [project]
 name = "white-salary"
-version = "0.1.2"
+version = "0.1.3"
 description = "White Salary - 超强AI智能体，对标Neuro-sama级别的AI VTuber"
 readme = "README.md"
 license = { text = "MIT" }
-requires-python = ">=3.10"
+requires-python = ">=3.10,<3.13"
 
 # ---------------------------------------------------------------------------
 # 项目依赖（运行时必须安装的库）
@@ -19,6 +19,7 @@ requires-python = ">=3.10"
 dependencies = [
     # --- Web框架 ---
     "fastapi>=0.115.0",          # 高性能异步Web框架
+    "starlette>=0.37.2",         # 直接使用 StreamingResponse / FileResponse 等 Starlette 类型
     "uvicorn[standard]>=0.32.0", # ASGI服务器（运行FastAPI用的）
     "websockets>=13.0",          # WebSocket支持
 
@@ -87,8 +88,10 @@ bilibili = [
     "cryptography>=42.0.0",
 ]
 
-# 唱歌 / RVC 变声（可选）
-singing-rvc = ["rvc-python>=0.1.0"]
+# 唱歌 / RVC 变声（实验功能）
+# rvc-python 当前要求 numpy<=1.25.3，而主项目需要 numpy>=1.26.0，不能放进同一环境。
+# 先保留 extra 名称避免旧文档命令报 unknown extra；真正启用请按文档放到独立 RVC 环境/服务。
+singing-rvc = []
 
 # 全部安装（开发用）
 all = [
@@ -105,7 +108,6 @@ all = [
     "bilibili-api-python>=17.0.0",
     "qrcode[pil]>=8.0",
     "cryptography>=42.0.0",
-    "rvc-python>=0.1.0",
 ]
 
 # 开发工具
@@ -116,6 +118,7 @@ dev = [
     "ruff>=0.7.0",               # 代码格式化 + lint（比black+flake8更快）
     "mypy>=1.12.0",              # 静态类型检查
     "pre-commit>=4.0.0",         # Git提交前自动检查
+    "requests>=2.32.0",          # 旧测试/探活脚本 scripts/test_key.py 等
 ]
 
 # ---------------------------------------------------------------------------
@@ -135,7 +138,7 @@ packages = ["src/white_salary"]
 # 每行最大字符数
 line-length = 100
 # 目标Python版本
-target-version = "py311"
+target-version = "py310"
 # 源代码目录
 src = ["src"]
 

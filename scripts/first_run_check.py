@@ -66,16 +66,19 @@ def check_python() -> bool:
     """
     检查 Python 版本。
 
-    说明：pyproject.toml 声明 requires-python >=3.10；低于 3.10 直接判失败。
-    3.10+ 可以运行，建议有条件时使用 3.11+。
+    说明：pyproject.toml 声明 requires-python >=3.10,<3.13。
+    3.10-3.12 可以运行，建议有条件时使用 3.11+。
     """
     title("1. Python 版本")
     major, minor = sys.version_info[:2]
     version_str = f"{major}.{minor}.{sys.version_info[2]}"
-    if (major, minor) >= (3, 10):
-        ok(f"Python {version_str}（满足 pyproject 声明的 >=3.10；建议 3.11+）。")
+    if (3, 10) <= (major, minor) < (3, 13):
+        ok(f"Python {version_str}（满足 pyproject 声明的 >=3.10,<3.13；建议 3.11+）。")
         return True
-    fail(f"Python {version_str} 版本过低——请使用 3.10 及以上（建议 3.11+）。")
+    if (major, minor) >= (3, 13):
+        fail(f"Python {version_str} 暂未作为发布基线——请使用 3.10-3.12（建议 3.11+）。")
+        return False
+    fail(f"Python {version_str} 版本过低——请使用 3.10-3.12（建议 3.11+）。")
     return False
 
 
@@ -178,6 +181,8 @@ def check_dependencies() -> bool:
     required = [
         ("fastapi", "Web 框架", True),
         ("uvicorn", "ASGI 服务器", True),
+        ("websockets", "WebSocket 支持", True),
+        ("aiofiles", "异步文件读写", True),
         ("pydantic", "配置模型", True),
         ("yaml", "YAML 配置解析（PyYAML）", True),
         ("loguru", "日志", True),

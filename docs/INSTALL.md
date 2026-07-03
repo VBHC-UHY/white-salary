@@ -23,8 +23,8 @@
 
 | 依赖 | 版本 | 说明 |
 |------|------|------|
-| 操作系统 | **Windows 10 / 11** | 启动脚本、端口清理、部分工具为 Windows 专用；其它平台可跑后端但未做适配 |
-| Python | **3.10+** | `pyproject.toml` 声明 `>=3.10`；建议有条件时用 3.11+ |
+| 操作系统 | **Windows 10 / 11** | 桌宠启动脚本、端口清理、部分工具为 Windows 专用；Linux/服务器可跑后端 |
+| Python | **3.10-3.12** | `pyproject.toml` 声明 `>=3.10,<3.13`；建议用 3.11+ |
 | Node.js | **18+**（建议 LTS） | 前端 Electron 桌宠 |
 | Git | 任意 | 克隆仓库用 |
 
@@ -84,13 +84,15 @@ pip install -e ".[vad-silero]"      # Silero VAD（不装会自动降级到 Ener
 pip install -e ".[memory-vector]"   # 长期记忆向量库 ChromaDB
 pip install -e ".[desktop-control]"  # 桌面鼠标/键盘控制工具（pyautogui/pyperclip）
 pip install -e ".[bilibili]"         # B站直播/扫码登录增强
-pip install -e ".[singing-rvc]"      # RVC 唱歌/变声
+pip install -e ".[singing-rvc]"      # 保留兼容入口；RVC 需独立环境，见下方说明
 pip install -e ".[tts-edge]"        # Edge TTS（注：当前版本 Edge TTS 未接入，装了也暂不生效）
-pip install -e ".[all]"             # 一次装齐上面全部（体积较大）
+pip install -e ".[all]"             # 一次装齐常用可选项（不含 RVC，避免 numpy 冲突）
 pip install -e ".[dev]"             # 开发工具：pytest / ruff / mypy / pre-commit
 ```
 
 > **注意**：项目的 LLM 适配器是"OpenAI 兼容"实现，当前默认需要 `openai` SDK；它已经在主依赖中。`anthropic` SDK 仍只在需要官方 Anthropic 路径时按需安装。
+>
+> **RVC 说明**：`rvc-python` 当前要求 `numpy<=1.25.3`，而 White Salary 主环境需要 `numpy>=1.26.0`，所以它不能放进 `.[all]` 或主虚拟环境。需要 RVC 唱歌/变声时，请单独建 RVC 环境或外部服务，再由后续适配层调用。
 
 ---
 
@@ -105,6 +107,27 @@ cd ..
 会装 Electron 28 及 axios / cors / express / sql.js 等。首次安装会下载 Electron 二进制，耗时视网络而定。
 
 > `Start.bat` 首次运行时若发现 `frontend/node_modules` 不存在，会自动帮你 `npm install`——所以这一步也可以交给启动脚本。
+
+---
+
+## 3.5 Linux / 服务器只跑后端
+
+服务器上不需要 Electron 桌宠时，用根目录脚本：
+
+```bash
+chmod +x install.sh
+./install.sh
+source .venv/bin/activate
+PYTHONPATH=src python run_server.py --host 0.0.0.0 --port 12400
+```
+
+需要 ChromaDB 长期记忆时：
+
+```bash
+./install.sh --with-memory
+```
+
+脚本会优先寻找 Python 3.12 / 3.11 / 3.10；如果机器只有 Python 3.13，请先安装 3.11 或 3.12，避免可选 AI 依赖解析失败。
 
 ---
 
@@ -234,7 +257,7 @@ cd frontend && npx electron .
 
 - **作用**：监听直播弹幕并回复。
 - **不装会怎样**：B 站形态关闭。
-- **装法**：`pip install bilibili-api-python`，在控制面板 B 站页登录后开启。
+- **装法**：`pip install -e ".[bilibili]"`，在控制面板 B 站页登录后开启。这个 extra 会同时安装扫码登录和浏览器 Cookie 解密所需的 `qrcode[pil]` / `cryptography`。
 
 ---
 
