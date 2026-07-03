@@ -66,7 +66,18 @@ Python 3.10+ · FastAPI · Electron · Live2D · 六边形架构
 | 🌐 **QQ 空间社交** | 自动发说说 / 评论 / 逛空间 / 兴趣匹配 / 限流 | 需 QQ 登录（可选） |
 | 📺 **B 站直播** | 弹幕监听 + 回复 | 需 `bilibili-api-python`（可选） |
 
-> **诚实说明**：桌面聊天只要一把 LLM 密钥就能跑起来。语音（本地 GPT-SoVITS）、AI 绘图（ComfyUI）、QQ / QQ 空间 / B 站等都是**可选增强**，不装也能用核心功能，只是对应能力关闭。详见 [docs/INSTALL.md](docs/INSTALL.md)。
+<!-- 2026-07-03 便捷化文档：破除"语音必须本地"误解，强调一把云端 key 全功能 -->
+> ⭐ **一把云端 key 点亮全部 AI 能力**：只要一把[硅基流动](https://cloud.siliconflow.cn) key，**聊天 / 语音识别 / 语音合成 / 看图 / 生图 全部开箱即用，无需安装任何本地模型**。默认配置全走云端，不吃你的显卡。下面这些"本地版"都是**可选进阶**，不装照样全功能：
+
+| 能力 | 默认（云端，一把 key 就能用） | 本地版（可选进阶） |
+|------|------------------------------|-------------------|
+| 聊天 | ✅ 云端大模型 | Ollama 等本地 LLM |
+| 语音识别 ASR | ✅ 云端 SenseVoice | faster-whisper |
+| 语音合成 TTS | ✅ 云端 CosyVoice2 兜底 | GPT-SoVITS |
+| 看图 | ✅ 云端 Qwen3-VL | 本地多模态 |
+| 生图 / 生视频 | ✅ 云端 FLUX / Wan2.2 | ComfyUI |
+
+> **诚实说明**：桌面聊天只要一把 LLM 密钥就能跑起来。QQ / QQ 空间 / B 站等平台形态是**可选增强**，不接也能用核心功能，只是对应形态关闭。详见 [docs/INSTALL.md](docs/INSTALL.md)。
 
 ---
 
@@ -78,7 +89,8 @@ Python 3.10+ · FastAPI · Electron · Live2D · 六边形架构
 - ⚡ **并行工具流式对话**：主模型流式输出的同时，工具判断模型并行决策——不需要工具时零延迟。
 - 🗣️ **语音对话**：逐句流式 TTS、按住说话、持续监听、语音打断、多段合并（本地 GPT-SoVITS 优先，云端兜底）。
 - 🤖 **主动行为**：闲置主动聊天（早安 / 关心 / 追问）、休息模式、每晚写第一人称日记。
-- 🎛️ **控制面板**：22 页设置面板，LLM 多供应商 / 多角色、记忆管理、好感度编辑、知识图谱 CRUD、插件市场等。
+<!-- 2026-07-03 便捷化文档：强调控制面板图形化配置，不用碰配置文件 -->
+- 🎛️ **控制面板（全程图形化，不用碰配置文件）**：22 页设置面板，桌宠上按 `Ctrl+,` 打开，QQ / 语音 / LLM / B站 / QQ空间 / 人设等每页填表单→点保存→点『重启后端』按钮即可生效，**完全不需要手动编辑 conf.yaml、不需要命令行**。涵盖 LLM 多供应商 / 多角色、记忆管理、好感度编辑、知识图谱 CRUD、插件市场等。
 - 🔌 **插件系统**：Python 插件自动发现 + 沙箱 + 热重载 + GitHub 市场。
 - 🎨 **多媒体生成（可选）**：本地 ComfyUI 文生图 / 图生视频，三级降级到云端。
 
@@ -149,9 +161,10 @@ cd frontend && npm install && cd ..
 copy conf.default.yaml conf.yaml        # PowerShell/CMD
 # cp conf.default.yaml conf.yaml        # Git Bash
 
-# 4. 编辑 conf.yaml，至少填一把主 LLM 密钥
-#    llm.api_key / llm.provider / llm.model / llm.base_url
-#    （最小可用配置：只填这一节，就能桌面文字聊天）
+# 4. 填一把主 LLM 密钥（最小可用配置：只填这一把就能桌面文字聊天）
+#    最省心：先 Start.bat 启动，在桌宠上按 Ctrl+, 打开控制面板 → LLM配置页
+#            → 填 api_key / model 等 → 点保存 → 点『重启后端』按钮，全程图形化。
+#    （进阶用户也可直接编辑 conf.yaml 的 llm 节：api_key / provider / model / base_url）
 
 # 5. 一键启动（会拉起后端 + 前端桌宠）
 Start.bat
@@ -172,11 +185,12 @@ python scripts/first_run_check.py
 ### 🖥️ 桌面宠物（默认，最小可用）
 装好依赖 + 填一把 LLM 密钥 + `Start.bat` 即可。这是主形态，其它三种都在它之上叠加。
 
+<!-- 2026-07-03 便捷化文档：NapCat 是独立程序不放进项目文件夹；配置改走控制面板 QQ 页 -->
 ### 💬 QQ 机器人
-1. 自行下载并登录 [NapCat](https://github.com/NapNeko/NapCatQQ)（第三方开源 QQ 框架，**不随本仓库分发**，请到其官方仓库获取；新手推荐它的一键版 NapCat_OneKey）。
-2. 在 NapCat 里配置**正向 WebSocket**（默认端口，配一个 token）。
-3. 在 `conf.yaml` 设置 `qq.enabled: true`、`qq.ws_url`、`qq.token`、`qq.family_qq`（你自己的 QQ 号，会被认成"主人"）。
-4. 重启后端生效。详见 [docs/CONFIG.md](docs/CONFIG.md) 的 `qq` 节。
+1. 自行下载并登录 [NapCat](https://github.com/NapNeko/NapCatQQ)（第三方**独立开源程序**，**不随本仓库分发、也不用放进 White Salary 文件夹**——下载后放哪都行、双击自己运行；白通过网络端口与它通信。新手强烈推荐它的一键版 NapCat.OneKey）。
+2. 在 NapCat 里配置**正向 WebSocket**（记下端口，配一个 token）。
+3. **打开控制面板**（在桌宠上按 `Ctrl+,`）→ 进 **QQ 配置**页 → 把 NapCat 给你的端口（`ws_url`）、`token` 填进去，开启 QQ、填上你自己的 QQ 号（会被认成"主人"）→ 点保存 → 点『重启后端』按钮。（进阶用户也可直接改 `conf.yaml` 的 `qq` 节。）
+4. 详见 [docs/CONFIG.md](docs/CONFIG.md) 的 `qq` 节。
 
 ### 🌐 QQ 空间社交
 在控制面板（`Ctrl+,`）的 QQ 空间页扫码 / Cookie 登录后即可自动发说说、逛空间。

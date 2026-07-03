@@ -552,6 +552,14 @@ class SetupWizardApp:
             font=("Microsoft YaHei UI", 11), justify="center",
         ).pack(pady=6)
 
+        # 2026-07-03 便捷化文档：加一句指向控制面板的提示（仅文案，不改逻辑）
+        tk.Label(
+            page,
+            text="想开 QQ 机器人 / 调语音 / 换人设？启动后在桌宠上按 Ctrl+, 打开控制面板，\n"
+                 "全部图形化设置，不用碰配置文件。",
+            font=("Microsoft YaHei UI", 9), fg="#666666", justify="center",
+        ).pack(pady=(2, 4))
+
         def launch_now() -> None:
             """帮新手直接把 Start.bat 拉起来（新开一个控制台窗口）。"""
             try:

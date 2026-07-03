@@ -1,9 +1,16 @@
 # White Salary 安装指南
 
-本指南带你从零把 White Salary 跑起来。分三个层次：
+本指南带你从零把 White Salary 跑起来。
+
+<!-- 2026-07-03 便捷化文档：开头强调一把云端 key 全功能 + 图形面板配置 -->
+> ⭐ **先记住两件事，能省掉大量麻烦：**
+> 1. **一把云端 key 点亮全部 AI 能力**：只要一把[硅基流动](https://cloud.siliconflow.cn) key，**聊天 / 语音识别 / 语音合成 / 看图 / 生图 全部开箱即用，无需安装任何本地模型**（faster-whisper / GPT-SoVITS / ComfyUI 都只是可选进阶）。**"语音必须本地"是误解**——云端 CosyVoice2 / SenseVoice 默认就能说能听。
+> 2. **配置全程图形化，不用碰配置文件**：启动后在桌宠上按 `Ctrl+,` 打开控制面板，QQ / 语音 / LLM / B站 / QQ空间 / 人设 每页填表单→点保存→点『重启后端』按钮即可，**不需要手动编辑 conf.yaml、不需要命令行**。下文凡涉及改配置处，都可用面板完成；手改 conf.yaml 仅作进阶备选。
+
+分三个层次：
 
 1. **最小可用**：只要桌面文字聊天 —— 装依赖 + 填一把 LLM 密钥即可（约 5 分钟）。
-2. **完整桌面体验**：加上本地语音（GPT-SoVITS）、长期记忆（ChromaDB）。
+2. **完整桌面体验**：加上语音（云端开箱即用，或本地 GPT-SoVITS）、长期记忆（ChromaDB）。
 3. **多平台形态**：QQ 机器人、QQ 空间、B 站直播、AI 绘图。
 
 > 配置项的逐节详解见 [CONFIG.md](CONFIG.md)。遇到问题先跑 `python scripts/first_run_check.py` 自检。
@@ -95,6 +102,9 @@ cd ..
 
 ## 4. 配置 API 密钥（最少填一把就能跑）
 
+<!-- 2026-07-03 便捷化文档：先讲图形面板法，手改 conf.yaml 作进阶备选 -->
+> 🎛️ **最省心（推荐）——用图形控制面板填，不碰配置文件**：先把白 `Start.bat` 启动，在桌宠上按 `Ctrl+,` 打开控制面板 → 进 **LLM配置**页 → 把 `api_key` / `model` / `base_url` 填进去 → 点保存 → 点『重启后端』按钮。面板会自动写回 `conf.yaml`，全程无需命令行。（本节下面的"手改 conf.yaml"是给想手动控制的进阶用户看的备选。）
+
 **复制配置模板**（`conf.default.yaml` 是模板，不要直接改它；你的密钥只放进 `conf.yaml`）：
 
 ```bash
@@ -182,14 +192,15 @@ cd frontend && npx electron .
 
 - **作用**：让白接入 QQ，能私聊 + 群聊，每个人各自积累好感度。
 - **不装会怎样**：QQ 形态关闭，桌面聊天完全不受影响。
-- **NapCat 是什么**：一个**第三方开源**的 QQ 协议框架（不是本项目做的、也**不随本仓库下载**），负责"登录 QQ 并转发消息"，白通过它收发 QQ 消息。
+<!-- 2026-07-03 便捷化文档：NapCat 是独立程序不放进项目；配置改走控制面板 QQ 页 -->
+- **NapCat 是什么**：一个**第三方独立开源程序**（不是本项目做的、也**不随本仓库下载**），负责"登录 QQ 并转发消息"，白通过网络端口与它通信。**它是独立程序，下载后自己单独运行，放哪个文件夹都行、双击自跑，不用放进 White Salary 文件夹。**
 - **装法**：
-  1. **下载 NapCat**：去官方仓库 <https://github.com/NapNeko/NapCatQQ> 的 Releases 下载。**新手强烈建议用一键版 `NapCat.OneKey`**（解压双击就能跑）。
+  1. **下载 NapCat**：去官方仓库 <https://github.com/NapNeko/NapCatQQ> 的 Releases 下载。**新手强烈建议用一键版 `NapCat.OneKey`**（解压双击就能跑）。放到任意目录，跟 White Salary 各自独立。
   2. **登录 QQ**：运行 NapCat，扫码或账密登录给白用的 QQ 号（建议用小号，别用主号）。
   3. **开正向 WebSocket**：在 NapCat 的 WebUI（网页配置界面）里新建一个 **"WebSocket 服务器"**（正向 WS），记下**端口**（如 3001）和你设的 **token**。
-  4. **配 White Salary**：编辑 `conf.yaml` 的 `qq` 节——`enabled: true`、`ws_url: "ws://127.0.0.1:3001"`（端口对上 NapCat）、`token:`（和 NapCat 里一致）、`family_qq: [你自己的QQ号]`（白会把你认成"主人"）。
-  5. **重启后端**。启动日志出现 `[QQ] WebSocket 已连接` 就成了。
-- **排查**：白收不到 QQ 消息，99% 是 `ws_url` 端口或 `token` 和 NapCat 里对不上——回第 3、4 步核对。详见 [CONFIG.md](CONFIG.md) 的 `qq` 节。
+  4. **配 White Salary（在白的控制面板里填，不用改配置文件）**：在桌宠上按 `Ctrl+,` 打开控制面板 → 进 **QQ 配置**页 → 开启 QQ、把 NapCat 给你的**端口**填进 `ws_url`（如 `ws://127.0.0.1:3001`）、**token** 填成和 NapCat 里一致、`family_qq` 填你自己的 QQ 号（白会把你认成"主人"）→ 点保存 → 点『重启后端』按钮。（进阶用户也可直接改 `conf.yaml` 的 `qq` 节。）
+  5. 后端重启后，启动日志出现 `[QQ] WebSocket 已连接` 就成了。
+- **排查**：白收不到 QQ 消息，99% 是 `ws_url` 端口或 `token` 和 NapCat 里对不上——回控制面板 QQ 页核对。详见 [CONFIG.md](CONFIG.md) 的 `qq` 节。
 
 ### 6.3 ComfyUI（本地文生图 / 图生视频）
 
@@ -201,7 +212,8 @@ cd frontend && npx electron .
 
 - **作用**：语义检索历史，白能"想起"很久以前聊过的相关内容。
 - **不装会怎样**：把 `memory.long_term_provider` 设为 `none`（默认即 none），长期记忆引擎关闭，其余四层记忆照常。
-- **装法**：`pip install -e ".[memory-vector]"`，然后 `conf.yaml` 设 `memory.long_term_provider: chroma`。
+<!-- 2026-07-03 便捷化文档：开启长期记忆也可走控制面板 -->
+- **装法**：`pip install -e ".[memory-vector]"`，然后把 `memory.long_term_provider` 设为 `chroma` → 打开控制面板（在桌宠上按 `Ctrl+,`）→ 记忆相关设置页改好 → 点保存 → 点『重启后端』按钮。（进阶用户也可直接改 `conf.yaml` 的 `memory` 节。）
 
 ### 6.5 本地语音识别（faster-whisper）
 
