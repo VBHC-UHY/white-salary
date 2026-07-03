@@ -15,6 +15,11 @@
 
 Python 3.10+ · FastAPI · Electron · Live2D · 六边形架构
 
+<!-- 2026-07-03：交流群。二维码图放到 docs/assets/qq-group.png 后可取消下一行注释显示图片 -->
+**💬 交流 / 求助 / 一起玩 → QQ 群「白的研发」：`2163039710`**
+
+<!-- ![扫码进群](docs/assets/qq-group.png) -->
+
 </div>
 
 ---
