@@ -137,6 +137,23 @@ class TestDirectoryStructure:
         assert "mss" in install
         assert ".venv\\Scripts\\python.exe" in start_backend
 
+    def test_linux_server_setup_wizard_exists(self) -> None:
+        """Linux server users should have a guided setup separate from Windows .bat files."""
+        setup = PROJECT_ROOT / "server-setup.sh"
+        install = (PROJECT_ROOT / "install.sh").read_text(encoding="utf-8")
+        gitignore = (PROJECT_ROOT / ".gitignore").read_text(encoding="utf-8")
+        text = setup.read_text(encoding="utf-8")
+
+        assert setup.is_file()
+        assert "Linux / Server Setup Wizard" in text
+        assert "./install.sh" in text
+        assert "WS_API_KEY" in text
+        assert "memory.long_term_provider" in text
+        assert "systemd" in text
+        assert "Windows desktop users should use 安装.bat" in text
+        assert "./server-setup.sh" in install
+        assert "white-salary.service" in gitignore
+
     def test_gpt_sovits_launchers_use_configured_path(self) -> None:
         """GPT-SoVITS launchers should resolve paths from config/env, not cd to one machine."""
         files = [

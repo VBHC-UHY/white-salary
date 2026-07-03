@@ -63,6 +63,7 @@ config/qzone.ini
 # --- 兜底：任何 cookie 文件、任何本地私有配置 ---
 config/*_cookie*
 config/*.local.*
+white-salary.service
 *.cookie
 *.cookies
 

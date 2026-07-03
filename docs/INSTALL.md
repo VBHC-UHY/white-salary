@@ -113,13 +113,102 @@ cd ..
 
 ## 3.5 Linux / 服务器只跑后端
 
-服务器上不需要 Electron 桌宠时，用根目录脚本：
+先分清楚两条路线：
+
+- **Windows 桌面宠物**：用 `安装.bat` + `Start.bat`，有 Electron 桌宠窗口。
+- **Linux / VPS / 云服务器**：用 `server-setup.sh`，只跑 FastAPI 后端，不启动 Electron 桌宠。
+
+### 3.5.1 新手推荐：服务器一键向导
+
+在服务器上执行：
+
+```bash
+git clone https://github.com/VBHC-UHY/white-salary.git
+cd white-salary
+chmod +x server-setup.sh
+./server-setup.sh
+```
+
+向导会一步步问你：
+
+| 问题 | 新手怎么选 |
+|------|------------|
+| `Install ChromaDB long-term vector memory?` | 不懂就回车选 **no**。这只是长期向量记忆，不影响聊天、看图、语音、生图云端兜底 |
+| `Backend listen host` | 默认 `0.0.0.0`，服务器上通常就用这个 |
+| `Backend listen port` | 默认 `12400`，没冲突就直接回车 |
+| `SiliconFlow API key` | 粘贴 `sk-` 开头的硅基流动 key；没有也可以留空，之后手动改 `conf.yaml` |
+| `Create and install a systemd service now?` | 不懂就选 **no**，先按前台启动方式跑通 |
+
+它会自动完成：
+
+- 调用 `install.sh`，选择 Python 3.12 / 3.11 / 3.10；
+- 创建项目专用 `.venv`，不会污染系统 Python；
+- 安装后端依赖；
+- 生成 `conf.yaml` 和 `prompts/system_prompt.txt`；
+- 写入 `server.host` / `server.port`；
+- 如果填了 SiliconFlow key，会写入 `llm` 和 `llm_vision`，语音和生图/生视频云端兜底会自动复用；
+- 可选安装 ChromaDB 长期记忆；
+- 可选生成并安装 `systemd` 服务。
+
+如果你已经有 key，想少交互一点：
+
+```bash
+WS_API_KEY=sk-你的key ./server-setup.sh --yes
+```
+
+需要长期向量记忆：
+
+```bash
+./server-setup.sh --with-memory
+```
+
+想让它直接安装并启动 systemd 服务：
+
+```bash
+WS_API_KEY=sk-你的key ./server-setup.sh --with-memory --install-service
+```
+
+### 3.5.2 启动和健康检查
+
+如果你没有安装 systemd 服务，用前台方式启动：
+
+```bash
+source .venv/bin/activate
+PYTHONPATH=src python run_server.py --host 0.0.0.0 --port 12400
+```
+
+启动后在服务器本机检查：
+
+```bash
+curl http://127.0.0.1:12400/health
+```
+
+如果服务器防火墙和云厂商安全组放行了 12400 端口，也可以从另一台机器访问：
+
+```text
+http://你的服务器IP:12400/health
+```
+
+如果你选择了 systemd 服务：
+
+```bash
+sudo systemctl status white-salary --no-pager
+sudo journalctl -u white-salary -f
+```
+
+修改 `conf.yaml` 后重启：
+
+```bash
+sudo systemctl restart white-salary
+```
+
+### 3.5.3 进阶用户：只跑底层安装器
+
+如果你不想用交互向导，也可以只用底层安装器：
 
 ```bash
 chmod +x install.sh
 ./install.sh
-source .venv/bin/activate
-PYTHONPATH=src python run_server.py --host 0.0.0.0 --port 12400
 ```
 
 需要 ChromaDB 长期记忆时：
@@ -128,9 +217,7 @@ PYTHONPATH=src python run_server.py --host 0.0.0.0 --port 12400
 ./install.sh --with-memory
 ```
 
-脚本会优先寻找 Python 3.12 / 3.11 / 3.10；如果机器只有 Python 3.13，请先安装 3.11 或 3.12，避免可选 AI 依赖解析失败。
-
-> `./install.sh` 和 Windows 的 `安装.bat` 一样都会创建项目专用 `.venv`。两边配置方式相同：先填 `conf.yaml` 或用桌面控制面板写配置，再启动后端。`--with-memory` 只是在服务器安装时顺手装 ChromaDB 长期记忆；不加它不会影响主聊天、看图、语音或云端生图兜底。
+然后自己编辑 `conf.yaml`，至少填好 `llm.api_key`，再启动后端。`install.sh` 和 Windows 的 `安装.bat` 一样都会创建项目专用 `.venv`；区别是 `install.sh` 不会问你 key、不写服务、不负责启动。脚本会优先寻找 Python 3.12 / 3.11 / 3.10；如果机器只有 Python 3.13，请先安装 3.11 或 3.12，避免可选 AI 依赖解析失败。
 
 ---
 

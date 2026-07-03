@@ -34,6 +34,8 @@ Python 3.10-3.12 · FastAPI · Electron · Live2D · 六边形架构
 
 **不需要懂编程，不需要知道 pip 是什么。** 只做三件事：
 
+> 这是 **Windows 桌面宠物** 的路线。如果你是在 Linux 云服务器 / VPS 上只跑后端，请直接看下面的 [Linux / 服务器一键向导](#linux--服务器一键向导只跑后端)。
+
 | 步骤 | 做什么 | 说明 |
 |------|--------|------|
 | **① 下载** | 点本页绿色 **Code** 按钮 → **Download ZIP**，解压到任意文件夹（会用 Git 的也可以 `git clone`） | 路径里最好别带奇怪符号 |
@@ -152,10 +154,13 @@ Python 3.10-3.12 · FastAPI · Electron · Live2D · 六边形架构
 
 ---
 
-## 手动安装（5 步跑起来桌面聊天）
+## Windows 手动安装 / Linux 服务器安装
 
-> 新手请直接用最上面的 [✨ 三步上手](#-三步上手完全新手照这个来)（双击 `安装.bat`）。
-> 本节是给想**手动控制每一步**的开发者的。完整说明见 **[docs/INSTALL.md](docs/INSTALL.md)**；配置项详解见 **[docs/CONFIG.md](docs/CONFIG.md)**。
+> Windows 桌宠新手请直接用最上面的 [✨ 三步上手](#-三步上手完全新手照这个来)（双击 `安装.bat`）。
+> Linux / VPS / 云服务器用户请直接跳到下面的 [Linux / 服务器一键向导](#linux--服务器一键向导只跑后端)。
+> 更完整说明见 **[docs/INSTALL.md](docs/INSTALL.md)**；配置项详解见 **[docs/CONFIG.md](docs/CONFIG.md)**。
+
+### Windows 手动安装（5 步跑起来桌面聊天）
 
 **环境要求**：Windows 10/11 · Python 3.10-3.12（建议 3.11+）· Node.js 18+
 
@@ -181,15 +186,45 @@ copy conf.default.yaml conf.yaml        # PowerShell/CMD
 Start.bat
 ```
 
-**Linux / 服务器只跑后端**：
+### Linux / 服务器一键向导（只跑后端）
+
+服务器 / VPS / Linux 面板用户不要跑 Windows 的 `安装.bat`，直接用服务器向导：
 
 ```bash
-./install.sh
+git clone https://github.com/VBHC-UHY/white-salary.git
+cd white-salary
+chmod +x server-setup.sh
+./server-setup.sh
+```
+
+它会自动调用 `install.sh` 创建 `.venv`、安装后端依赖、生成 `conf.yaml`，然后提示你粘贴一把 SiliconFlow key、选择端口、选择是否安装 ChromaDB 长期记忆、是否创建 systemd 服务。新手一路回车也能先跑起来。
+
+只想一条命令快速配置：
+
+```bash
+WS_API_KEY=sk-你的key ./server-setup.sh --yes
+```
+
+需要长期向量记忆：
+
+```bash
+./server-setup.sh --with-memory
+```
+
+装完后前台启动：
+
+```bash
 source .venv/bin/activate
 PYTHONPATH=src python run_server.py --host 0.0.0.0 --port 12400
 ```
 
-> Linux 脚本会优先使用 Python 3.12 / 3.11 / 3.10，暂不选择 Python 3.13，避免部分可选 AI 依赖还没跟上新版解释器。需要 ChromaDB 长期记忆时用 `./install.sh --with-memory`；不加这个参数也能正常聊天，只是长期向量记忆保持关闭。
+检查是否启动成功：
+
+```bash
+curl http://127.0.0.1:12400/health
+```
+
+> `server-setup.sh` 是给新手的服务器向导；`install.sh` 是底层安装器，适合懂 Linux 的用户手动控制。两者都会创建项目专用 `.venv`，不会污染系统 Python。Linux 脚本会优先使用 Python 3.12 / 3.11 / 3.10，暂不选择 Python 3.13，避免部分可选 AI 依赖还没跟上新版解释器。
 
 **不确定配好了没？** 跑一次首次运行自检：
 

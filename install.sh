@@ -15,6 +15,8 @@ Usage:
   ./install.sh --with-memory Install backend plus ChromaDB memory extra
 
 Notes:
+  - New server users should prefer ./server-setup.sh, which asks for API key,
+    host, port, memory, and optional systemd service.
   - Use Python 3.10, 3.11, or 3.12. Python 3.13 is not selected by this script yet.
   - Windows desktop users should keep using 安装.bat.
 HELP
@@ -84,13 +86,14 @@ cat <<'DONE'
 Install complete.
 
 Next:
-  1. Edit conf.yaml or open the control panel from the desktop app later.
-  2. Start the backend:
+  1. Server beginners can run ./server-setup.sh for the guided setup.
+  2. Or edit conf.yaml manually and fill at least llm.api_key.
+  3. Start the backend:
        source .venv/bin/activate
        PYTHONPATH=src python run_server.py --host 0.0.0.0 --port 12400
 
 Optional extras:
-  pip install -e ".[bilibili]"       # Bilibili live / QR login support
-  pip install -e ".[memory-vector]"  # ChromaDB semantic memory
-  pip install -e ".[all]"            # Broad optional set, excludes RVC due numpy conflict
+  python -m pip install -e ".[bilibili]"       # Bilibili live / QR login support
+  python -m pip install -e ".[memory-vector]"  # ChromaDB semantic memory
+  python -m pip install -e ".[all]"            # Broad optional set, excludes RVC due numpy conflict
 DONE
