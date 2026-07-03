@@ -523,6 +523,31 @@ class ChatController {
         if (this.statusText) this.statusText.textContent = text;
     }
 
+    _showSystemNotice(text) {
+        this._addChatMessage('system', text);
+    }
+
+    _describeAudioInputError(err) {
+        const name = err && err.name ? err.name : '';
+        const message = err && err.message ? err.message : String(err || '');
+        if (name === 'NotAllowedError' || name === 'SecurityError') {
+            return '麦克风权限被拒绝，请检查系统隐私设置';
+        }
+        if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
+            return '没有找到可用麦克风，请检查录音设备';
+        }
+        if (name === 'NotReadableError' || name === 'TrackStartError') {
+            return '麦克风被其他软件占用或设备无法启动';
+        }
+        if (name === 'OverconstrainedError' || name === 'ConstraintNotSatisfiedError') {
+            return '当前麦克风不支持请求的录音参数';
+        }
+        if (name === 'TypeError') {
+            return '当前环境不支持麦克风录音接口';
+        }
+        return `${name} ${message}`.trim() || '麦克风打开失败';
+    }
+
     // ================================================================
     // Lip Sync
     // ================================================================
@@ -723,7 +748,14 @@ class ChatController {
     }
 
     async _startContinuousListening() {
+        if (this._continuousListening) return;
+        this._showSystemNotice('[持续监听] 正在请求麦克风权限...');
+
         try {
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                throw new TypeError('getUserMedia is not available');
+            }
+
             this._listenStream = await navigator.mediaDevices.getUserMedia({
                 audio: { sampleRate: 16000, channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true }
             });
@@ -758,19 +790,18 @@ class ChatController {
                 if (on) on.style.display = '';
             }
 
+            this._showSystemNotice('[持续监听] 麦克风已打开，正在校准环境噪声...');
             console.log('[Listen] Calibrating noise floor (2s)...');
             await this._calibrateNoiseFloor();
             console.log(`[Listen] Noise floor: ${this._noiseFloor.toFixed(4)}, threshold: ${(this._noiseFloor * this._listenThreshold).toFixed(4)}`);
 
+            this._showSystemNotice('[持续监听] 已开启，可以直接说话');
             this._listenLoop();
 
         } catch (err) {
             console.error('[Listen] Mic access failed:', err);
-            this._continuousListening = false;
-            // 2026-07-03 修复：开启失败不再静默——把具体原因显示在聊天区，
-            // 用户点了没反应时能看到是"没麦克风权限"还是"没有录音设备"等
-            const reason = (err && (err.name || '')) + ' ' + (err && (err.message || err));
-            this._addChatMessage('system', `[持续监听] 开启失败：${reason}（请检查系统麦克风权限/录音设备）`);
+            this._stopContinuousListening();
+            this._showSystemNotice(`[持续监听] 开启失败：${this._describeAudioInputError(err)}`);
         }
     }
 
@@ -1074,15 +1105,30 @@ class ChatController {
     async _startRecording() {
         if (this._isRecording) return;
 
+        let stream = null;
+        let mimeType = '';
         try {
-            const stream = await navigator.mediaDevices.getUserMedia({
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                this._showSystemNotice('[语音] 当前环境不支持麦克风录音');
+                return;
+            }
+            if (!window.MediaRecorder) {
+                this._showSystemNotice('[语音] 当前环境不支持 MediaRecorder 录音');
+                return;
+            }
+
+            stream = await navigator.mediaDevices.getUserMedia({
                 audio: { sampleRate: 16000, channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true }
             });
 
             this._audioChunks = [];
-            this._mediaRecorder = new MediaRecorder(stream, {
-                mimeType: 'audio/webm;codecs=opus'
-            });
+            if (typeof MediaRecorder.isTypeSupported === 'function' && MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
+                mimeType = 'audio/webm;codecs=opus';
+            } else if (typeof MediaRecorder.isTypeSupported === 'function' && MediaRecorder.isTypeSupported('audio/webm')) {
+                mimeType = 'audio/webm';
+            }
+            const recorderOptions = mimeType ? { mimeType } : {};
+            this._mediaRecorder = new MediaRecorder(stream, recorderOptions);
 
             this._mediaRecorder.ondataavailable = (e) => {
                 if (e.data.size > 0) this._audioChunks.push(e.data);
@@ -1092,10 +1138,14 @@ class ChatController {
                 // Stop all tracks
                 stream.getTracks().forEach(t => t.stop());
 
-                if (this._audioChunks.length === 0) return;
+                const totalSize = this._audioChunks.reduce((sum, chunk) => sum + chunk.size, 0);
+                if (this._audioChunks.length === 0 || totalSize < 256) {
+                    this._showSystemNotice('[语音] 没有录到声音，请按住说完再松开');
+                    return;
+                }
 
                 // Convert to wav and send
-                const blob = new Blob(this._audioChunks, { type: 'audio/webm' });
+                const blob = new Blob(this._audioChunks, { type: mimeType || 'audio/webm' });
                 await this._sendVoice(blob);
             };
 
@@ -1120,13 +1170,22 @@ class ChatController {
 
         } catch (err) {
             console.error('[Voice] Mic access failed:', err);
+            if (stream) {
+                try { stream.getTracks().forEach(t => t.stop()); } catch (e) { /* ignore */ }
+            }
+            this._isRecording = false;
+            this._mediaRecorder = null;
+            if (this.micBtn) this.micBtn.classList.remove('recording');
+            this._showSystemNotice(`[语音] 麦克风打开失败：${this._describeAudioInputError(err)}`);
         }
     }
 
     _stopRecording() {
         if (!this._isRecording || !this._mediaRecorder) return;
 
-        this._mediaRecorder.stop();
+        if (this._mediaRecorder.state !== 'inactive') {
+            this._mediaRecorder.stop();
+        }
         this._isRecording = false;
 
         if (this.micBtn) this.micBtn.classList.remove('recording');
@@ -1134,7 +1193,10 @@ class ChatController {
     }
 
     async _sendVoice(blob) {
-        if (!this.isConnected || !this.ws) return;
+        if (!this.isConnected || !this.ws) {
+            this._showSystemNotice('[语音] 后端未连接，语音没有发送');
+            return;
+        }
 
         try {
             // 2026-07-02 审计修复（批3）：原实现 btoa(String.fromCharCode(...bytes))
@@ -1164,12 +1226,9 @@ class ChatController {
 
             console.log(`[Voice] Sent ${(blob.size / 1024).toFixed(1)}KB audio`);
         } catch (err) {
-            // 2026-07-02 审计修复（批3）：失败不再只 console.error——用现有字幕与
-            // 系统消息气泡机制给用户可见反馈，避免"按了没反应"无从排查。
+            // 失败不再只 console.error：只发聊天系统消息，不碰说话字幕。
             console.error('[Voice] Send failed:', err);
-            this._addChatMessage('system', '[语音] 发送失败，请重试');
-            this._updateSubtitle('语音发送失败，请重试');
-            this._autoHideSubtitle(4000);
+            this._showSystemNotice('[语音] 发送失败，请重试');
         }
     }
 
