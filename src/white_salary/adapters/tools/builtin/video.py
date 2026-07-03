@@ -27,14 +27,9 @@ async def make_video(prompt: str = "", duration: str = "5", voiceover: str = "",
     if not prompt:
         return "请描述想要的视频"
     try:
-        import yaml
-        from pathlib import Path
-        # 2026-07-03 审计修复（批5）：conf.yaml 改为从模块位置推导项目根的绝对路径，
-        # 不再依赖 CWD（此前从其它工作目录启动会静默拿空配置，
-        # 依据 docs/audit-2026-07-02/config-audit.json）
-        _project_root = Path(__file__).resolve().parents[5]
-        conf = yaml.safe_load((_project_root / "conf.yaml").read_text(encoding="utf-8")) or {}
-        sf_key = conf.get("llm_vision", {}).get("api_key", "")
+        from white_salary.adapters.tools.cloud_config import resolve_siliconflow_api_key
+
+        sf_key = resolve_siliconflow_api_key()
 
         dur = int(duration) if str(duration).isdigit() else 5
 
@@ -73,7 +68,7 @@ async def make_video(prompt: str = "", duration: str = "5", voiceover: str = "",
         # 2026-07-03 外部依赖优化（批8）：云端(硅基流动 Wan2.2)与本地(ComfyUI
         # AnimateDiff)都失败，给明确中文提示指向配置文档，不静默含糊
         return (
-            "视频生成失败：云端需要配置硅基流动 API key（llm_vision 节），"
+            "视频生成失败：云端需要配置硅基流动 API key（可自动复用主 llm 的硅基流动 key），"
             "本地需要安装并启动 ComfyUI(+AnimateDiff 模型)。"
             "本地工具路径可在 conf.yaml 的 external_tools 节配置，详见 docs/EXTERNAL_SERVICES.md"
         )
@@ -91,12 +86,9 @@ async def generate_video(image_path: str = "", prompt: str = "", mode: str = "cl
     try:
         # 云端优先（快，约60秒，但有安全过滤）
         if mode != "local":
-            import yaml
-            from pathlib import Path
-            # 2026-07-03 审计修复（批5）：conf.yaml 改为项目根绝对路径，不依赖 CWD
-            _project_root = Path(__file__).resolve().parents[5]
-            conf = yaml.safe_load((_project_root / "conf.yaml").read_text(encoding="utf-8")) or {}
-            sf_key = conf.get("llm_vision", {}).get("api_key", "")
+            from white_salary.adapters.tools.cloud_config import resolve_siliconflow_api_key
+
+            sf_key = resolve_siliconflow_api_key()
             if sf_key:
                 from white_salary.adapters.tools.video_gen import generate_video_from_image
                 path = await generate_video_from_image(
@@ -144,7 +136,7 @@ async def generate_video(image_path: str = "", prompt: str = "", mode: str = "cl
         # 2026-07-03 外部依赖优化（批8）：全部链路失败给明确中文提示（云端优先、
         # 本地兜底都没成），指向配置文档，不静默返回含糊的"失败了"
         return (
-            "图生视频失败：云端需要配置硅基流动 API key（llm_vision 节），"
+            "图生视频失败：云端需要配置硅基流动 API key（可自动复用主 llm 的硅基流动 key），"
             "本地需要安装并启动 ComfyUI(+Wan2.2/SVD 模型)。"
             "本地工具路径可在 conf.yaml 的 external_tools 节配置，详见 docs/EXTERNAL_SERVICES.md"
         )

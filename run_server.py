@@ -218,6 +218,10 @@ def main() -> None:
     # conf.yaml 深合并且经 Pydantic 校验，消除"双轨配置"割裂
     # （依据 docs/audit-2026-07-02/config-audit.json）。
     from white_salary.infrastructure.config.models import RoleLLMConfig
+    from white_salary.adapters.tools.cloud_config import (
+        resolve_siliconflow_api_key,
+        resolve_vision_channel,
+    )
 
     def _create_role_llm(role_key: str) -> "OpenAICompatibleAdapter | None":
         """从合并后的配置（config.llm_xxx）读取指定角色的LLM配置，创建适配器。"""
@@ -392,15 +396,12 @@ def main() -> None:
     else:
         logger.warning("Local GPT-SoVITS not available, falling back to SiliconFlow")
         try:
-            # 2026-07-03 审计修复（批5）：兜底密钥优先用 config.tts.fallback_api_key；
-            # 留空时保留原有"扫角色LLM配置找SiliconFlow密钥"的兜底逻辑（行为不变）
-            _tts_key: str = config.tts.fallback_api_key
-            if not _tts_key:
-                for _r in ("llm_vision", "llm_postprocess", "llm_memory"):
-                    _rc: RoleLLMConfig = getattr(config, _r)
-                    if "siliconflow" in _rc.provider.lower() and _rc.api_key:
-                        _tts_key = _rc.api_key
-                        break
+            # 2026-07-03 公开仓库修复：兜底密钥优先用 tts.fallback_api_key；
+            # 留空时从所有 SiliconFlow 通道扫描，包含主 llm。这样新用户只在
+            # 主 LLM 填一把 SiliconFlow key 时，云端 TTS 也能直接工作。
+            _tts_key: str = resolve_siliconflow_api_key(
+                config, explicit=config.tts.fallback_api_key
+            )
             # 2026-07-03 面板升级（批6）：SiliconFlow 兜底适配器不支持语速参数
             # （无 speed 构造参数、无 synthesize_with_speed 方法），config.tts.speed
             # 与情绪调速对兜底链路跳过——websocket_handler 合成处按方法存在性判断
@@ -423,18 +424,10 @@ def main() -> None:
     try:
         # 2026-07-03 审计修复（批5）：ASR 配置化——模型名改读 config.asr.model
         # （默认值=原硬编码 FunAudioLLM/SenseVoiceSmall）；密钥优先用
-        # config.asr.api_key，留空时保留原有"扫角色配置找SiliconFlow密钥"的
-        # 兜底逻辑（含主对话 llm 节，扫描顺序与旧代码一致，行为不变）
-        _sf_key: str = config.asr.api_key
-        if not _sf_key:
-            for _role in ("llm_vision", "llm_postprocess", "llm_memory"):
-                _arc: RoleLLMConfig = getattr(config, _role)
-                if "siliconflow" in _arc.provider.lower() and _arc.api_key:
-                    _sf_key = _arc.api_key
-                    break
-            # 主对话 llm 节兜底（旧扫描列表最后一项，结构与角色LLM不同故单独判断）
-            if not _sf_key and "siliconflow" in config.llm.provider.lower() and config.llm.api_key:
-                _sf_key = config.llm.api_key
+        # config.asr.api_key，留空时从所有 SiliconFlow 通道扫描，包含主 llm。
+        _sf_key: str = resolve_siliconflow_api_key(
+            config, explicit=config.asr.api_key
+        )
 
         asr_adapter = SiliconFlowASRAdapter(
             api_key=_sf_key,
@@ -451,7 +444,7 @@ def main() -> None:
     # Read vision LLM config
     # 2026-07-03 审计修复（批5）：改读合并后的 config.llm_vision（原 yaml 旁路已删）
     try:
-        _vision_conf = config.llm_vision
+        _vision_conf = resolve_vision_channel(config)
         if _vision_conf.api_key and _vision_conf.model:
             vision_adapter = MultimodalVisionAdapter(
                 api_key=_vision_conf.api_key,

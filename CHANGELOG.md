@@ -9,7 +9,7 @@
 
 ## [未发布 / 开发中] · 功能大项（发布时定为 0.2.0）
 
-在 0.1.3 之后陆续加入的新功能（累积中，达到里程碑后打 0.2.0 标签）：
+在 0.1.4 之后陆续加入的新功能（累积中，达到里程碑后打 0.2.0 标签）：
 
 - **游戏对接接口**：`POST /api/game/event` + `GET /api/game/ping`——外部游戏（如 Aurora Forge）在打 Boss / 升级 / 收伙伴等事件时上报，白在桌面实时道喜/吐槽（fire-and-forget，穿透忙碌模式）。
 - **插件热加载**：`on_message`/`on_reply` 钩子接进 QQ/桌面消息链路（此前定义了从不触发）；插件市场装完即生效不用重启；坏插件隔离 + 超时保护。
@@ -18,6 +18,24 @@
 - **稳定性**：LLM 通道从不稳定的 NVIDIA 免费接口迁移到更稳定的供应商（默认模板配置更新）。
 
 测试：677 个单元 + 集成测试全绿。
+
+---
+
+## [0.1.4] - 2026-07-03 · 云端 API 复用与发布说明修复
+
+面向公开仓库下载用户的体验修复版：重点解决“主聊天已填硅基流动 key，但看图、语音、生图/视频仍像没配置”的割裂问题，并修复 GitHub Release 中文说明乱码。
+
+### 修复
+- **一把硅基流动 key 自动复用**：新增统一云端配置解析，主 `llm` 使用硅基流动时，自动复用到看图、语音 ASR/TTS、生图/生视频云端兜底。
+- **媒体工具不再误用 key**：生图工具只把 DMXAPI key 发给 DMXAPI，不再把硅基流动 key 先错投到 DMXAPI 端点；SiliconFlow 和 DMXAPI 分开解析。
+- **看图/截图/B站看视频/智能点击统一配置**：这些入口从合并后的配置读取 `llm_vision`，`llm_vision.api_key` 为空时可复用主硅基 key。
+- **控制面板状态更准确**：状态页与“测试生图/视频”接口使用同一套 key 解析，不再显示未启用但实际可用，或点击后无反馈。
+- **TTS 工厂旧字段修复**：`adapters/tts/factory.py` 改用当前 `tts.fallback_*` 字段，避免旧 `provider/voice` 字段被移除后潜在崩溃。
+- **文档同步**：安装、配置、外部服务文档同步说明“一把硅基流动 key”的真实自动复用规则，并移除旧视觉模型推荐。
+
+### 验证
+- `python -m pytest tests/unit/test_cloud_config.py tests/unit/test_batch9_media_tools.py tests/unit/test_setup_wizard.py tests/unit/test_project_structure.py`
+- `python -m pytest tests/unit/test_config_unify.py tests/unit/test_settings_api.py tests/unit/test_settings_di.py`
 
 ---
 

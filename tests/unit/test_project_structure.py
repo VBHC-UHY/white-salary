@@ -97,6 +97,7 @@ class TestDirectoryStructure:
         config_models = (
             PROJECT_ROOT / "src" / "white_salary" / "infrastructure" / "config" / "models.py"
         ).read_text(encoding="utf-8")
+        conf_default = (PROJECT_ROOT / "conf.default.yaml").read_text(encoding="utf-8")
         frontend_pkg = json.loads((PROJECT_ROOT / "frontend" / "package.json").read_text(
             encoding="utf-8"
         ))
@@ -104,6 +105,7 @@ class TestDirectoryStructure:
         version = re.search(r'^version = "([^"]+)"', pyproject, re.MULTILINE).group(1)
         assert f'__version__ = "{version}"' in init_py
         assert f'default="{version}"' in config_models
+        assert f'version: "{version}"' in conf_default
         assert frontend_pkg["version"] == version
 
     def test_pyproject_optional_dependency_groups_cover_feature_imports(self) -> None:

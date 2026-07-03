@@ -21,7 +21,7 @@
 | `llm_tool` | 工具判断 | Function Calling 决策（要不要调工具） | 工具能力受限 / 关闭 |
 | `llm_memory` | 记忆分析 | 从对话里提取值得记住的信息 | 长期记忆提取、用户画像学习不工作 |
 | `llm_emotion` | 情感分析 | 理解情绪、调语气 | 走关键词兜底，LLM 情感分析关闭 |
-| `llm_vision` | 视觉理解 | 看图 / 看屏幕（多模态） | 图片理解、截屏识别不可用 |
+| `llm_vision` | 视觉理解 | 看图 / 看屏幕（多模态） | 若主 `llm` 是硅基流动会自动复用 key；否则图片理解、截屏识别不可用 |
 | `llm_postprocess` | 后处理 | 配文、快速辅助杂活 | 相应辅助功能降级 |
 | `llm_detect` | 检测防护 | 安全检测、话题追踪、风格记忆 | 相应检测降级 |
 | `llm_background` | 后台任务 | 不紧急的后台任务、自动聊天 | 后台任务降级 |
@@ -49,7 +49,7 @@ llm:
 ```yaml
 system:
   name: "White Salary"    # 项目名（别改）
-  version: "0.1.3"
+  version: "0.1.4"
   debug: false            # true=更多日志
   log_level: "INFO"       # DEBUG / INFO / WARNING / ERROR
 

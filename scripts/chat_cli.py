@@ -30,14 +30,14 @@ from white_salary.core.personality.character import PersonalityManager
 def _load_siliconflow_key() -> str:
     """从项目 conf.yaml 里找一把 siliconflow 的 api_key（找不到返回空串）。"""
     try:
-        import yaml
-        conf = yaml.safe_load(
-            (Path(__file__).parent.parent / "conf.yaml").read_text(encoding="utf-8")
-        ) or {}
-        for section in ("llm_vision", "llm_postprocess", "llm"):
-            role = conf.get(section) or {}
-            if "siliconflow" in str(role.get("provider", "")).lower() and role.get("api_key"):
-                return str(role["api_key"])
+        from white_salary.adapters.tools.cloud_config import (
+            load_cloud_config,
+            resolve_siliconflow_api_key,
+        )
+
+        return resolve_siliconflow_api_key(
+            load_cloud_config(Path(__file__).parent.parent)
+        )
     except Exception:
         pass
     return ""

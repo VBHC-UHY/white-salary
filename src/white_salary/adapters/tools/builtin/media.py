@@ -9,15 +9,9 @@ async def generate_image(prompt: str = "", send_qq: str = "false") -> str:
         return "请描述想要的图片"
     from white_salary.adapters.tools.image_gen import generate_image as _gen
     try:
-        import yaml
-        from pathlib import Path
-        # 2026-07-03 审计修复（批5）：conf.yaml 改为从模块位置推导项目根的绝对路径，
-        # 不再依赖 CWD（此前从其它工作目录启动会静默拿空配置，
-        # 依据 docs/audit-2026-07-02/config-audit.json）
-        _project_root = Path(__file__).resolve().parents[5]
-        conf = yaml.safe_load((_project_root / "conf.yaml").read_text(encoding="utf-8")) or {}
-        sf_key = conf.get("llm_vision", {}).get("api_key", "")
-        dmx_key = conf.get("llm", {}).get("api_key", "")
+        from white_salary.adapters.tools.cloud_config import resolve_image_generation_keys
+
+        sf_key, dmx_key = resolve_image_generation_keys()
     except Exception:
         sf_key, dmx_key = "", ""
 
@@ -27,7 +21,8 @@ async def generate_image(prompt: str = "", send_qq: str = "false") -> str:
         # 给明确中文提示，指向配置文档，不静默返回含糊的"失败了"
         return (
             "生图失败：需要配置本地 ComfyUI（进阶）或云端 DMXAPI / 硅基流动 API key。"
-            "云端 key 在控制面板的「AI生成」页或 conf.yaml（llm 节=DMXAPI、llm_vision 节=硅基流动）设置，"
+            "如果主 LLM 用的是硅基流动，生图会自动复用这把 key；"
+            "否则请在控制面板或 conf.yaml 的 llm_vision/DMXAPI 通道补 key，"
             "本地 ComfyUI 路径在 conf.yaml 的 external_tools 节，详见 docs/EXTERNAL_SERVICES.md"
         )
 
@@ -91,16 +86,19 @@ def _get_vision_adapter():
     except Exception:
         pass  # 注册表模块导入失败不致命，走现场构造
 
-    # 路径2：按 conf.yaml llm_vision 配置现场构造
+    # 路径2：按合并后的 llm_vision 配置现场构造；llm_vision 未填 key 时，
+    # 允许复用主 llm/其它角色里已经配置的 SiliconFlow key。
     try:
-        import yaml
-        conf = yaml.safe_load(
-            (_project_root_path() / "conf.yaml").read_text(encoding="utf-8")
-        ) or {}
-        vision_conf = conf.get("llm_vision") or {}
-        api_key = str(vision_conf.get("api_key") or "")
-        base_url = str(vision_conf.get("base_url") or "")
-        model = str(vision_conf.get("model") or "")
+        from white_salary.adapters.tools.cloud_config import (
+            load_cloud_config,
+            resolve_vision_channel,
+        )
+
+        config = load_cloud_config(_project_root_path())
+        vision_conf = resolve_vision_channel(config)
+        api_key = vision_conf.api_key
+        base_url = vision_conf.base_url
+        model = vision_conf.model
         if not (api_key and base_url and model):
             raise ValueError("llm_vision 配置不完整（缺 api_key/base_url/model）")
         from white_salary.adapters.vision.multimodal_adapter import MultimodalVisionAdapter
@@ -108,8 +106,8 @@ def _get_vision_adapter():
     except Exception as e:
         return None, (
             f"看图失败：视觉模型未就绪（{e}）。"
-            "请在 conf.yaml 的 llm_vision 节配置 api_key/base_url/model"
-            "（多模态视觉模型，如硅基流动的 Qwen/Qwen3-VL-8B-Instruct），"
+            "请在 conf.yaml 的 llm_vision 节配置 api_key/base_url/model，"
+            "或让主 llm 通道使用硅基流动 key（会自动复用到看图）。"
             "详见 docs/EXTERNAL_SERVICES.md"
         )
 

@@ -5,9 +5,11 @@ TTS factory - creates the appropriate TTS adapter based on config.
 
 Strategy:
   1. Try local GPT-SoVITS first (best quality)
-  2. Fall back to SiliconFlow API (always available)
-  3. Last resort: Edge TTS (free, no API key needed)
+  2. Fall back to SiliconFlow API if a key is available
 """
+
+import socket
+from urllib.parse import urlparse
 
 from loguru import logger
 
@@ -25,31 +27,45 @@ def create_tts(config: TTSConfig) -> TTSInterface:
     Returns:
         A TTSInterface implementation
     """
-    provider = config.provider.lower()
+    parsed = urlparse(config.local_api_url)
+    host = parsed.hostname or "127.0.0.1"
+    port = parsed.port or 9880
 
-    if provider == "gpt_sovits":
+    local_available = False
+    try:
+        sock = socket.create_connection((host, port), timeout=2)
+        sock.close()
+        local_available = True
+    except (ConnectionRefusedError, OSError, socket.timeout):
+        local_available = False
+
+    if local_available:
         from white_salary.adapters.tts.gpt_sovits_adapter import GPTSoVITSAdapter
 
         logger.info("[TTS] Using local GPT-SoVITS")
         return GPTSoVITSAdapter(
-            api_url="http://127.0.0.1:9880",
-            ref_audio_path=config.voice,  # reuse voice field for ref audio path
+            api_url=config.local_api_url,
+            ref_audio_path=config.ref_audio,
+            ref_text=config.ref_text,
+            speed=config.speed,
         )
 
-    elif provider == "siliconflow":
+    provider = config.fallback_provider.lower()
+    if provider == "siliconflow":
         from white_salary.adapters.tts.siliconflow_adapter import SiliconFlowTTSAdapter
+        from white_salary.adapters.tools.cloud_config import resolve_siliconflow_api_key
 
         logger.info("[TTS] Using SiliconFlow CosyVoice2")
-        # Default SiliconFlow TTS config from WhiteSalary-v2 1.9
+        api_key = resolve_siliconflow_api_key(explicit=config.fallback_api_key)
+        if not api_key:
+            raise ValueError(
+                "TTS fallback API key is missing. Configure tts.fallback_api_key "
+                "or a SiliconFlow key in llm/llm_vision."
+            )
         return SiliconFlowTTSAdapter(
-            api_key="",
-            model="FunAudioLLM/CosyVoice2-0.5B",
-            voice=config.voice or "FunAudioLLM/CosyVoice2-0.5B:anna",
+            api_key=api_key,
+            model=config.fallback_model,
+            voice=config.fallback_voice,
         )
 
-    elif provider == "edge_tts":
-        # Edge TTS will be implemented later as final fallback
-        raise NotImplementedError("Edge TTS adapter not yet implemented")
-
-    else:
-        raise ValueError(f"Unknown TTS provider: {provider}")
+    raise ValueError(f"Unknown TTS fallback provider: {provider}")

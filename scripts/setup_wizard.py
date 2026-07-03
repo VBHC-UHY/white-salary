@@ -251,7 +251,7 @@ def write_key_to_conf(conf_path: Path, provider_id: str, api_key: str) -> dict[s
     vision_filled = False
     if provider_id == "siliconflow":
         # 同一把硅基流动 key 填进视觉通道（模板里 llm_vision 默认就是硅基流动的
-        # GLM-4.1V 看图模型），这样"发图给白看"零额外配置就能用；
+        # Qwen3-VL 看图模型），这样"发图给白看"零额外配置就能用；
         # 语音（ASR/TTS）留空密钥时会自动扫到这把 key，也一并通了。
         text = set_yaml_scalar(text, "llm_vision", "api_key", api_key)
         vision_filled = True

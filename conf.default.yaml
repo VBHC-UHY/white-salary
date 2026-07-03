@@ -13,7 +13,7 @@ system:
   # 项目名称（不要改）
   name: "White Salary"
   # 版本号
-  version: "0.1.0"
+  version: "0.1.4"
   # 调试模式（true=输出更多日志，false=正常模式）
   debug: false
   # 日志级别：DEBUG / INFO / WARNING / ERROR

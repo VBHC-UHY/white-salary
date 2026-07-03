@@ -39,7 +39,7 @@ llm:
 llm_vision:
   provider: "siliconflow"
   api_key: ""
-  model: "THUDM/GLM-4.1V-9B-Thinking"
+  model: "Qwen/Qwen3-VL-8B-Instruct"
   base_url: "https://api.siliconflow.cn/v1"
 
 server:
@@ -168,7 +168,7 @@ class TestWriteKeyToConf:
         # 同一把硅基流动 key 让"看图"直接可用
         assert parsed["llm_vision"]["api_key"] == "sk-sf-123"
         # llm_vision 的看图模型不能被主对话模型覆盖
-        assert parsed["llm_vision"]["model"] == "THUDM/GLM-4.1V-9B-Thinking"
+        assert parsed["llm_vision"]["model"] == "Qwen/Qwen3-VL-8B-Instruct"
         assert summary["vision_filled"] == "yes"
 
     def test_deepseek_does_not_touch_vision(self, fake_project: Path):

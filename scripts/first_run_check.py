@@ -153,6 +153,14 @@ def check_conf() -> bool:
 
 def _report_role_llms(conf: dict) -> None:
     """附带报告 7 个分角色 LLM 填了几个（不影响主聊天，仅提示增强度）。"""
+    llm = conf.get("llm") or {}
+    main_is_siliconflow = bool(
+        str(llm.get("api_key") or "").strip()
+        and (
+            "siliconflow" in str(llm.get("provider") or "").lower()
+            or "siliconflow.cn" in str(llm.get("base_url") or "").lower()
+        )
+    )
     roles = [
         ("llm_tool", "工具判断"),
         ("llm_memory", "记忆分析"),
@@ -167,11 +175,19 @@ def _report_role_llms(conf: dict) -> None:
     if len(filled) == len(roles):
         ok(f"7 个分角色 LLM 全部已配置（记忆/情感/看图等增强功能可用）。")
     elif filled:
-        warn(f"分角色 LLM 已配 {len(filled)}/{len(roles)}（已配：{'、'.join(filled)}）。"
-             f"未配的角色对应功能会降级，不影响主聊天。")
+        suffix = (
+            "主 LLM 是硅基流动时，看图/语音/生图云端兜底会自动复用主 key。"
+            if main_is_siliconflow else
+            "未配的角色对应功能会降级，不影响主聊天。"
+        )
+        warn(f"分角色 LLM 已配 {len(filled)}/{len(roles)}（已配：{'、'.join(filled)}）。{suffix}")
     else:
-        warn("7 个分角色 LLM 都没配——记忆提取/情感分析/看图等增强功能会关闭，"
-             "但桌面主聊天正常。想全开可逐个填，见 docs/CONFIG.md。")
+        if main_is_siliconflow:
+            warn("7 个分角色 LLM 都没配——记忆提取/情感分析等增强功能会关闭，"
+                 "但看图/语音/生图云端兜底会自动复用主硅基 key，桌面主聊天正常。")
+        else:
+            warn("7 个分角色 LLM 都没配——记忆提取/情感分析/看图等增强功能会关闭，"
+                 "但桌面主聊天正常。想全开可逐个填，见 docs/CONFIG.md。")
 
 
 def check_dependencies() -> bool:

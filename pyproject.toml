@@ -7,7 +7,7 @@
 
 [project]
 name = "white-salary"
-version = "0.1.3"
+version = "0.1.4"
 description = "White Salary - 超强AI智能体，对标Neuro-sama级别的AI VTuber"
 readme = "README.md"
 license = { text = "MIT" }

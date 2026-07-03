@@ -257,7 +257,7 @@
                 </div>
                 <div class="section">
                     <h3>⑤ 视觉理解模型（Vision LLM）</h3>
-                    <p style="color:#4a5568;font-size:12px;margin-bottom:12px;">看图/看屏幕，需要多模态能力，推荐 GLM-4.1V</p>
+                    <p style="color:#4a5568;font-size:12px;margin-bottom:12px;">看图/看屏幕，需要多模态能力，推荐 Qwen3-VL；主 LLM 使用硅基流动时可自动复用同一把 key</p>
                     <div class="form-group">
                         <label>供应商</label>
                         <select id="llm-vision-provider"><option value="">请选择供应商</option></select>
@@ -273,7 +273,7 @@
                     </div>
                     <div class="form-group">
                         <label>模型名称</label>
-                        <input type="text" id="llm-vision-model" placeholder="THUDM/GLM-4.1V-9B-Thinking">
+                        <input type="text" id="llm-vision-model" placeholder="Qwen/Qwen3-VL-8B-Instruct">
                     </div>
                     <div class="form-group">
                         <button class="btn-small" onclick="testLLMChannel('llm_vision')">测试连通</button>

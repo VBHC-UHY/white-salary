@@ -26,7 +26,7 @@ class SystemConfig(BaseModel):
     控制项目名称、版本、调试模式等全局设置。
     """
     name: str = Field(default="White Salary", description="项目名称")
-    version: str = Field(default="0.1.3", description="版本号")
+    version: str = Field(default="0.1.4", description="版本号")
     debug: bool = Field(default=False, description="是否开启调试模式")
     log_level: str = Field(default="INFO", description="日志级别: DEBUG/INFO/WARNING/ERROR")
 

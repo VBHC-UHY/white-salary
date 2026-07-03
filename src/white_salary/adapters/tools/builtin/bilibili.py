@@ -205,17 +205,14 @@ async def watch_video(url: str = "") -> str:
             # 6. 用vision_llm识别画面
             try:
                 from white_salary.adapters.vision.multimodal_adapter import MultimodalVisionAdapter
-                import yaml
-                from pathlib import Path
-                # 2026-07-03 审计修复（批5）：conf.yaml 改为项目根绝对路径，不依赖 CWD
-                _project_root = Path(__file__).resolve().parents[5]
-                conf = yaml.safe_load((_project_root / "conf.yaml").read_text(encoding="utf-8"))
-                vision_cfg = conf.get("llm_vision", {})
-                if vision_cfg.get("api_key"):
+                from white_salary.adapters.tools.cloud_config import resolve_vision_channel
+
+                vision_cfg = resolve_vision_channel()
+                if vision_cfg.configured:
                     adapter = MultimodalVisionAdapter(
-                        api_key=vision_cfg["api_key"],
-                        model=vision_cfg.get("model", ""),
-                        base_url=vision_cfg.get("base_url", ""),
+                        api_key=vision_cfg.api_key,
+                        model=vision_cfg.model,
+                        base_url=vision_cfg.base_url,
                     )
                     screen_desc = await adapter.describe_image(
                         img_b64,

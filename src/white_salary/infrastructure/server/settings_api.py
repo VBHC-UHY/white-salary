@@ -597,11 +597,14 @@ def create_settings_router(
         # 视觉系统状态
         vision_enabled = False
         try:
-            import yaml as _vy
-            with open(project_root / "conf.yaml", encoding="utf-8") as _cf:
-                _vc = _vy.safe_load(_cf) or {}
-            _vlm = _vc.get("llm_vision", {})
-            vision_enabled = bool(_vlm.get("api_key") and _vlm.get("model"))
+            from white_salary.adapters.tools.cloud_config import (
+                load_cloud_config,
+                resolve_vision_channel,
+            )
+
+            vision_enabled = resolve_vision_channel(
+                load_cloud_config(project_root)
+            ).configured
         except Exception as e:
             logger.warning(f"[Status] 读取视觉配置失败: {e}")
 
@@ -2750,10 +2753,13 @@ def create_settings_router(
         quality = body.get("quality", "fast")
         provider = body.get("provider", "auto")  # auto/comfyui/dmxapi/siliconflow
         try:
-            import yaml
-            conf = yaml.safe_load(open(str(project_root / "conf.yaml"), encoding="utf-8")) or {}
-            sf_key = conf.get("llm_vision", {}).get("api_key", "")
-            dmx_key = conf.get("llm", {}).get("api_key", "")
+            from white_salary.adapters.tools.cloud_config import (
+                load_cloud_config,
+                resolve_image_generation_keys,
+            )
+
+            cloud_config = load_cloud_config(project_root)
+            sf_key, dmx_key = resolve_image_generation_keys(cloud_config)
 
             path = None
             if provider == "auto":
@@ -2879,9 +2885,12 @@ def create_settings_router(
         mode = body.get("mode", "auto")  # auto/cloud/local_wan22/local_svd
         size = body.get("size", "1280x720")
         try:
-            import yaml
-            conf = yaml.safe_load(open(str(project_root / "conf.yaml"), encoding="utf-8")) or {}
-            sf_key = conf.get("llm_vision", {}).get("api_key", "")
+            from white_salary.adapters.tools.cloud_config import (
+                load_cloud_config,
+                resolve_siliconflow_api_key,
+            )
+
+            sf_key = resolve_siliconflow_api_key(load_cloud_config(project_root))
             path = None
 
             if mode in ("auto", "cloud"):

@@ -280,22 +280,15 @@ async def smart_click(element_description: str) -> str:
     # 2. 调视觉模型定位元素
     try:
         from white_salary.adapters.vision.multimodal_adapter import MultimodalVisionAdapter
-        import yaml
-        from pathlib import Path
+        from white_salary.adapters.tools.cloud_config import resolve_vision_channel
 
-        # 2026-07-03 审计修复（批5）：conf.yaml 改为从模块位置推导项目根的绝对路径，
-        # 不再依赖 CWD（此前从其它工作目录启动会静默拿空配置，
-        # 依据 docs/audit-2026-07-02/config-audit.json）
-        # 本文件位于 src/white_salary/adapters/tools/，项目根 = parents[4]
-        _project_root = Path(__file__).resolve().parents[4]
-        conf = yaml.safe_load((_project_root / "conf.yaml").read_text(encoding="utf-8")) or {}
-        vc = conf.get("llm_vision", {})
-        if not vc.get("api_key"):
+        vc = resolve_vision_channel()
+        if not vc.configured:
             return f"[智能点击失败] 视觉模型未配置"
 
         vision = MultimodalVisionAdapter(
-            api_key=vc["api_key"], base_url=vc.get("base_url", ""),
-            model=vc["model"],
+            api_key=vc.api_key, base_url=vc.base_url,
+            model=vc.model,
         )
 
         prompt = (

@@ -159,7 +159,7 @@ llm:
   max_tokens: 2048
 ```
 
-**只要这一节填对，就能桌面文字聊天。** 其它 7 个分角色模型（`llm_tool` / `llm_memory` / `llm_emotion` / `llm_vision` / `llm_postprocess` / `llm_detect` / `llm_background`）留空时会有相应功能降级/关闭，但不影响主聊天。想让记忆提取、情感分析、看图等全都工作，再逐个填。各节含义见 [CONFIG.md](CONFIG.md)。
+**只要这一节填对，就能桌面文字聊天。** 如果主通道用的是硅基流动，这一把 key 会自动复用到看图、语音和生图/视频云端兜底；其它供应商则只保证主聊天。想让记忆提取、情感分析等高级通道更稳定，再逐个填 `llm_memory` / `llm_emotion` / `llm_background` 等分角色配置。各节含义见 [CONFIG.md](CONFIG.md)。
 
 > 支持的提供商：SiliconFlow、DeepSeek、NVIDIA、Moonshot(Kimi)、OpenRouter、DMXAPI、Ollama（本地）等一切 OpenAI 兼容接口。只要给对 `api_key` / `model` / `base_url` 三样即可。
 
@@ -282,7 +282,7 @@ set PYTHONPATH=src   &&  python -m pytest tests -q     # CMD
 | 搜索工具不工作 | 缺 `ddgs`，重装 `pip install -e .` |
 | 截图 / 看屏幕失败 | 缺 `Pillow` 或 `mss`，重装 `pip install -e .` |
 | 白不说话（无语音） | 本地 GPT-SoVITS 未启动且未配云端 TTS 兜底；见 6.1 |
-| 记忆提取 / 看图不工作 | 对应分角色 LLM（`llm_memory` / `llm_vision`）未填或模型已下架；见 [CONFIG.md](CONFIG.md) |
+| 记忆提取 / 看图不工作 | 记忆看 `llm_memory`；看图会优先用 `llm_vision`，为空时自动复用主 `llm` 的硅基流动 key。若仍不可用，检查模型是否下架或 key 是否有效；见 [CONFIG.md](CONFIG.md) |
 | QQ 收不到消息 | `qq.enabled`、`ws_url`、`token` 与 NapCat 配置不一致；见 6.2 |
 
 更多配置细节见 **[CONFIG.md](CONFIG.md)**。参与开发见 **[../CONTRIBUTING.md](../CONTRIBUTING.md)**。
