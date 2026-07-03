@@ -48,6 +48,30 @@ class TestDirectoryStructure:
         assert (PROJECT_ROOT / "conf.default.yaml").is_file()
         assert (PROJECT_ROOT / "conf.yaml").is_file()
 
+    def test_docker_files_keep_dependencies_and_secrets_separate(self) -> None:
+        """Docker 构建应走 pyproject 依赖，并排除本地隐私/大文件上下文。"""
+        dockerfile = (PROJECT_ROOT / "Dockerfile").read_text(encoding="utf-8")
+        dockerignore_path = PROJECT_ROOT / ".dockerignore"
+        dockerignore = dockerignore_path.read_text(encoding="utf-8")
+
+        assert dockerignore_path.is_file()
+        assert 'pip install --no-cache-dir -e ".[memory-vector]"' in dockerfile
+        assert "pip install --no-cache-dir fastapi uvicorn" not in dockerfile
+        assert "COPY pyproject.toml README.md ./" in dockerfile
+        assert "COPY src/ src/" in dockerfile
+
+        for required_ignore in [
+            ".git/",
+            ".venv/",
+            "conf.yaml",
+            "data/",
+            "logs/",
+            "NapCat/",
+            "frontend/node_modules/",
+            "prompts/system_prompt.txt",
+        ]:
+            assert required_ignore in dockerignore
+
     def test_pyproject_runtime_dependency_baseline(self) -> None:
         """uv sync should install the runtime LLM SDK without optional extras."""
         text = (PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8")

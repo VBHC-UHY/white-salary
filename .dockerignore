@@ -1,0 +1,77 @@
+# Docker build context ignores.
+# Keep the image build small and avoid sending local secrets/private runtime data.
+
+.git/
+.github/
+.claude/
+
+# Python / tooling caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Node / Electron dependencies
+frontend/node_modules/
+node_modules/
+
+# Local secrets and user-specific config
+conf.yaml
+scripts/providers.json
+config/github_config.json
+config/developers.json
+config/bili.ini
+config/qzone.ini
+config/*_cookie*
+config/*.local.*
+*.cookie
+*.cookies
+
+# Runtime data and logs
+data/
+logs/
+*.log
+
+# Third-party tools, login state, and large local assets
+NapCat/
+NapCat_OneKey/
+live2d_models/
+models/
+backups/
+prompts/backups/
+
+# Private persona / user-created prompt
+prompts/system_prompt.txt
+
+# Local media and generated artifacts
+assets/tts/*.wav
+assets/tts/*.mp3
+/*.mp3
+/*.wav
+test_tts_*.mp3
+test_ws_audio.mp3
+
+# Internal audit/planning documents not needed in the image
+PROJECT_PLAN.md
+PROJECT_PLAN.legacy-2026-04.md
+PROJECT_AUDIT_2026-07-02.md
+docs/PANEL_AUDIT_2026-07-03.md
+docs/audit-2026-07-02/
+docs/panel-audit-2026-07-03/
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
