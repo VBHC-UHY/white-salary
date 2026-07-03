@@ -20,9 +20,9 @@ from loguru import logger
 
 COSYVOICE_URL = "http://127.0.0.1:9881"
 # 2026-07-03 外部依赖优化（批8）：启动脚本路径改由 external_paths 统一解析
-# （环境变量 WS_COSYVOICE_BAT → conf.yaml external_tools.cosyvoice_bat → 内置默认值），
-# 不再在此写死；保留下方常量仅为向后兼容/内置默认参考，实际取用见 ensure_running()。
-COSYVOICE_BAT = Path("D:/AI_Tools/CosyVoice/start_cosyvoice.bat")
+# （环境变量 WS_COSYVOICE_BAT → conf.yaml external_tools.cosyvoice_bat）。
+# 不再在此写死；实际取用见 ensure_running()。
+COSYVOICE_BAT: Path | None = None
 
 _starting = False
 
@@ -53,7 +53,11 @@ async def ensure_running(timeout: int = 120) -> bool:
 
     # 2026-07-03 外部依赖优化（批8）：启动脚本路径统一解析（环境变量→配置→内置默认）
     from white_salary.adapters.tools.external_paths import get_cosyvoice_bat
-    cosyvoice_bat = get_cosyvoice_bat()
+    try:
+        cosyvoice_bat = get_cosyvoice_bat()
+    except FileNotFoundError as exc:
+        logger.debug(f"[CosyVoice2] {exc}")
+        return False
 
     if not cosyvoice_bat.exists():
         logger.debug(f"[CosyVoice2] 启动脚本不存在: {cosyvoice_bat}")

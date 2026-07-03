@@ -18,13 +18,16 @@ Output layers:
 
 import os
 import sys
+from pathlib import Path
 import cv2
 import numpy as np
 from PIL import Image, ImageDraw
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
 def main():
-    input_path = "D:/White Salary/frontend/assets/avatar.png"
-    output_dir = "D:/White Salary/live2d_models/generated"
+    input_path = PROJECT_ROOT / "frontend" / "assets" / "avatar.png"
+    output_dir = PROJECT_ROOT / "live2d_models" / "generated"
     os.makedirs(output_dir, exist_ok=True)
 
     print("=== White Salary Live2D Layer Generator ===")
@@ -150,7 +153,7 @@ def main():
 
     print(f"\n=== Done! {len(layers) + 1} layers saved to {output_dir} ===")
     print(f"\nNext steps:")
-    print(f"  1. Open Live2D Cubism Editor (D:\\L2D\\Live2D Cubism 5.3)")
+    print("  1. Open Live2D Cubism Editor from your installed location")
     print(f"  2. Import the layer PNGs as art meshes")
     print(f"  3. Use Auto Deformer + Auto Face Motion")
     print(f"  4. Export .moc3 model")

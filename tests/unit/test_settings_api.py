@@ -141,6 +141,113 @@ class TestSavePromptGuard:
         assert (root / "prompts" / "system_prompt.txt").read_text(encoding="utf-8") == "新的人设"
 
 
+def _set_prompt_file(root: Path, prompt_file: str) -> None:
+    cfg = yaml.safe_load((root / "conf.yaml").read_text(encoding="utf-8")) or {}
+    cfg["personality"] = {"system_prompt_file": prompt_file}
+    _write_yaml(root / "conf.yaml", cfg)
+
+
+SECTIONED_PROMPT = """【最高优先级 - 输出格式规则】
+格式规则
+【白 - 角色人设档案】
+【基本资料】
+基本资料
+【外貌特征 - 详细版】
+外貌
+【居住环境】
+居住
+【性格特点】
+性格
+【兴趣爱好】
+爱好
+【白的自述】
+故事
+【角色设定详解】
+详解
+【小白指定的绝对执行规则】
+规则
+【自主意識與家人互動規則】
+家人
+【主動搜索規則 - 不懂就上網查】
+搜索
+【禁止編造記憶 - 不記得就說不記得】
+记忆
+【理解表情包和圖片的意圖】
+图片
+【遭受攻擊時的反擊規則】
+反击
+"""
+
+
+class TestPromptFileResolution:
+    async def test_prompt_read_write_uses_configured_file(self, tmp_path: Path) -> None:
+        root = _make_project(tmp_path)
+        custom = root / "prompts" / "persona" / "main.txt"
+        default_prompt = root / "prompts" / "system_prompt.txt"
+        custom.parent.mkdir(parents=True)
+        custom.write_text("custom persona", encoding="utf-8")
+        default_prompt.parent.mkdir(parents=True, exist_ok=True)
+        default_prompt.write_text("default persona", encoding="utf-8")
+        _set_prompt_file(root, "prompts/persona/main.txt")
+
+        router = create_settings_router(root)
+        get_prompt = _endpoint(router, "/api/settings/prompt", "GET")
+        save_prompt = _endpoint(router, "/api/settings/prompt", "POST")
+
+        assert (await get_prompt())["prompt"] == "custom persona"
+        resp = await save_prompt({"prompt": "updated persona"})
+
+        assert resp["status"] == "ok"
+        assert custom.read_text(encoding="utf-8") == "updated persona"
+        assert default_prompt.read_text(encoding="utf-8") == "default persona"
+
+    async def test_prompt_sections_use_configured_file(self, tmp_path: Path) -> None:
+        root = _make_project(tmp_path)
+        custom = root / "prompts" / "persona" / "main.txt"
+        custom.parent.mkdir(parents=True)
+        custom.write_text(SECTIONED_PROMPT, encoding="utf-8")
+        _set_prompt_file(root, "prompts/persona/main.txt")
+
+        router = create_settings_router(root)
+        get_sections = _endpoint(router, "/api/settings/prompt/sections", "GET")
+        save_section = _endpoint(router, "/api/settings/prompt/sections/{section_name}", "PUT")
+
+        data = await get_sections()
+        assert data["prompt_path"] == str(Path("prompts") / "persona" / "main.txt")
+        assert data["sections"]["format_rules"].startswith("【最高优先级")
+        assert data["sections"]["basic_info"].startswith("【基本资料】")
+
+        resp = await save_section("personality", {"content": "【性格特点】\n新的性格"})
+        assert resp["status"] == "ok"
+        assert "新的性格" in custom.read_text(encoding="utf-8")
+
+    async def test_prompt_sections_missing_file_returns_clear_error(self, tmp_path: Path) -> None:
+        root = _make_project(tmp_path)
+        _set_prompt_file(root, "prompts/persona/missing.txt")
+
+        router = create_settings_router(root)
+        get_sections = _endpoint(router, "/api/settings/prompt/sections", "GET")
+
+        with pytest.raises(HTTPException) as exc_info:
+            await get_sections()
+
+        assert exc_info.value.status_code == 404
+        assert "人设文件不存在" in exc_info.value.detail
+
+    async def test_prompt_file_cannot_escape_project_root(self, tmp_path: Path) -> None:
+        root = _make_project(tmp_path)
+        _set_prompt_file(root, "../outside.txt")
+
+        router = create_settings_router(root)
+        get_prompt = _endpoint(router, "/api/settings/prompt", "GET")
+
+        with pytest.raises(HTTPException) as exc_info:
+            await get_prompt()
+
+        assert exc_info.value.status_code == 400
+        assert "personality.system_prompt_file" in exc_info.value.detail
+
+
 class TestGetStatusTTLCache:
     """GET /api/settings/status：10 秒内重复调用应命中同一份缓存结果。"""
 
@@ -159,6 +266,68 @@ class TestGetStatusTTLCache:
         for key in ("backend", "backend_pid", "tts_local", "qq_connected",
                     "memory_count", "conversation_count", "vision_enabled"):
             assert key in result1
+
+
+class TestStartTTSEndpoint:
+    """POST /api/settings/start-tts: local GPT-SoVITS launcher."""
+
+    async def test_start_tts_uses_configured_quoted_path(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        sovits = tmp_path / "GPT SoVITS"
+        (sovits / "venv_new" / "Scripts").mkdir(parents=True)
+        (sovits / "venv_new" / "Scripts" / "activate.bat").write_text(
+            "@echo off\n", encoding="utf-8"
+        )
+        (sovits / "api_v2.py").write_text("print('ok')\n", encoding="utf-8")
+
+        from white_salary.adapters.tools import external_paths as ep
+
+        monkeypatch.setattr(ep, "get_gpt_sovits_dir", lambda: sovits)
+        calls: dict[str, Any] = {}
+
+        class FakePopen:
+            pid = 1234
+
+            def __init__(self, cmd: str, **kwargs: Any) -> None:
+                calls["cmd"] = cmd
+                calls["kwargs"] = kwargs
+
+            def poll(self) -> None:
+                return None
+
+        monkeypatch.setattr(subprocess, "Popen", FakePopen)
+
+        router = create_settings_router(_make_project(tmp_path))
+        start_tts = _endpoint(router, "/api/settings/start-tts", "POST")
+        resp = await start_tts()
+
+        assert resp["status"] == "ok"
+        assert f'cd /d "{os.path.normpath(str(sovits))}"' in calls["cmd"]
+        assert 'call "venv_new\\Scripts\\activate.bat"' in calls["cmd"]
+        assert calls["kwargs"].get("shell") is True
+
+    async def test_start_tts_missing_install_returns_message(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from white_salary.adapters.tools import external_paths as ep
+
+        monkeypatch.setattr(ep, "get_gpt_sovits_dir", lambda: tmp_path / "missing")
+        called = {"popen": False}
+
+        def fake_popen(*args: Any, **kwargs: Any) -> object:
+            called["popen"] = True
+            return object()
+
+        monkeypatch.setattr(subprocess, "Popen", fake_popen)
+
+        router = create_settings_router(_make_project(tmp_path))
+        start_tts = _endpoint(router, "/api/settings/start-tts", "POST")
+        resp = await start_tts()
+
+        assert resp["success"] is False
+        assert "GPT-SoVITS" in resp["message"]
+        assert called["popen"] is False
 
 
 class TestRestartEndpoint:

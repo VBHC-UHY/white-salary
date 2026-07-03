@@ -27,7 +27,7 @@ try:
         RatelimitException,
         TimeoutException,
     )
-except ImportError:  # pragma: no cover — 运行环境（D:/mi）已安装 ddgs，这里仅为兜底
+except ImportError:  # pragma: no cover - ddgs is optional; keep imports safe
     class DDGSException(Exception):  # type: ignore[no-redef]
         """ddgs 未安装时的占位异常基类。"""
 

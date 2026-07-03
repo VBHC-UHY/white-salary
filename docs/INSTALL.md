@@ -24,7 +24,7 @@
 | 依赖 | 版本 | 说明 |
 |------|------|------|
 | 操作系统 | **Windows 10 / 11** | 启动脚本、端口清理、部分工具为 Windows 专用；其它平台可跑后端但未做适配 |
-| Python | **3.10+** | `pyproject.toml` 声明 `>=3.11`，但项目实测在 **3.10 上也能正常运行**（全量测试基线即在 3.10 环境通过）。建议有条件时用 3.11+ |
+| Python | **3.10+** | `pyproject.toml` 声明 `>=3.10`；建议有条件时用 3.11+ |
 | Node.js | **18+**（建议 LTS） | 前端 Electron 桌宠 |
 | Git | 任意 | 克隆仓库用 |
 
@@ -61,19 +61,20 @@ source .venv/Scripts/activate
 pip install -e .
 ```
 
-这会安装：FastAPI、Uvicorn、WebSocket、Pydantic、PyYAML、loguru、aiofiles、aiohttp、numpy，以及两个**运行时实际会用到、容易被漏掉**的库：
+这会安装：FastAPI、Uvicorn、WebSocket、Pydantic、PyYAML、loguru、aiofiles、aiohttp、numpy、OpenAI 兼容 SDK，以及几个**运行时实际会用到、容易被漏掉**的库：
 
+- **`openai`** —— 当前主 LLM 适配器使用 OpenAI 兼容 SDK 调各家兼容接口；`uv sync` / `pip install -e .` 默认会安装。
 - **`python-multipart`** —— 控制面板上传图片（multipart 表单）需要它，缺了图片上传会报错。
 - **`ddgs`** —— `web_search` 等搜索工具的后端（DuckDuckGo），缺了搜索工具不可用。
 
-> 这两个已经写进 `pyproject.toml` 的主依赖，`pip install -e .` 会自动装。若你是用旧的 `requirements` 方式手动装，务必补上。
+> 这些已经写进 `pyproject.toml` 的主依赖，`pip install -e .` / `uv sync` 会自动装。若你是用旧的 `requirements` 方式手动装，务必补上。
 
 ### 可选依赖分组（按需装）
 
 `pyproject.toml` 用 `optional-dependencies` 分了组，按需安装：
 
 ```bash
-pip install -e ".[llm-openai]"      # OpenAI SDK（用 openai 兼容接口时）
+pip install -e ".[llm-openai]"      # 兼容旧命令；OpenAI SDK 已在主依赖里默认安装
 pip install -e ".[llm-anthropic]"   # Anthropic Claude SDK
 pip install -e ".[asr-whisper]"     # 本地语音识别 faster-whisper
 pip install -e ".[memory-vector]"   # 长期记忆向量库 ChromaDB
@@ -82,7 +83,7 @@ pip install -e ".[all]"             # 一次装齐上面全部（体积较大）
 pip install -e ".[dev]"             # 开发工具：pytest / ruff / mypy / pre-commit
 ```
 
-> **注意**：项目的 LLM 适配器是"OpenAI 兼容"实现，通过 HTTP 直连各家 API，**大多数情况下不强制安装 `openai`/`anthropic` SDK** 也能聊天。上面这些 SDK 是为特定路径准备的，先跑起来再按需补。
+> **注意**：项目的 LLM 适配器是"OpenAI 兼容"实现，当前默认需要 `openai` SDK；它已经在主依赖中。`anthropic` SDK 仍只在需要官方 Anthropic 路径时按需安装。
 
 ---
 
@@ -152,7 +153,7 @@ Start.bat
 
 它会依次：清理旧端口 → （若本机有 GPT-SoVITS）拉起本地 TTS → 启动后端 → 检查/安装前端依赖 → 启动 Electron 桌宠。
 
-> **注意**：`Start.bat` 里的本地 TTS 步骤指向作者机器上的 `D:\AI_Tools\GPT-SoVITS`。如果你没装 GPT-SoVITS，这一步会等待后失败但**不影响后端与桌面**——白会自动用云端 TTS 或纯文字。想跳过等待，可用下面的分步启动只起后端 + 前端。
+> **注意**：`Start.bat` 会从 `WS_GPT_SOVITS_DIR` 或 `conf.yaml` 的 `external_tools.gpt_sovits_dir` 读取本地 GPT-SoVITS 路径。没装 GPT-SoVITS 时会直接跳过本地 TTS，白会自动用云端 TTS 或纯文字。
 
 ### 方式 B：分步启动（调试用）
 
@@ -185,7 +186,7 @@ cd frontend && npx electron .
 - **作用**：让白用本地声音说话（比云端更可控）。
 - **不装会怎样**：自动降级到云端 CosyVoice2（需在 `tts.fallback_*` 配 SiliconFlow 密钥）；两者都没有则只有文字，不影响聊天。
 - **装法**：单独安装 [GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS)，启动它的 `api_v2.py` 监听 `127.0.0.1:9880`。项目会在启动时探测该端口决定走本地还是云端。参考音频路径见 `tts.ref_audio`（默认 `assets/tts/ref_default.wav`）。
-- `Start.bat` 里 TTS 那一步的路径（`D:\AI_Tools\GPT-SoVITS`）是作者机器的，**改成你自己的路径**或删掉那段。
+- 本地 GPT-SoVITS 路径请填到 `conf.yaml` 的 `external_tools.gpt_sovits_dir`，或设置环境变量 `WS_GPT_SOVITS_DIR`。`Start.bat`、`Start-TTS*.bat` 和设置面板的“启动本地TTS”都会读取这个配置。
 - **训练白的专属声音**（一键 7 步流程）、参考音频放置、路径配置等详见 [LOCAL_ADVANCED.md](LOCAL_ADVANCED.md#2-gpt-sovits--本地语音克隆训练白的专属声音)。
 
 ### 6.2 QQ 机器人（NapCat）

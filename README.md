@@ -153,7 +153,7 @@ Python 3.10+ · FastAPI · Electron · Live2D · 六边形架构
 > 新手请直接用最上面的 [✨ 三步上手](#-三步上手完全新手照这个来)（双击 `安装.bat`）。
 > 本节是给想**手动控制每一步**的开发者的。完整说明见 **[docs/INSTALL.md](docs/INSTALL.md)**；配置项详解见 **[docs/CONFIG.md](docs/CONFIG.md)**。
 
-**环境要求**：Windows 10/11 · Python 3.10+（`pyproject` 声明 3.11+，实测 3.10 亦可）· Node.js 18+
+**环境要求**：Windows 10/11 · Python 3.10+（建议 3.11+）· Node.js 18+
 
 ```bash
 # 1. 装后端依赖（在项目根目录）

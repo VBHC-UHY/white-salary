@@ -28,10 +28,10 @@ class TestComfyUIPathEnvOverride:
             monkeypatch.delenv("WS_COMFYUI_BAT", raising=False)
             importlib.reload(comfyui_client)
 
-    def test_default_fallback(self, monkeypatch) -> None:
-        """不设环境变量时，回退到原来的默认路径（不破坏当前机器）。"""
+    def test_default_unconfigured(self, monkeypatch) -> None:
+        """No env override means ComfyUI auto-start remains unconfigured."""
         from white_salary.adapters.tools import comfyui_client
 
         monkeypatch.delenv("WS_COMFYUI_BAT", raising=False)
         importlib.reload(comfyui_client)
-        assert "ComfyUI_windows_portable" in str(comfyui_client.COMFYUI_BAT)
+        assert comfyui_client.COMFYUI_BAT is None

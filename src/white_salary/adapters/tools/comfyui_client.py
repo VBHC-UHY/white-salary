@@ -33,7 +33,7 @@ COMFYUI_URL = "http://127.0.0.1:8188"
 # WS_COMFYUI_BAT 行为与单测），但真正启动/复制文件时改调 external_paths.get_comfyui_bat()
 # ——它在环境变量之外又加了一层 conf.yaml external_tools 配置回退（解析顺序：
 # 环境变量 → 配置 → 内置默认值），便于换机器时不改源码。
-COMFYUI_BAT = Path(os.environ.get("WS_COMFYUI_BAT", "D:/cccccccccc/ComfyUI_windows_portable/run_nvidia_gpu.bat"))
+COMFYUI_BAT = Path(os.environ["WS_COMFYUI_BAT"]) if os.environ.get("WS_COMFYUI_BAT") else None
 
 # 防重复启动标记
 _starting = False
@@ -84,7 +84,11 @@ async def ensure_comfyui_running(timeout: int = 60) -> bool:
     # 2026-07-03 外部依赖优化（批8）：启动脚本路径改走统一解析（环境变量→配置→默认），
     # 换机器时改 conf.yaml external_tools.comfyui_bat 即可，无需改源码或设环境变量
     from white_salary.adapters.tools.external_paths import get_comfyui_bat
-    comfyui_bat = get_comfyui_bat()
+    try:
+        comfyui_bat = get_comfyui_bat()
+    except FileNotFoundError as exc:
+        logger.debug(f"[ComfyUI] {exc}")
+        return False
 
     # 检查启动脚本是否存在（提前检查，避免无意义等待）
     if not comfyui_bat.exists():
@@ -293,14 +297,15 @@ async def edit_image(
     # 2026-07-03 外部依赖优化（批8）：input 目录改走统一解析——优先用配置里显式的
     # comfyui_input（避免只配了 comfyui_bat 而 input 目录布局不同的情形），
     # 未配置时回退到"启动脚本同级 ComfyUI/input"（与旧行为一致）
-    from white_salary.adapters.tools.external_paths import get_comfyui_bat, get_comfyui_input, DEFAULT_COMFYUI_INPUT
-    _cfg_input = get_comfyui_input()
-    if str(_cfg_input) != DEFAULT_COMFYUI_INPUT:
-        # 用户/环境显式配置了 input 目录，直接采用
-        input_dir = _cfg_input
-    else:
-        # 未显式配置：沿用旧逻辑（启动脚本父目录下的 ComfyUI/input）
-        input_dir = get_comfyui_bat().parent / "ComfyUI" / "input"
+    from white_salary.adapters.tools.external_paths import get_comfyui_bat, get_comfyui_input
+    try:
+        input_dir = get_comfyui_input()
+    except FileNotFoundError:
+        try:
+            input_dir = get_comfyui_bat().parent / "ComfyUI" / "input"
+        except FileNotFoundError as exc:
+            logger.debug(f"[ComfyUI] input directory is not configured: {exc}")
+            return None
     input_dir.mkdir(parents=True, exist_ok=True)
     input_name = f"ws_edit_{int(time.time())}_{src_path.name}"
     dest_path = input_dir / input_name

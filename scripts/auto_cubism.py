@@ -14,14 +14,16 @@ import pyautogui
 import subprocess
 import time
 import os
+from pathlib import Path
 
 # Safety settings
 pyautogui.PAUSE = 0.5
 pyautogui.FAILSAFE = True  # Move mouse to corner to abort
 
-CUBISM_EXE = r"D:\L2D\Live2D Cubism 5.3\CubismEditor5.exe"
-TEXTURE_PATH = r"D:\White Salary\live2d_models\white_salary\texture_00.png"
-EXPORT_DIR = r"D:\White Salary\live2d_models\white_salary"
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+CUBISM_EXE = os.environ.get("WS_CUBISM_EXE", "").strip()
+TEXTURE_PATH = PROJECT_ROOT / "live2d_models" / "white_salary" / "texture_00.png"
+EXPORT_DIR = PROJECT_ROOT / "live2d_models" / "white_salary"
 
 def wait_for_window(title_part, timeout=30):
     """Wait for a window with given title to appear."""
@@ -45,8 +47,9 @@ def main():
 
     # Step 1: Launch Cubism Editor
     print("[1/7] Launching Cubism Editor...")
-    if not os.path.exists(CUBISM_EXE):
-        print(f"ERROR: Cubism not found at {CUBISM_EXE}")
+    if not CUBISM_EXE or not Path(CUBISM_EXE).exists():
+        print("ERROR: Cubism executable is not configured.")
+        print("Set WS_CUBISM_EXE to your CubismEditor5.exe path.")
         return
 
     subprocess.Popen([CUBISM_EXE])
@@ -92,7 +95,7 @@ def main():
     time.sleep(2)
 
     # If a file dialog opened, type the path
-    pyautogui.typewrite(TEXTURE_PATH.replace('\\', '/'), interval=0.02)
+    pyautogui.typewrite(str(TEXTURE_PATH).replace('\\', '/'), interval=0.02)
     time.sleep(1)
     pyautogui.press('enter')
     time.sleep(3)

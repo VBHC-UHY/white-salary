@@ -4,9 +4,11 @@ Supports resume from interrupted downloads.
 """
 import os
 import time
+from pathlib import Path
 os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "0"  # Use stable downloader
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 MAX_RETRIES = 50  # Enough retries to finish the full 56GB download
 RETRY_DELAY = 5   # Quick retry
 
@@ -60,7 +62,7 @@ def generate_layers(pipeline):
     print("Using CPU mode (model too large for GPU, will be slow but works)")
     # Already loaded on CPU by default
 
-    image = Image.open("D:/White Salary/frontend/assets/avatar.png").convert("RGBA")
+    image = Image.open(PROJECT_ROOT / "frontend" / "assets" / "avatar.png").convert("RGBA")
     print(f"Input image: {image.size}")
 
     inputs = {
@@ -81,10 +83,10 @@ def generate_layers(pipeline):
         output = pipeline(**inputs)
         output_images = output.images[0]
 
-    output_dir = "D:/White Salary/live2d_models/generated"
+    output_dir = PROJECT_ROOT / "live2d_models" / "generated"
     os.makedirs(output_dir, exist_ok=True)
     for i, img in enumerate(output_images):
-        path = os.path.join(output_dir, f"layer_{i}.png")
+        path = output_dir / f"layer_{i}.png"
         img.save(path)
         print(f"  Saved layer_{i}.png ({img.size})")
 

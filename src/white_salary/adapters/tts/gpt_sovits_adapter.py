@@ -7,8 +7,8 @@ Calls the local GPT-SoVITS API (api_v2.py running on port 9880)
 for highest quality voice synthesis with a custom-trained voice model.
 
 This adapter requires:
-  1. GPT-SoVITS installed locally. The default install directory is
-     D:/AI_Tools/GPT-SoVITS, but it is configurable — see
+  1. GPT-SoVITS installed locally if you want local TTS. Configure it via
+     conf.yaml or the WS_GPT_SOVITS_DIR environment variable; see
      conf.yaml `external_tools.gpt_sovits_dir` (resolved via
      adapters/tools/external_paths.get_gpt_sovits_dir()). This adapter itself
      only needs the API URL; the directory is used by settings_api's
@@ -18,8 +18,8 @@ This adapter requires:
 
 The voice model needs to be RETRAINED (the old jiaran model is broken).
 
-2026-07-03 外部依赖优化（批8）：安装目录说明改为指向可配置项
-（external_tools.gpt_sovits_dir），不再把 D:/AI_Tools/GPT-SoVITS 当作唯一硬编码路径。
+2026-07-03: install directory is configuration-only, not an author-machine
+absolute path.
 """
 
 import aiohttp

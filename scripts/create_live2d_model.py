@@ -8,14 +8,17 @@ Layer naming follows Live2D Cubism conventions:
   - ArtMesh names must match template expectations
 """
 import os
+from pathlib import Path
 from PIL import Image
 from psd_tools import PSDImage
 from psd_tools.api.layers import PixelLayer
 import struct
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
 def create_combined_psd():
     """Create a PSD with all character layers for Cubism import."""
-    output_dir = "D:/White Salary/live2d_models/generated"
+    output_dir = PROJECT_ROOT / "live2d_models" / "generated"
     psd_path = os.path.join(output_dir, "white_salary_character.psd")
 
     print("=== Creating Live2D PSD ===")
@@ -45,7 +48,7 @@ def create_combined_psd():
     # 4. Use Auto Face Motion for expressions
 
     # Create the model directory structure
-    model_dir = "D:/White Salary/live2d_models/white_salary"
+    model_dir = PROJECT_ROOT / "live2d_models" / "white_salary"
     os.makedirs(model_dir, exist_ok=True)
 
     # Copy the full character as the main texture
@@ -79,7 +82,7 @@ def create_combined_psd():
 
     print(f"\n=== Model files saved to {model_dir} ===")
     print(f"\nTo create Live2D model:")
-    print(f"  1. Open Live2D Cubism Editor (D:\\L2D\\Live2D Cubism 5.3)")
+    print("  1. Open Live2D Cubism Editor from your installed location")
     print(f"  2. File > New Model")
     print(f"  3. Drag texture_00.png onto the canvas")
     print(f"  4. Edit > Auto Generate Mesh")
@@ -88,7 +91,7 @@ def create_combined_psd():
     print(f"  7. Physics > Add Hair/Accessory Physics")
     print(f"  8. File > Export for Runtime (.moc3)")
     print(f"  9. Copy .moc3 + .model3.json + textures to:")
-    print(f"     D:\\White Salary\\live2d_models\\default\\")
+    print(f"     {PROJECT_ROOT / 'live2d_models' / 'default'}")
 
     return model_dir
 

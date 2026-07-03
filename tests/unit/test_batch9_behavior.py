@@ -598,6 +598,16 @@ class StreamMainLLM(LLMInterface):
         return "；".join(r.content for r in tool_results)
 
 
+class EmptyToolResultMainLLM(StreamMainLLM):
+    """Main LLM stub that simulates an empty post-tool reply."""
+
+    async def process_tool_results(
+        self, messages: list[Message], tool_results: list[ToolResult],
+        temperature: float = 0.7, max_tokens: int = 2048,
+    ) -> str:
+        return "   "
+
+
 class HintFakeRegistry:
     """注册表桩：声明 set_reminder / recall_conversation 存在，记录执行。"""
 
@@ -683,3 +693,25 @@ class TestHintInjection:
         assert len(recall_calls) >= 1
         assert recall_calls[0][1].get("keyword") == "周末计划"
         assert tool_llm.calls == 0
+
+    async def test_empty_tool_postprocess_falls_back_to_tool_result(self) -> None:
+        """If the main model returns empty text after a tool call, do not emit silence."""
+        registry = HintFakeRegistry()
+        tool_llm = RecordingToolLLM([
+            ToolCall(id="call_1", name="set_reminder", arguments={}),
+        ])
+        agent = ChatAgent(
+            llm=EmptyToolResultMainLLM(),
+            personality=PersonalityManager(project_root=PROJECT_ROOT),
+            memory=ShortTermMemory(max_turns=20),
+            tool_registry=registry,  # type: ignore[arg-type]
+            tool_llm=tool_llm,
+        )
+
+        chunks = []
+        async for chunk in agent.chat_stream_with_tools("提醒我三点开会"):
+            chunks.append(chunk)
+
+        reply = "".join(chunks)
+        assert reply.strip()
+        assert "执行完成" in reply

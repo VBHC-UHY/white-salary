@@ -1940,12 +1940,26 @@ const SECTION_LABELS = {
 };
 
 async function loadPromptSections() {
+    const container = document.getElementById("prompt-sections-container");
     try {
+        if (container) {
+            container.innerHTML = '<div class="log-line">正在加载人设分区...</div>';
+        }
         const resp = await fetch(`${API_BASE}/api/settings/prompt/sections`);
-        const data = await resp.json();
-        const container = document.getElementById("prompt-sections-container");
+        let data = {};
+        try {
+            data = await resp.json();
+        } catch (jsonErr) {
+            data = {};
+        }
+        if (!resp.ok) {
+            const msg = data.detail || data.message || `HTTP ${resp.status}`;
+            container.innerHTML = `<div class="log-line">加载人设分区失败：${escapeHtml(msg)}</div>`;
+            return;
+        }
         if (!data.sections || Object.keys(data.sections).length === 0) {
-            container.innerHTML = '<div class="log-line">无法加载分区</div>';
+            const msg = data.message || "未识别到可分区编辑的人设标题，可使用下方完整编辑。";
+            container.innerHTML = `<div class="log-line">${escapeHtml(msg)}</div>`;
             return;
         }
         let html = "";
@@ -1963,6 +1977,9 @@ async function loadPromptSections() {
         container.innerHTML = html;
     } catch (e) {
         console.error("加载人设分区失败:", e);
+        if (container) {
+            container.innerHTML = `<div class="log-line">加载人设分区失败：${escapeHtml(e.message || String(e))}</div>`;
+        }
     }
 }
 
@@ -1976,14 +1993,14 @@ async function saveSection(sectionName) {
             body: JSON.stringify({content: textarea.value}),
         });
         const data = await resp.json();
-        if (data.status === "ok") {
+        if (resp.ok && data.status === "ok") {
             // 2026-07-03 面板升级（批6）：按后端响应展示"已热更新/重启生效"
             // （依据 panel-persona.json"分区编辑器"审计项：原提示未说明需重启）
             showHint(`「${SECTION_LABELS[sectionName] || sectionName}」${data.message || "已保存"}`);
             // 同步更新完整编辑框
             loadPrompt();
         } else {
-            showHint("保存失败: " + (data.detail || "未知错误"), true);
+            showHint("保存失败: " + (data.detail || data.message || "未知错误"), true);
         }
     } catch (e) {
         showHint("保存失败: " + e.message, true);
@@ -2805,7 +2822,7 @@ document.addEventListener("DOMContentLoaded", function() {
             }
             // 2026-07-03 面板升级（批6）：新增切tab动态加载——声音克隆状态卡、
             // 关于页动态信息、表情动作页映射/表情池（均为批6新端点）
-            if (tab === "voice_clone") loadVoiceCloneStatus();
+            if (tab === "voice_clone") { loadVoiceCloneStatus(); refreshVoiceTrainStatus(); }
             if (tab === "about") loadAbout();
             if (tab === "expressions") initExpressionMapping();
         });
@@ -2985,6 +3002,169 @@ async function loadVoiceCloneStatus() {
         `;
     } catch (e) {
         container.innerHTML = '<div class="about-row"><span>状态</span><span style="color:#e74c3c;">无法连接后端</span></div>';
+    }
+}
+
+// ============================================================
+// 2026-07-03 功能大项（批11二波）：声音一键训练
+// 面板"声音克隆"页触发 GPT-SoVITS 训练 + 每3秒轮询看进度。
+// 端点：POST /voice-clone/train、GET /voice-clone/train-status、
+//       POST /voice-clone/train-stop。
+// ============================================================
+
+// 训练进度轮询定时器句柄（切页/训练结束时清掉，避免重复轮询）
+let _voiceTrainPollTimer = null;
+
+/**
+ * 上传训练音频到临时目录，成功后把返回路径回填到路径输入框。
+ * 复用通用 POST /upload-temp（multipart）。
+ * @param {HTMLInputElement} input 文件选择框
+ */
+async function uploadTrainAudio(input) {
+    const hint = document.getElementById('vc-train-upload-hint');
+    const file = input.files && input.files[0];
+    if (!file) return;
+    if (hint) hint.textContent = '上传中...';
+    try {
+        const fd = new FormData();
+        fd.append('file', file);
+        const resp = await fetch(`${API_BASE}/api/settings/upload-temp`, {
+            method: 'POST',
+            body: fd,
+        });
+        const data = await resp.json();
+        if (data.success && data.path) {
+            const pathInput = document.getElementById('vc-train-audio');
+            if (pathInput) pathInput.value = data.path;
+            if (hint) hint.textContent = '✅ 已上传，可直接开始训练';
+        } else {
+            if (hint) hint.textContent = '❌ ' + (data.message || '上传失败');
+        }
+    } catch (e) {
+        if (hint) hint.textContent = '❌ 无法连接后端';
+    } finally {
+        input.value = '';  // 清空以便同名文件可再次触发 change
+    }
+}
+
+/**
+ * 点「开始训练」：调 POST /voice-clone/train 起训练进程。
+ * 成功后开始轮询进度；GPT-SoVITS 未装/防重复等情形按后端返回的中文提示展示。
+ */
+async function startVoiceTrain() {
+    const audioPath = (document.getElementById('vc-train-audio') || {}).value || '';
+    const resume = !!(document.getElementById('vc-train-resume') || {}).checked;
+    const statusEl = document.getElementById('vc-train-status');
+    const startBtn = document.getElementById('vc-train-start-btn');
+    if (!confirm('开始训练白的专属声音？\n这会占用显卡、耗时约几十分钟，期间白可以照常聊天。')) return;
+    if (startBtn) { startBtn.disabled = true; startBtn.textContent = '启动中...'; }
+    if (statusEl) statusEl.innerHTML = '<span style="color:#f59e0b;">正在启动训练...</span>';
+    try {
+        const resp = await fetch(`${API_BASE}/api/settings/voice-clone/train`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ audio_path: audioPath.trim(), resume }),
+        });
+        const data = await resp.json();
+        if (data.ok && data.started) {
+            if (statusEl) statusEl.innerHTML = `<span style="color:#27ae60;">✅ ${escapeHtml(data.message || '训练已开始')}</span>`;
+            _setVoiceTrainRunningUI(true);
+            _startVoiceTrainPolling();
+        } else {
+            // 未装 GPT-SoVITS / 正在训练中 / 音频不存在等：展示后端中文指引
+            if (statusEl) statusEl.innerHTML = `<span style="color:#e74c3c;">${escapeHtml(data.message || '启动失败')}</span>`;
+            // 若因"已在训练中"被拒，仍然进入运行态并轮询（接管已在跑的训练）
+            if (data.running) { _setVoiceTrainRunningUI(true); _startVoiceTrainPolling(); }
+            else { _setVoiceTrainRunningUI(false); }
+        }
+    } catch (e) {
+        if (statusEl) statusEl.innerHTML = '<span style="color:#e74c3c;">❌ 无法连接后端</span>';
+        _setVoiceTrainRunningUI(false);
+    }
+}
+
+/**
+ * 点「停止训练」：调 POST /voice-clone/train-stop 终止训练进程。
+ */
+async function stopVoiceTrain() {
+    if (!confirm('确定停止训练？已产出的中间结果会保留，下次可勾选「断点续跑」继续。')) return;
+    const statusEl = document.getElementById('vc-train-status');
+    try {
+        const resp = await fetch(`${API_BASE}/api/settings/voice-clone/train-stop`, { method: 'POST' });
+        const data = await resp.json();
+        if (statusEl) statusEl.innerHTML = `<span style="color:#7a8fa0;">${escapeHtml(data.message || '已请求停止')}</span>`;
+    } catch (e) {
+        if (statusEl) statusEl.innerHTML = '<span style="color:#e74c3c;">❌ 无法连接后端</span>';
+    }
+    // 停止后再拉一次状态刷新按钮态与日志
+    refreshVoiceTrainStatus();
+}
+
+/** 开始每3秒轮询训练状态（幂等：已在轮询则不重复起定时器）。 */
+function _startVoiceTrainPolling() {
+    if (_voiceTrainPollTimer) return;
+    _voiceTrainPollTimer = setInterval(refreshVoiceTrainStatus, 3000);
+}
+
+/** 停止轮询。 */
+function _stopVoiceTrainPolling() {
+    if (_voiceTrainPollTimer) {
+        clearInterval(_voiceTrainPollTimer);
+        _voiceTrainPollTimer = null;
+    }
+}
+
+/**
+ * 按运行态切换按钮/日志区可见性与禁用态。
+ * @param {boolean} running 是否训练进行中
+ */
+function _setVoiceTrainRunningUI(running) {
+    const startBtn = document.getElementById('vc-train-start-btn');
+    const stopBtn = document.getElementById('vc-train-stop-btn');
+    const logEl = document.getElementById('vc-train-log');
+    if (startBtn) {
+        startBtn.disabled = running;
+        startBtn.textContent = running ? '训练中…' : '开始训练';
+    }
+    if (stopBtn) stopBtn.style.display = running ? 'inline-block' : 'none';
+    if (logEl && running) logEl.style.display = 'block';
+}
+
+/**
+ * 拉一次训练状态：更新日志区、运行态按钮；训练结束时停轮询、提示完成并刷新音色状态卡。
+ */
+async function refreshVoiceTrainStatus() {
+    const logEl = document.getElementById('vc-train-log');
+    const statusEl = document.getElementById('vc-train-status');
+    try {
+        const resp = await fetch(`${API_BASE}/api/settings/voice-clone/train-status`);
+        const data = await resp.json();
+        const running = !!data.running;
+        _setVoiceTrainRunningUI(running);
+
+        // 渲染最近日志
+        const lines = Array.isArray(data.last_lines) ? data.last_lines : [];
+        if (logEl && lines.length) {
+            logEl.style.display = 'block';
+            logEl.innerHTML = lines
+                .map((l) => `<div class="log-line">${escapeHtml(l)}</div>`)
+                .join('');
+            logEl.scrollTop = logEl.scrollHeight;
+        }
+
+        if (running) {
+            _startVoiceTrainPolling();
+            if (statusEl) statusEl.innerHTML = '<span style="color:#f59e0b;">训练进行中…（期间白可正常聊天）</span>';
+        } else {
+            _stopVoiceTrainPolling();
+            if (data.done) {
+                // 训练结束：done=true（有日志文件且进程已结束）。刷新音色状态卡。
+                if (statusEl) statusEl.innerHTML = '<span style="color:#27ae60;">✅ 训练进程已结束。请查看日志末尾确认是否成功；若成功，白已用上专属声音（可重启本地TTS生效）。</span>';
+                loadVoiceCloneStatus();
+            }
+        }
+    } catch (e) {
+        // 后端不可达时静默（轮询下次再试），不打断用户
     }
 }
 

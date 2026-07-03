@@ -90,19 +90,12 @@ class TestDefaultsMatchHardcoded:
     """内置默认值黄金测试——必须逐字等于各文件历史硬编码值（防回归）。"""
 
     def test_default_constants(self) -> None:
-        assert ep.DEFAULT_COMFYUI_BAT == (
-            "D:/cccccccccc/ComfyUI_windows_portable/run_nvidia_gpu.bat"
-        )
-        assert ep.DEFAULT_COMFYUI_INPUT == (
-            "D:/cccccccccc/ComfyUI_windows_portable/ComfyUI/input"
-        )
-        assert ep.DEFAULT_GPT_SOVITS_DIR == "D:/AI_Tools/GPT-SoVITS"
-        assert ep.DEFAULT_COSYVOICE_BAT == "D:/AI_Tools/CosyVoice/start_cosyvoice.bat"
-        assert ep.DEFAULT_WAV2LIP_DIR == "D:/AI/Wav2Lip"
-        assert ep.DEFAULT_FFMPEG_PATHS == (
-            "D:/AI_Tools/ffmpeg-8.0.1-essentials_build/bin/ffmpeg.exe",
-            "D:/AI/ffmpeg/ffmpeg.exe",
-        )
+        assert ep.DEFAULT_COMFYUI_BAT == ""
+        assert ep.DEFAULT_COMFYUI_INPUT == ""
+        assert ep.DEFAULT_GPT_SOVITS_DIR == ""
+        assert ep.DEFAULT_COSYVOICE_BAT == ""
+        assert ep.DEFAULT_WAV2LIP_DIR == ""
+        assert ep.DEFAULT_FFMPEG_PATHS == ()
 
     def test_resolve_falls_back_to_default_when_unconfigured(
         self, monkeypatch: pytest.MonkeyPatch
@@ -117,11 +110,16 @@ class TestDefaultsMatchHardcoded:
         ep._cached_external_tools = None
         ep._load_attempted = True
 
-        assert str(ep.get_comfyui_bat()) == str(Path(ep.DEFAULT_COMFYUI_BAT))
-        assert str(ep.get_comfyui_input()) == str(Path(ep.DEFAULT_COMFYUI_INPUT))
-        assert str(ep.get_gpt_sovits_dir()) == str(Path(ep.DEFAULT_GPT_SOVITS_DIR))
-        assert str(ep.get_cosyvoice_bat()) == str(Path(ep.DEFAULT_COSYVOICE_BAT))
-        assert str(ep.get_wav2lip_dir()) == str(Path(ep.DEFAULT_WAV2LIP_DIR))
+        with pytest.raises(FileNotFoundError):
+            ep.get_comfyui_bat()
+        with pytest.raises(FileNotFoundError):
+            ep.get_comfyui_input()
+        with pytest.raises(FileNotFoundError):
+            ep.get_gpt_sovits_dir()
+        with pytest.raises(FileNotFoundError):
+            ep.get_cosyvoice_bat()
+        with pytest.raises(FileNotFoundError):
+            ep.get_wav2lip_dir()
 
 
 class _FakeExternalTools:
@@ -164,7 +162,8 @@ class TestResolutionPriority:
         monkeypatch.delenv("WS_WAV2LIP_DIR", raising=False)
         ep._cached_external_tools = _FakeExternalTools(wav2lip_dir="")
         ep._load_attempted = True
-        assert str(ep.get_wav2lip_dir()) == str(Path(ep.DEFAULT_WAV2LIP_DIR))
+        with pytest.raises(FileNotFoundError):
+            ep.get_wav2lip_dir()
 
     def test_empty_env_var_falls_through(
         self, monkeypatch: pytest.MonkeyPatch

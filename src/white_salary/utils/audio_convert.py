@@ -13,8 +13,8 @@ white_salary/utils/audio_convert.py
   2. convert_to_wav()      — 用 ffmpeg 子进程把 webm/ogg 等格式转成
                              16kHz 单声道 WAV 字节（stdin 进 stdout 出，不落盘）。
 
-ffmpeg 查找顺序：PATH 中的 ffmpeg → 项目已知的硬编码安装路径
-（与 adapters/tools/video_gen.py 的 _FFMPEG_PATHS 保持一致）→ 都找不到返回 None，
+ffmpeg 查找顺序：显式配置（WS_FFMPEG_PATH / external_tools.ffmpeg_path）→
+PATH 中的 ffmpeg → 都找不到返回 None，
 由调用方降级处理（按真实容器格式直接上传）。
 """
 
@@ -25,11 +25,8 @@ from typing import Optional
 
 from loguru import logger
 
-# 项目内已知的 ffmpeg 安装路径（与 adapters/tools/video_gen.py 一致，按新→旧优先）
-_KNOWN_FFMPEG_PATHS: list[Path] = [
-    Path("D:/AI_Tools/ffmpeg-8.0.1-essentials_build/bin/ffmpeg.exe"),
-    Path("D:/AI/ffmpeg/ffmpeg.exe"),
-]
+# 已移除作者机器的固定安装路径；保留空列表只兼容旧测试/调用结构。
+_KNOWN_FFMPEG_PATHS: list[Path] = []
 
 # ffmpeg 转码超时（秒）——语音消息一般几秒到几十秒，30 秒足够
 _FFMPEG_TIMEOUT_SECONDS: float = 30.0
@@ -69,10 +66,9 @@ def find_ffmpeg() -> Optional[str]:
     2026-07-03 外部依赖优化（批8）：在原有查找顺序之前先看"环境变量/配置显式指定"，
     使换机器时无需改源码即可指定 ffmpeg（云端为主、本地进阶可选的方向）：
         环境变量 WS_FFMPEG_PATH → conf.yaml external_tools.ffmpeg_path
-        → PATH 中的 ffmpeg → 项目已知的硬编码安装路径(_KNOWN_FFMPEG_PATHS)
+        → PATH 中的 ffmpeg
 
-    后两级顺序与旧版逐字一致（PATH 优先于硬编码路径），旧单测的 monkeypatch
-    仍对本函数生效（shutil / _KNOWN_FFMPEG_PATHS 均为本模块级引用），行为不变。
+    `_KNOWN_FFMPEG_PATHS` 现在默认为空，不再携带作者机器的固定路径。
 
     Returns:
         ffmpeg 的完整路径；找不到返回 None
@@ -141,7 +137,7 @@ async def convert_to_wav(
 
     ffmpeg = find_ffmpeg()
     if ffmpeg is None:
-        logger.warning("[AudioConvert] 找不到 ffmpeg（PATH 和已知路径均无），无法转码")
+        logger.warning("[AudioConvert] 找不到 ffmpeg（未配置且 PATH 中也没有），无法转码")
         return None
 
     try:

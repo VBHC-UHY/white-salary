@@ -408,6 +408,15 @@ class ChatAgent:
                         temperature=self._temperature,
                         max_tokens=self._max_tokens,
                     )
+                    final_reply = (final_reply or "").strip()
+                    if not final_reply:
+                        tool_summary = "; ".join(
+                            r.content.strip()[:200]
+                            for r in tool_results
+                            if r.content and r.content.strip()
+                        )
+                        final_reply = tool_summary or "操作完成了，但没有拿到可用结果。"
+                        logger.warning("[Agent] 工具结果后处理返回空回复，已降级为工具结果摘要")
                     parts = re.split(r'(?<=[。！？!?\n])', final_reply)
                     for part in parts:
                         if part:

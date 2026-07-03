@@ -12,10 +12,12 @@ import uuid
 import os
 import io
 import struct
+from pathlib import Path
 from PIL import Image
 
 COMFYUI_URL = "http://127.0.0.1:8188"
-TEXTURE_DIR = "D:/White Salary/live2d_models/default/hiyori_pro_mic.2048"
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+TEXTURE_DIR = PROJECT_ROOT / "live2d_models" / "default" / "hiyori_pro_mic.2048"
 
 def queue_prompt(prompt):
     """Send a prompt to ComfyUI and return the prompt_id."""

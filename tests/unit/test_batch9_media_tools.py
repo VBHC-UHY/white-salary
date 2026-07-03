@@ -133,6 +133,24 @@ class TestDescribeImage:
     async def test_empty_path_rejected(self) -> None:
         assert "请提供" in await media_mod.describe_image(image_path="")
 
+    async def test_screenshot_analyzes_captured_image(self, monkeypatch) -> None:
+        """screenshot should feed the captured image into the vision adapter."""
+        fake = FakeVisionAdapter(reply="屏幕上有一个聊天窗口")
+
+        async def fake_capture_screenshot():
+            return "ZmFrZQ=="
+
+        monkeypatch.setattr(
+            "white_salary.adapters.vision.screenshot.capture_screenshot",
+            fake_capture_screenshot,
+        )
+        monkeypatch.setattr(media_mod, "_get_vision_adapter", lambda: (fake, ""))
+
+        result = await media_mod.screenshot()
+
+        assert "屏幕上有一个聊天窗口" in result
+        assert fake.seen_base64 == ["ZmFrZQ=="]
+
 
 # ================================================================
 # 2. qq_send_file

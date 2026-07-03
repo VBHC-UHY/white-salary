@@ -199,6 +199,30 @@ qq:
   owner_name: ""
 
 # ---------------------------------------------------------------------------
+# B站直播弹幕互动（2026-07-03 功能大项 批11二波）
+# ---------------------------------------------------------------------------
+# 让白进驻你的B站直播间：读弹幕、（登录后）用她自己的人格发弹幕回复。
+# 【默认关闭】。开启方法：
+#   1. 把 enabled 改成 true，room_id 填你的直播间号
+#      （直播间URL live.bilibili.com/ 后面那串数字）。
+#   2. 想让白真的发弹幕回复，还要：把 reply_danmaku 改成 true，
+#      并先在控制面板里登录B站（扫码或从浏览器读取，凭证存到 config/bili.ini）。
+#      没登录时只能读弹幕、不能发送。
+# 依赖可选库 bilibili-api-python（pip install bilibili-api-python 或装 [all] 分组）；
+# 没装的话本节自动跳过，不影响其它功能。
+bilibili:
+  # 是否启用B站直播弹幕监听
+  enabled: false
+  # B站直播间号（0=未配置，不启动）
+  room_id: 0
+  # 是否发弹幕回复（false=只监听不发，最安全；true 需要先登录B站）
+  reply_danmaku: false
+  # 触发关键词：弹幕含任一关键词才回复。留空 = 只回复 @机器人 或提到机器人名字
+  # 的弹幕（强烈建议留空或只填几个词，防止逢弹幕必回被B站风控封号）。
+  # 例：["白", "小白", "问白"]
+  trigger_keywords: []
+
+# ---------------------------------------------------------------------------
 # 内容过滤配置
 # ---------------------------------------------------------------------------
 filter:
@@ -258,17 +282,16 @@ singing:
 # 留空 = 不覆盖，沿用环境变量或内置默认值——保持现有行为，老用户无需改动。
 # 进阶用户把本地工具装在别的位置时，改这里对应字段即可，无需改源码。
 external_tools:
-  # ComfyUI 启动脚本(.bat)。内置默认: D:/cccccccccc/ComfyUI_windows_portable/run_nvidia_gpu.bat
+  # ComfyUI 启动脚本(.bat)。空=不自动启动本地 ComfyUI；需要时填你的实际路径。
   comfyui_bat: ""
   # ComfyUI 的 input 目录（图生视频时把输入图复制进去）。
-  # 内置默认: D:/cccccccccc/ComfyUI_windows_portable/ComfyUI/input
+  # 空=不走本地 ComfyUI input 复制；需要时填你的实际路径。
   comfyui_input: ""
-  # GPT-SoVITS 安装目录（本地高质量TTS/声音克隆）。内置默认: D:/AI_Tools/GPT-SoVITS
+  # GPT-SoVITS 安装目录（本地高质量TTS/声音克隆）。空=不启动本地 GPT-SoVITS。
   gpt_sovits_dir: ""
-  # CosyVoice 启动脚本(.bat)（本地无过滤TTS）。内置默认: D:/AI_Tools/CosyVoice/start_cosyvoice.bat
+  # CosyVoice 启动脚本(.bat)（本地无过滤TTS）。空=不自动启动本地 CosyVoice。
   cosyvoice_bat: ""
-  # Wav2Lip 安装目录（视频口型同步）。内置默认: D:/AI/Wav2Lip
+  # Wav2Lip 安装目录（视频口型同步）。空=不启用 Wav2Lip。
   wav2lip_dir: ""
-  # ffmpeg.exe 完整路径（视频/音频转码）。留空 = 用系统 PATH 或内置候选路径
-  # （D:/AI_Tools/ffmpeg-8.0.1-essentials_build/bin/ffmpeg.exe 或 D:/AI/ffmpeg/ffmpeg.exe）
+  # ffmpeg.exe 完整路径（视频/音频转码）。留空 = 只查系统 PATH。
   ffmpeg_path: ""

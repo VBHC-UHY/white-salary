@@ -59,6 +59,27 @@ def kill_port(port: int) -> None:
         pass
 
 
+def _should_start_bilibili(config: object) -> bool:
+    """
+    2026-07-03 功能大项（批11二波）：B站直播监听的装配决策（纯函数，可测）。
+
+    只有同时满足"enabled=true 且 room_id>0"才启动监听线程——避免用户只开了
+    开关却没填直播间号时空跑。抽成纯函数便于单元测试，不触碰任何B站/网络。
+
+    Args:
+        config: AppConfig 实例（读 config.bilibili.enabled / config.bilibili.room_id）
+
+    Returns:
+        是否应该启动B站直播监听后台线程
+    """
+    try:
+        bili = config.bilibili
+        return bool(bili.enabled) and int(bili.room_id) > 0
+    except Exception:
+        # 配置缺失/异常时保守不启动（默认关闭原则）
+        return False
+
+
 def parse_args() -> argparse.Namespace:
     """
     解析命令行参数。
@@ -693,6 +714,109 @@ def main() -> None:
         logger.info("[QZone] 评论监控已启动（3小时轮询+启动检查未回复）")
     except Exception as e:
         logger.debug(f"[QZone] 后台服务启动跳过: {e}")
+
+    # 启动B站直播弹幕监听后台服务
+    # 2026-07-03 功能大项（批11二波）：装配早已实现但无人调用的
+    # BilibiliLiveAdapter（死架子）。参照QQ空间 monitor 的 threading+new_event_loop
+    # 写法，在后台线程连接直播间读弹幕；弹幕经**独立ChatAgent**（独立短期记忆、
+    # 共享人设+长期记忆+好感度，与QQ空间一致）生成回复走白的完整人格；
+    # reply_danmaku=true 且已登录B站才真的发弹幕。整段包 try/except：
+    # bilibili-api 没装 或 连接失败 都不能拖垮主程序（logger.warning 后跳过）。
+    if _should_start_bilibili(config):
+        try:
+            import asyncio
+            import threading as _threading_bili
+
+            from white_salary.adapters.platform.bilibili_live import (
+                BilibiliLiveAdapter,
+                read_bili_credential,
+            )
+
+            bili_conf = config.bilibili
+
+            # B站直播必须用独立的ChatAgent（不能跟桌面/QQ/QQ空间共用）
+            # 原因同QQ空间：共用agent会导致不同场景的对话记忆互相污染
+            # 独立agent = 独立的ShortTermMemory，但共享人设/长期记忆/好感度
+            _bili_llm = postprocess_llm or background_llm or llm
+            _bili_agent = ChatAgent(
+                llm=_bili_llm,
+                personality=personality,
+                memory=ShortTermMemory(
+                    max_turns=config.memory.short_term_max_turns,
+                    persist_path=str(
+                        project_root / "data" / "chat_history" / "bilibili_current.json"
+                    ),
+                ),
+                memory_manager=memory_manager,
+                tool_registry=tool_registry,
+                tool_llm=tool_llm,
+                temperature=config.llm.temperature,
+                max_tokens=config.llm.max_tokens,
+                # 内容过滤开关接活（与桌面/QQ/QQ空间同一开关）
+                content_filter_enabled=config.features.content_filter,
+            )
+            logger.info(
+                "[Bilibili] 创建独立ChatAgent（独立对话记忆，共享人设+长期记忆）"
+            )
+
+            # 读登录凭证（读不到=只读弹幕不发送）
+            _bili_cred = read_bili_credential(
+                str(project_root / "config" / "bili.ini")
+            )
+            if _bili_cred is None:
+                logger.info(
+                    "[Bilibili] 未登录B站（config/bili.ini 无凭证），本次只读弹幕不发送。"
+                    "如需发弹幕请先在控制面板登录B站。"
+                )
+
+            _bili_adapter = BilibiliLiveAdapter(
+                room_id=bili_conf.room_id,
+                credential=_bili_cred,
+                bot_name=config.personality.character_name or "白",
+                trigger_keywords=bili_conf.trigger_keywords,
+                reply_danmaku=bili_conf.reply_danmaku,
+            )
+
+            async def _bili_on_danmaku(sender: str, text: str) -> "str | None":
+                """弹幕回调：经独立ChatAgent走白的完整人格生成回复。"""
+                try:
+                    # 每次回复前清空短期记忆，防止不同观众的弹幕上下文互相污染
+                    # （与QQ空间 _generate_reply 一致的隔离策略）
+                    _bili_agent._memory.clear()
+                    user_input = f"[B站直播弹幕] 观众 {sender} 发了弹幕：「{text[:100]}」\n简短自然地回他一句。"
+                    reply = await _bili_agent.chat(
+                        user_input,
+                        user_name=sender,
+                        user_id=f"bili_{sender}",  # 按观众区分好感度
+                        is_group=True,  # 直播间是公开场合，按群聊语气
+                    )
+                    reply = reply.strip().strip('"\'')
+                    import re as _re_bili
+
+                    reply = _re_bili.sub(r"<[^>]+>", "", reply).strip()
+                    return reply or None
+                except Exception as _bili_reply_err:
+                    logger.debug(f"[Bilibili] 回复生成失败: {_bili_reply_err}")
+                    return None
+
+            _bili_adapter.on_danmaku = _bili_on_danmaku
+
+            def _run_bilibili() -> None:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(_bili_adapter.connect())
+
+            bili_thread = _threading_bili.Thread(target=_run_bilibili, daemon=True)
+            bili_thread.start()
+            logger.info(
+                f"[Bilibili] 直播弹幕监听已启动（直播间 {bili_conf.room_id}，"
+                f"发弹幕={'开' if (bili_conf.reply_danmaku and _bili_cred) else '关'}）"
+            )
+        except Exception as e:
+            # bilibili-api 没装 / 连接失败 / 任何异常都不能拖垮主程序
+            logger.warning(f"[Bilibili] 直播监听启动跳过: {e}")
+    else:
+        logger.info("[Bilibili] 未启用（在conf.yaml中设置 bilibili.enabled: true 且填 room_id 开启）")
 
     uvicorn.run(
         fastapi_app,

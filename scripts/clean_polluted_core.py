@@ -21,9 +21,9 @@ scripts/clean_polluted_core.py
   本脚本通过 CoreMemoryStore.delete() 删除——该方法删 SQLite 行、删内存缓存
   后重写 JSON 与 TXT，三处天然一致，无需分别操作。
 
-用法（在项目根目录 D:/White Salary 下执行）：
-  "D:/mi/python.exe" scripts/clean_polluted_core.py            # 默认 dry-run，只打印
-  "D:/mi/python.exe" scripts/clean_polluted_core.py --apply    # 真实删除
+用法（在项目根目录下执行）：
+  python scripts/clean_polluted_core.py            # 默认 dry-run，只打印
+  python scripts/clean_polluted_core.py --apply    # 真实删除
   可选 --data-dir 指定记忆目录（默认 <项目根>/data/memory）。
   脚本可重复执行：已删除的条目再次运行时自动跳过。
 """

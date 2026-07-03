@@ -112,7 +112,7 @@ LLM_TEST_ROLES: tuple[str, ...] = (
 # 2026-07-03 面板升级（批6）：GPT-SoVITS 推理配置候选路径（声音克隆状态页用；
 # train_voice.py step7 每次训练完会更新该文件。提为模块级常量便于单测替换/后续扩展）
 # 2026-07-03 外部依赖优化（批8）：候选路径改为按可配置的 GPT-SoVITS 安装目录动态推导
-# （external_tools.gpt_sovits_dir，解析顺序：环境变量→配置→内置默认 D:/AI_Tools/GPT-SoVITS）。
+# （external_tools.gpt_sovits_dir，解析顺序：环境变量→配置；未配置则返回不可用）。
 # 保留为函数而非模块级常量，因为路径依赖运行期配置；单测仍可 monkeypatch 本函数。
 def get_tts_infer_config_candidates() -> tuple[str, ...]:
     """
@@ -130,9 +130,7 @@ def get_tts_infer_config_candidates() -> tuple[str, ...]:
 
         sovits_dir = get_gpt_sovits_dir()
     except Exception:
-        from pathlib import Path as _Path
-
-        sovits_dir = _Path("D:/AI_Tools/GPT-SoVITS")
+        return ()
     return (str(sovits_dir / "GPT_SoVITS" / "configs" / "tts_infer.yaml"),)
 
 
@@ -140,6 +138,19 @@ def get_tts_infer_config_candidates() -> tuple[str, ...]:
 # 一次（吃到 external_tools.gpt_sovits_dir 配置覆盖；配置不可用时回退内置默认）。
 # 单测仍可 monkeypatch 本常量整体替换（voice-clone/status 端点读的就是它）。
 TTS_INFER_CONFIG_CANDIDATES: tuple[str, ...] = get_tts_infer_config_candidates()
+
+
+# 2026-07-03 功能大项（批11二波）：声音一键训练——训练进程与日志的模块级状态。
+# 训练是重任务（吃显卡、跑几十分钟），必须全局单例防重复启动：把当前训练进程
+# 句柄与其日志文件路径存在模块级字典里，train / train-status / train-stop 三端点
+# 共享读写。提为模块级（而非闭包）便于单测直接监视/清理，也让多次 create_settings_router
+# 装配共享同一份训练状态（面板重连时仍能看到进行中的训练）。
+# 结构：{"process": Popen|None, "log_file": str|None, "started_at": float|None}
+_voice_train_state: dict[str, Any] = {
+    "process": None,
+    "log_file": None,
+    "started_at": None,
+}
 
 
 def _module_description(doc: str | None) -> str:
@@ -250,7 +261,6 @@ def create_settings_router(
 
     conf_path = project_root / "conf.yaml"
     conf_default_path = project_root / "conf.default.yaml"
-    prompt_path = project_root / "prompts" / "system_prompt.txt"
 
     def _load_config() -> dict:
         """Load merged config (default + user overrides)."""
@@ -268,6 +278,39 @@ def create_settings_router(
             _deep_merge(config, user_config)
 
         return config
+
+    def _path_for_display(path: Path) -> str:
+        """Return a project-relative path for diagnostics when possible."""
+        try:
+            return str(path.resolve(strict=False).relative_to(project_root.resolve(strict=False)))
+        except ValueError:
+            return str(path)
+
+    def _get_prompt_path() -> Path:
+        """Resolve personality.system_prompt_file relative to the project root."""
+        config = _load_config()
+        personality = config.get("personality") or {}
+        raw_path = personality.get("system_prompt_file") or "prompts/system_prompt.txt"
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            raw_path = "prompts/system_prompt.txt"
+
+        candidate = Path(raw_path.strip())
+        if not candidate.is_absolute():
+            candidate = project_root / candidate
+
+        root_resolved = project_root.resolve(strict=False)
+        candidate_resolved = candidate.resolve(strict=False)
+        try:
+            candidate_resolved.relative_to(root_resolved)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "personality.system_prompt_file 必须位于项目目录内，"
+                    f"当前值: {raw_path}"
+                ),
+            ) from exc
+        return candidate
 
     def _save_config(config: dict) -> None:
         """Save user config to conf.yaml."""
@@ -365,6 +408,7 @@ def create_settings_router(
             备份文件路径字符串；原文件不存在或备份失败时返回 None（不阻断保存）
         """
         try:
+            prompt_path = _get_prompt_path()
             if not prompt_path.exists():
                 return None
             import time as _time
@@ -417,11 +461,12 @@ def create_settings_router(
     @router.get("/prompt")
     async def get_prompt() -> dict:
         """Read system prompt text."""
+        prompt_path = _get_prompt_path()
         if prompt_path.exists():
             text = prompt_path.read_text(encoding="utf-8")
         else:
             text = ""
-        return {"prompt": text}
+        return {"prompt": text, "prompt_path": _path_for_display(prompt_path)}
 
     @router.post("/prompt")
     async def save_prompt(body: dict) -> dict:
@@ -434,6 +479,7 @@ def create_settings_router(
             raise HTTPException(status_code=400, detail="prompt 不能为空，已拒绝写入以保护现有系统提示词")
         # 2026-07-03 面板升级（批6）：覆盖前自动备份旧文件（保留最近10份）
         backup_path = _backup_system_prompt()
+        prompt_path = _get_prompt_path()
         prompt_path.parent.mkdir(parents=True, exist_ok=True)
         prompt_path.write_text(text, encoding="utf-8")
         logger.info(f"System prompt saved ({len(text)} chars)")
@@ -746,6 +792,8 @@ def create_settings_router(
         # 2026-07-03 面板升级（批6）：覆盖前自动备份现有 system_prompt.txt 到
         # prompts/backups/（保留最近10份），返回体带备份路径供"恢复上一版"用
         backup_path = _backup_system_prompt()
+        prompt_path = _get_prompt_path()
+        prompt_path.parent.mkdir(parents=True, exist_ok=True)
         prompt_path.write_text(content, encoding="utf-8")
         return {
             "status": "ok",
@@ -766,7 +814,7 @@ def create_settings_router(
         async def _restart() -> None:
             await asyncio.sleep(1)
             # 2026-07-02 审计修复（批2）：os.execv 在 Windows 下把参数按空格拼接且不加引号，
-            # 路径含空格（如 D:\White Salary）时新进程参数被拆碎、重启即后端死亡；
+            # 路径含空格时新进程参数被拆碎、重启即后端死亡；
             # 改用 subprocess.Popen（列表参数自动正确加引号）拉起新进程后退出当前进程
             subprocess.Popen([sys.executable] + sys.argv, cwd=os.getcwd())
             os._exit(0)
@@ -892,22 +940,40 @@ def create_settings_router(
         import subprocess
 
         # 2026-07-03 外部依赖优化（批8）：GPT-SoVITS 安装目录改走统一解析
-        # （环境变量 WS_GPT_SOVITS_DIR → conf.yaml external_tools.gpt_sovits_dir → 内置默认
-        # D:/AI_Tools/GPT-SoVITS）。cd /d 需要 Windows 反斜杠路径，故转成本机原生写法。
+        # （环境变量 WS_GPT_SOVITS_DIR → conf.yaml external_tools.gpt_sovits_dir）。
+        # cd /d 需要 Windows 反斜杠路径，故转成本机原生写法。
         try:
             from white_salary.adapters.tools.external_paths import get_gpt_sovits_dir
 
             _sovits_dir = get_gpt_sovits_dir()
-        except Exception:
-            _sovits_dir = Path("D:/AI_Tools/GPT-SoVITS")
+        except Exception as exc:
+            return {
+                "success": False,
+                "message": (
+                    "未配置 GPT-SoVITS 安装目录。请在 conf.yaml 的 "
+                    "external_tools.gpt_sovits_dir 中填写路径，或设置 "
+                    f"WS_GPT_SOVITS_DIR。详情: {exc}"
+                ),
+            }
         # os.path.normpath 在 Windows 上把 / 归一为 \，得到 cd /d 认识的原生路径
         import os as _os
 
         _sovits_dir_win = _os.path.normpath(str(_sovits_dir))
+        _venv_activate = _sovits_dir / "venv_new" / "Scripts" / "activate.bat"
+        _api_script = _sovits_dir / "api_v2.py"
+        if not _api_script.exists() or not _venv_activate.exists():
+            return {
+                "success": False,
+                "message": (
+                    f"未找到 GPT-SoVITS 或其 venv_new 虚拟环境：{_sovits_dir}。"
+                    "请在 conf.yaml 的 external_tools.gpt_sovits_dir 填你的安装目录；"
+                    "不装本地 GPT-SoVITS 时会继续使用云端 TTS/纯文字兜底。"
+                ),
+            }
         tts_cmd = (
             'start "WhiteSalary-TTS" cmd /k "'
-            f'cd /d {_sovits_dir_win} && '
-            'call venv_new\\Scripts\\activate.bat && '
+            f'cd /d "{_sovits_dir_win}" && '
+            'call "venv_new\\Scripts\\activate.bat" && '
             'python api_v2.py -a 127.0.0.1 -p 9880 '
             '-c GPT_SoVITS/configs/tts_infer.yaml"'
         )
@@ -1415,8 +1481,12 @@ def create_settings_router(
     @router.get("/prompt/sections")
     async def get_prompt_sections() -> dict:
         """读取人设各分区。"""
+        prompt_path = _get_prompt_path()
         if not prompt_path.exists():
-            return {"sections": {}}
+            raise HTTPException(
+                status_code=404,
+                detail=f"人设文件不存在: {_path_for_display(prompt_path)}",
+            )
         full_text = prompt_path.read_text(encoding="utf-8")
         sections = {}
         for name, start_marker, end_marker in _SECTION_MARKERS:
@@ -1432,7 +1502,16 @@ def create_settings_router(
             else:
                 content = full_text[start_idx:]
             sections[name] = content.strip()
-        return {"sections": sections}
+        if not sections:
+            return {
+                "sections": {},
+                "prompt_path": _path_for_display(prompt_path),
+                "message": (
+                    "未在人设文件中识别到可分区编辑的标题。"
+                    "请检查人设标题格式，或使用下方“完整编辑”。"
+                ),
+            }
+        return {"sections": sections, "prompt_path": _path_for_display(prompt_path)}
 
     @router.put("/prompt/sections/{section_name}")
     async def update_prompt_section(section_name: str, body: dict) -> dict:
@@ -1440,6 +1519,7 @@ def create_settings_router(
         new_content = body.get("content", "")
         if not new_content:
             raise HTTPException(status_code=400, detail="content is required")
+        prompt_path = _get_prompt_path()
         if not prompt_path.exists():
             raise HTTPException(status_code=404, detail="prompt file not found")
 
@@ -2064,6 +2144,304 @@ def create_settings_router(
         except Exception as e:
             logger.warning(f"[VoiceClone] 读取 tts_infer.yaml 失败: {e}")
             return {"available": False, "error": f"读取推理配置失败: {e}"}
+
+    # ================================================================
+    # 2026-07-03 功能大项（批11二波）：声音一键训练
+    # 面板"声音克隆"页原来只能提示用户去命令行跑 train_voice.bat；这里补三个端点
+    # 让用户在面板上一键触发训练 + 轮询看进度，无需碰命令行。
+    #   POST /voice-clone/train        起训练进程（防重复、日志重定向到文件）
+    #   GET  /voice-clone/train-status 轮询：running/最近日志/done
+    #   POST /voice-clone/train-stop   安全终止训练进程
+    # 训练脚本(scripts/train_voice.py)不在本波修改范围，故按其现状启动：
+    #   复刻 train_voice.bat 的命令（cd 安装目录 → 激活 venv → python 脚本），
+    #   把 stdout/stderr 重定向到 logs/voice_train_<时间戳>.log。
+    # ================================================================
+
+    def _get_gpt_sovits_dir() -> Path:
+        """
+        解析 GPT-SoVITS 安装目录（复用批8的统一解析）。
+
+        返回:
+            安装目录 Path（可能不存在，调用方需自行判存在性）
+        """
+        try:
+            from white_salary.adapters.tools.external_paths import get_gpt_sovits_dir
+
+            return get_gpt_sovits_dir()
+        except Exception as exc:
+            raise FileNotFoundError(
+                "GPT-SoVITS 安装目录未配置。请设置 external_tools.gpt_sovits_dir "
+                "或 WS_GPT_SOVITS_DIR。"
+            ) from exc
+
+    def _voice_train_running() -> bool:
+        """
+        判断是否有训练进程正在运行。
+
+        进程句柄存在且 poll() 为 None（未结束）视为运行中；进程已结束时
+        顺手清掉句柄（保留 log_file 供 train-status 继续 tail 最后日志）。
+
+        返回:
+            True=训练进行中；False=空闲
+        """
+        proc = _voice_train_state.get("process")
+        if proc is None:
+            return False
+        if proc.poll() is None:
+            return True
+        # 进程已结束：清掉句柄，但保留 log_file/started_at 供状态端点收尾展示
+        _voice_train_state["process"] = None
+        return False
+
+    def _tail_lines(path: Path, n: int = 30) -> list[str]:
+        """
+        读取文本文件最后 n 行（训练日志可能较大，逐行读取即可，训练日志不会巨大）。
+
+        参数:
+            path: 日志文件路径
+            n:    返回的最大行数
+
+        返回:
+            最近 n 行（已去尾部换行）；文件不存在或读取失败返回空列表
+        """
+        try:
+            if not path.exists():
+                return []
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
+                lines = f.readlines()
+            return [line.rstrip("\r\n") for line in lines[-n:]]
+        except Exception as e:
+            logger.warning(f"[VoiceTrain] 读取训练日志 {path} 失败: {e}")
+            return []
+
+    @router.post("/voice-clone/train")
+    async def start_voice_train(body: dict | None = None) -> dict:
+        """
+        一键触发声音训练（GPT-SoVITS 完整流水线，异步起进程立即返回）。
+
+        body（均可选）：
+          - audio_path: 训练音频路径。因 train_voice.py 硬编码了输入音频位置，
+            这里把用户音频复制到脚本期望的 <安装目录>/input_audio/jiaran.mp3，
+            脚本原样拾取（不改脚本）。不传则用脚本默认音频。
+          - model_name: 目标模型名（当前训练脚本用固定名 white_salary_v1，
+            改名需改脚本，故此参数仅记录、暂不改变行为）。
+          - resume: True 时给脚本传 --resume 走断点续跑（跳过已完成步骤）。
+
+        安全：
+          - 防重复——已有训练在跑时直接返回"正在训练中"，不再起第二个进程。
+          - GPT-SoVITS 未安装（安装目录不存在）时返回中文安装指引，不 Popen。
+
+        返回:
+            {ok, started, log_file, message}；失败时 ok=False + message。
+        """
+        import subprocess
+        import time as _time
+
+        body = body or {}
+
+        # 防重复：已有训练在跑则拒绝，避免两个训练抢同一份显存/中间产物
+        if _voice_train_running():
+            return {
+                "ok": False,
+                "started": False,
+                "running": True,
+                "log_file": _voice_train_state.get("log_file"),
+                "message": "已有一个训练正在进行中，请等它结束或先点「停止训练」。",
+            }
+
+        # GPT-SoVITS 未安装则给明确指引，不启动
+        try:
+            sovits_dir = _get_gpt_sovits_dir()
+        except FileNotFoundError as exc:
+            return {
+                "ok": False,
+                "started": False,
+                "message": str(exc),
+            }
+        if not sovits_dir.exists():
+            return {
+                "ok": False,
+                "started": False,
+                "message": (
+                    f"未找到 GPT-SoVITS 安装目录（{sovits_dir}）。声音训练依赖本地 "
+                    "GPT-SoVITS，请先按 docs/LOCAL_ADVANCED.md 第 2 节"
+                    "「GPT-SoVITS —— 本地语音克隆」安装，并在 conf.yaml 的 "
+                    "external_tools.gpt_sovits_dir 指到你的安装目录。不装则白继续用"
+                    "云端硅基流动 CosyVoice2 说话，聊天不受影响。"
+                ),
+            }
+
+        # 训练脚本与其虚拟环境（复刻 train_voice.bat 的启动方式）
+        train_script = project_root / "scripts" / "train_voice.py"
+        if not train_script.exists():
+            return {
+                "ok": False,
+                "started": False,
+                "message": f"训练脚本不存在：{train_script}",
+            }
+        venv_activate = sovits_dir / "venv_new" / "Scripts" / "activate.bat"
+        if not venv_activate.exists():
+            return {
+                "ok": False,
+                "started": False,
+                "message": (
+                    f"未找到 GPT-SoVITS 虚拟环境（{venv_activate}）。请确认使用的是"
+                    "带 venv_new 的 GPT-SoVITS 整合包，详见 docs/LOCAL_ADVANCED.md。"
+                ),
+            }
+
+        # 用户指定了训练音频：复制到脚本硬编码的输入位置（不改脚本即可生效）
+        audio_path = str(body.get("audio_path") or "").strip()
+        if audio_path:
+            src = Path(audio_path)
+            if not src.exists():
+                return {
+                    "ok": False,
+                    "started": False,
+                    "message": f"训练音频不存在：{audio_path}",
+                }
+            try:
+                import shutil as _shutil
+
+                dst_dir = sovits_dir / "input_audio"
+                dst_dir.mkdir(parents=True, exist_ok=True)
+                # 脚本硬编码的输入文件名为 jiaran.mp3，复制到此让脚本拾取
+                dst = dst_dir / "jiaran.mp3"
+                _shutil.copy2(src, dst)
+                logger.info(f"[VoiceTrain] 训练音频已就位: {src} -> {dst}")
+            except Exception as e:
+                return {
+                    "ok": False,
+                    "started": False,
+                    "message": f"复制训练音频到 GPT-SoVITS 输入目录失败: {e}",
+                }
+
+        # model_name 目前无法在不改训练脚本的前提下生效，仅记录不改变行为
+        model_name = str(body.get("model_name") or "").strip()
+        if model_name:
+            logger.info(
+                f"[VoiceTrain] 收到 model_name={model_name}，当前训练脚本用固定名 "
+                "white_salary_v1，本参数暂不改变行为（改名需改 train_voice.py）。"
+            )
+
+        # 日志文件：后端生成时间戳，重定向 stdout/stderr
+        log_dir = project_root / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        stamp = _time.strftime("%Y%m%d_%H%M%S")
+        log_file = log_dir / f"voice_train_{stamp}.log"
+
+        # 复刻 bat：cd 安装目录 → 激活 venv → 跑脚本（含空格路径用引号包裹）。
+        # 注意：不复用 bat（它含 pause 会阻塞、且会新开可交互窗口），改为后台进程
+        # 把输出写进日志文件，面板轮询即可看进度。
+        resume_flag = " --resume" if body.get("resume") else ""
+        # os.path.normpath 把 / 归一为 Windows 反斜杠，得到 cd /d 认识的原生路径
+        import os as _os
+
+        _sovits_win = _os.path.normpath(str(sovits_dir))
+        cmd = (
+            f'cd /d "{_sovits_win}" && '
+            f'call "venv_new\\Scripts\\activate.bat" && '
+            f'python "{train_script}"{resume_flag}'
+        )
+        try:
+            log_handle = open(log_file, "w", encoding="utf-8", buffering=1)
+            log_handle.write(
+                f"[White Salary 声音训练] 启动于 {stamp}\n"
+                f"安装目录: {sovits_dir}\n"
+                f"训练脚本: {train_script}\n"
+                f"命令: {cmd}\n"
+                f"{'=' * 60}\n"
+            )
+            log_handle.flush()
+            proc = subprocess.Popen(
+                cmd,
+                shell=True,
+                cwd=str(sovits_dir),
+                stdout=log_handle,
+                stderr=subprocess.STDOUT,
+            )
+        except Exception as e:
+            logger.error(f"[VoiceTrain] 启动训练进程失败: {e}")
+            return {"ok": False, "started": False, "message": f"启动训练进程失败: {e}"}
+
+        _voice_train_state["process"] = proc
+        _voice_train_state["log_file"] = str(log_file)
+        _voice_train_state["started_at"] = _time.time()
+        logger.info(f"[VoiceTrain] 声音训练已启动 (pid={proc.pid}, log={log_file})")
+        return {
+            "ok": True,
+            "started": True,
+            "log_file": str(log_file),
+            "message": (
+                "训练已开始。这会比较久（约几十分钟，取决于显卡），期间白可以正常聊天。"
+                "训完后回到本页会自动用上专属声音。"
+            ),
+        }
+
+    @router.get("/voice-clone/train-status")
+    async def voice_train_status() -> dict:
+        """
+        查询声音训练进度（面板每几秒轮询一次）。
+
+        返回:
+            {running, done, log_file, last_lines, returncode}
+              - running: 训练进程是否仍在跑
+              - done: 是否已跑过训练且当前已结束（有日志文件且不在运行）
+              - last_lines: 训练日志最近 30 行
+              - returncode: 进程结束码（运行中或从未训练为 None）
+        """
+        running = _voice_train_running()
+        log_file = _voice_train_state.get("log_file")
+        last_lines: list[str] = []
+        if log_file:
+            last_lines = await __import__("asyncio").to_thread(
+                _tail_lines, Path(log_file), 30
+            )
+        # done：有过训练（有日志文件）且当前不在运行
+        done = bool(log_file) and not running
+        returncode: int | None = None
+        # 运行结束后 process 已被 _voice_train_running 清为 None，这里无法拿到 rc；
+        # 若刚好还在（poll 非 None 的瞬间前），尽力取一次
+        proc = _voice_train_state.get("process")
+        if proc is not None:
+            returncode = proc.poll()
+        return {
+            "running": running,
+            "done": done,
+            "log_file": log_file,
+            "last_lines": last_lines,
+            "returncode": returncode,
+        }
+
+    @router.post("/voice-clone/train-stop")
+    async def stop_voice_train() -> dict:
+        """
+        终止正在进行的声音训练（安全 terminate）。
+
+        返回:
+            {ok, stopped, message}
+        """
+        proc = _voice_train_state.get("process")
+        if proc is None or proc.poll() is not None:
+            # 没有在跑的进程（清一下句柄保持状态干净）
+            _voice_train_state["process"] = None
+            return {
+                "ok": True,
+                "stopped": False,
+                "message": "当前没有正在进行的训练。",
+            }
+        try:
+            proc.terminate()
+            logger.info(f"[VoiceTrain] 已请求终止训练进程 (pid={proc.pid})")
+            _voice_train_state["process"] = None
+            return {
+                "ok": True,
+                "stopped": True,
+                "message": "已停止训练。已产出的中间结果保留，下次可勾选「断点续跑」继续。",
+            }
+        except Exception as e:
+            logger.error(f"[VoiceTrain] 终止训练进程失败: {e}")
+            return {"ok": False, "stopped": False, "message": f"停止训练失败: {e}"}
 
     # ================================================================
     # 对话提示模板API

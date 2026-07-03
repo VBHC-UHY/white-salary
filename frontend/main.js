@@ -232,12 +232,46 @@ ipcMain.on('start-napcat', () => {
 });
 
 ipcMain.on('start-local-tts', () => {
-    const { exec } = require('child_process');
-    const ttsCmd = 'start "WhiteSalary-TTS" cmd /k "cd /d D:\\AI_Tools\\GPT-SoVITS && call venv_new\\Scripts\\activate.bat && python api_v2.py -a 127.0.0.1 -p 9880 -c GPT_SoVITS/configs/tts_infer.yaml"';
-    exec(ttsCmd, (err) => {
-        if (err) console.error('[TTS] Start failed:', err);
-        else console.log('[TTS] Local GPT-SoVITS start requested');
+    const { execFileSync, spawn } = require('child_process');
+    const projectRoot = path.resolve(__dirname, '..');
+    const venvPython = path.join(projectRoot, '.venv', 'Scripts', 'python.exe');
+    const pythonExe = fs.existsSync(venvPython) ? venvPython : 'python';
+    let ttsDir = process.env.WS_GPT_SOVITS_DIR || '';
+
+    if (!ttsDir) {
+        try {
+            ttsDir = execFileSync(
+                pythonExe,
+                [path.join(projectRoot, 'scripts', 'resolve_gpt_sovits_dir.py')],
+                { cwd: projectRoot, encoding: 'utf8', windowsHide: true }
+            ).trim();
+        } catch (err) {
+            console.error('[TTS] Failed to resolve GPT-SoVITS path:', err);
+            ttsDir = '';
+        }
+    }
+
+    if (!ttsDir) {
+        console.error('[TTS] GPT-SoVITS path is not configured. Set external_tools.gpt_sovits_dir or WS_GPT_SOVITS_DIR.');
+        return;
+    }
+
+    const activateBat = path.join(ttsDir, 'venv_new', 'Scripts', 'activate.bat');
+    const apiScript = path.join(ttsDir, 'api_v2.py');
+    if (!fs.existsSync(apiScript) || !fs.existsSync(activateBat)) {
+        console.error(`[TTS] GPT-SoVITS not found or incomplete: ${ttsDir}`);
+        return;
+    }
+
+    const cmd = `call "${activateBat}" && python api_v2.py -a 127.0.0.1 -p 9880 -c GPT_SoVITS/configs/tts_infer.yaml`;
+    const child = spawn('cmd.exe', ['/k', cmd], {
+        cwd: ttsDir,
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: false,
     });
+    child.unref();
+    console.log(`[TTS] Local GPT-SoVITS start requested: ${ttsDir}`);
 });
 
 // ============================================================
@@ -330,16 +364,19 @@ async function tryDirectCookieRead() {
 
     console.log('[BiliLogin] 模式A：扫描浏览器Cookie文件...');
 
-    // 支持的浏览器配置（便携Chrome + 标准Chrome + Edge）
-    const browsers = [
-        {
-            name: '便携Chrome',
+    const browsers = [];
+    const portableChromeData = process.env.WS_BILI_CHROME_USER_DATA_DIR || process.env.WS_CHROME_USER_DATA_DIR || '';
+    if (portableChromeData) {
+        browsers.push({
+            name: 'Portable Chrome',
             cookiePaths: [
-                'D:\\谷歌浏览器\\Chrome\\Data\\Default\\Network\\Cookies',
-                'D:\\谷歌浏览器\\Chrome\\Data\\Default\\Cookies',
+                pathMod.join(portableChromeData, 'Default', 'Network', 'Cookies'),
+                pathMod.join(portableChromeData, 'Default', 'Cookies'),
             ],
-            localState: 'D:\\谷歌浏览器\\Chrome\\Data\\Local State',
-        },
+            localState: pathMod.join(portableChromeData, 'Local State'),
+        });
+    }
+    browsers.push(
         {
             name: 'Chrome',
             cookiePaths: [
@@ -356,7 +393,7 @@ async function tryDirectCookieRead() {
             ],
             localState: pathMod.join(localAppData, 'Microsoft', 'Edge', 'User Data', 'Local State'),
         },
-    ];
+    );
 
     for (const browser of browsers) {
         // 找Cookie数据库文件

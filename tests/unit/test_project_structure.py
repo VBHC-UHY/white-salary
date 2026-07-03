@@ -48,6 +48,39 @@ class TestDirectoryStructure:
         assert (PROJECT_ROOT / "conf.default.yaml").is_file()
         assert (PROJECT_ROOT / "conf.yaml").is_file()
 
+    def test_pyproject_runtime_dependency_baseline(self) -> None:
+        """uv sync should install the runtime LLM SDK without optional extras."""
+        text = (PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        assert 'requires-python = ">=3.10"' in text
+        dependencies_block = text.split("dependencies = [", 1)[1].split(
+            "[project.optional-dependencies]", 1
+        )[0]
+        assert '"openai>=1.50.0"' in dependencies_block
+
+    def test_windows_launcher_uses_project_venv(self) -> None:
+        """Install/start scripts should use the Windows project .venv."""
+        install = (PROJECT_ROOT / "安装.bat").read_text(encoding="utf-8")
+        start_backend = (PROJECT_ROOT / "Start-Backend.bat").read_text(encoding="utf-8")
+        assert "python -m venv" in install
+        assert ".venv\\Scripts\\python.exe" in install
+        assert '"%PROJECT_PYTHON%" -m pip install -e .' in install
+        assert ".venv\\Scripts\\python.exe" in start_backend
+
+    def test_gpt_sovits_launchers_use_configured_path(self) -> None:
+        """GPT-SoVITS launchers should resolve paths from config/env, not cd to one machine."""
+        files = [
+            PROJECT_ROOT / "Start.bat",
+            PROJECT_ROOT / "Start-TTS.bat",
+            PROJECT_ROOT / "Start-TTS-Local.bat",
+            PROJECT_ROOT / "scripts" / "train_voice.bat",
+            PROJECT_ROOT / "frontend" / "main.js",
+        ]
+        for path in files:
+            text = path.read_text(encoding="utf-8")
+            assert "resolve_gpt_sovits_dir.py" in text
+            assert 'cd /d "D:\\AI_Tools\\GPT-SoVITS"' not in text
+            assert "D:\\\\AI_Tools\\\\GPT-SoVITS &&" not in text
+
     def test_entry_point_exists(self) -> None:
         """主入口文件必须存在。"""
         assert (PROJECT_ROOT / "run_server.py").is_file()

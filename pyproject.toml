@@ -11,7 +11,7 @@ version = "0.1.0"
 description = "White Salary - 超强AI智能体，对标Neuro-sama级别的AI VTuber"
 readme = "README.md"
 license = { text = "MIT" }
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 
 # ---------------------------------------------------------------------------
 # 项目依赖（运行时必须安装的库）
@@ -36,6 +36,7 @@ dependencies = [
 
     # --- AI/ML 基础 ---
     "numpy>=1.26.0",             # 数值计算（音频处理等会用到）
+    "openai>=1.50.0",            # OpenAI compatible SDK used by the default LLM adapter
 
     # --- 2026-07-03 审计修复（批5）补齐实际在用但未声明的依赖 ---
     "python-multipart>=0.0.9",   # FastAPI 解析 multipart 表单（设置面板图片上传）

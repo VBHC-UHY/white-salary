@@ -179,9 +179,30 @@ async def generate_sticker(emotion: str = "", style: str = "anime") -> str:
 async def screenshot() -> str:
     from white_salary.adapters.vision.screenshot import capture_screenshot
     img = await capture_screenshot()
-    if img:
-        return f"截屏成功（{len(img)//1024}KB），需要配合视觉系统分析"
-    return "截屏失败了"
+    if not img:
+        return "截屏失败了"
+
+    adapter, err = _get_vision_adapter()
+    if adapter is None:
+        return f"截屏成功（{len(img)//1024}KB），但还没法分析画面：{err}"
+
+    try:
+        description = await adapter.describe_image(
+            img,
+            prompt=(
+                "请用中文简洁描述这张电脑屏幕截图里当前可见的主要内容。"
+                "如果用户是在让你看屏幕或截图，直接说明你看到了什么。"
+            ),
+            max_tokens=260,
+        )
+    except TypeError:
+        description = await adapter.describe_image(img)
+    except Exception as e:
+        return f"截屏成功（{len(img)//1024}KB），但视觉分析失败了：{e}"
+
+    if description and description.strip():
+        return f"截屏成功，我看到：{description.strip()}"
+    return f"截屏成功（{len(img)//1024}KB），但视觉模型没有返回可用描述。"
 
 
 @tool("sing", "唱歌", P(song_name=S("歌名", True)))

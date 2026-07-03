@@ -23,6 +23,19 @@ from typing import Optional
 from loguru import logger
 
 
+def _portable_chrome_profile() -> Path | None:
+    """Return an explicitly configured portable Chrome profile directory."""
+    raw = (
+        os.environ.get("WS_BILI_CHROME_USER_DATA_DIR")
+        or os.environ.get("WS_CHROME_USER_DATA_DIR")
+        or ""
+    ).strip()
+    if not raw:
+        return None
+    base = Path(raw)
+    return base if base.name == "Default" else base / "Default"
+
+
 def _get_browser_cookie_paths() -> list[Path]:
     """获取浏览器cookie路径（支持Windows和WSL）。"""
     paths = []
@@ -32,9 +45,8 @@ def _get_browser_cookie_paths() -> list[Path]:
         # 原生Windows
         base = Path(localappdata)
 
-        # 便携版Chrome（优先检查）
-        portable_chrome = Path("D:/谷歌浏览器/Chrome/Data/Default")
-        if portable_chrome.exists():
+        portable_chrome = _portable_chrome_profile()
+        if portable_chrome and portable_chrome.exists():
             paths.extend([
                 portable_chrome / "Network/Cookies",
                 portable_chrome / "Cookies",
@@ -50,9 +62,8 @@ def _get_browser_cookie_paths() -> list[Path]:
     else:
         # WSL环境：通过/mnt/访问Windows文件系统
 
-        # 便携版Chrome（优先检查）
-        portable_chrome = Path("/mnt/d/谷歌浏览器/Chrome/Data/Default")
-        if portable_chrome.exists():
+        portable_chrome = _portable_chrome_profile()
+        if portable_chrome and portable_chrome.exists():
             paths.extend([
                 portable_chrome / "Network/Cookies",
                 portable_chrome / "Cookies",

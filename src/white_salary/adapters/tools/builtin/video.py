@@ -115,7 +115,13 @@ async def generate_video(image_path: str = "", prompt: str = "", mode: str = "cl
             # 2026-07-03 外部依赖优化（批8）：ComfyUI input 目录改走统一解析
             # （环境变量 WS_COMFYUI_INPUT → conf.yaml external_tools.comfyui_input → 内置默认）
             from white_salary.adapters.tools.external_paths import get_comfyui_input
-            comfyui_input = get_comfyui_input()
+            try:
+                comfyui_input = get_comfyui_input()
+            except FileNotFoundError:
+                return (
+                    "图生视频需要配置 ComfyUI input 目录。请在 conf.yaml 的 "
+                    "external_tools.comfyui_input 填写路径，或设置 WS_COMFYUI_INPUT。"
+                )
             comfyui_input.mkdir(parents=True, exist_ok=True)
             src = Path(image_path)
             if not src.exists():
@@ -170,7 +176,13 @@ async def local_lip_sync(audio_path: str = "", video_path: str = "") -> str:
         # 2026-07-03 外部依赖优化（批8）：Wav2Lip 目录改走统一解析
         # （环境变量 WS_WAV2LIP_DIR → conf.yaml external_tools.wav2lip_dir → 内置默认）
         from white_salary.adapters.tools.external_paths import get_wav2lip_dir
-        wav2lip_dir = get_wav2lip_dir()
+        try:
+            wav2lip_dir = get_wav2lip_dir()
+        except FileNotFoundError:
+            return (
+                "口型同步需要配置 Wav2Lip 安装目录。请在 conf.yaml 的 "
+                "external_tools.wav2lip_dir 填写路径，或设置 WS_WAV2LIP_DIR。"
+            )
         inference_py = wav2lip_dir / "inference.py"
         if not inference_py.exists():
             return (

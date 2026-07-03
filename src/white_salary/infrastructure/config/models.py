@@ -244,6 +244,38 @@ class AutoChatConfig(BaseModel):
     daily_limit: int = Field(default=3, ge=0, description="每日主动聊天次数上限")
 
 
+class BilibiliConfig(BaseModel):
+    """
+    B站直播弹幕互动配置（conf.yaml 的 bilibili 节）。
+
+    2026-07-03 功能大项（批11二波）：BilibiliLiveAdapter 早已实现 connect()/
+    on_danmaku 回调逻辑，但全项目无人装配它（死架子）。现补齐配置模型 + run_server
+    后台线程装配，让白能进驻B站直播间读弹幕、（登录后）发弹幕回复。
+
+    默认 enabled=false 且 room_id=0：新功能默认关闭，不影响现有用户；只有用户
+    显式填 room_id 并开 enabled 才会启动监听线程。依赖可选库 bilibili-api-python，
+    未安装时装配段的 try/except 会优雅跳过（logger.warning 后照常启动其它形态）。
+
+    发弹幕需要登录凭证（config/bili.ini，由设置面板的B站扫码/浏览器读取写入）；
+    没登录只读弹幕不发送。reply_danmaku 控制"是否真的发弹幕回复"（默认 false=
+    只监听不发，最安全）；trigger_keywords 控制"只回复含哪些关键词的弹幕"（默认
+    空=只回复 @机器人/提到机器人名字的弹幕，避免刷屏被B站风控封禁）。
+    """
+    enabled: bool = Field(default=False, description="是否启用B站直播弹幕监听")
+    room_id: int = Field(
+        default=0, ge=0,
+        description="B站直播间号（在直播间URL live.bilibili.com/后面那串数字）；0=未配置不启动",
+    )
+    reply_danmaku: bool = Field(
+        default=False,
+        description="是否发弹幕回复（默认false=只监听不发；需先在面板登录B站才能真的发送）",
+    )
+    trigger_keywords: list[str] = Field(
+        default_factory=list,
+        description="触发关键词列表（弹幕含任一关键词才回复；空=只回复@机器人或提到机器人名字的弹幕，防刷屏）",
+    )
+
+
 class ExternalToolsConfig(BaseModel):
     """
     外部本地工具路径配置（conf.yaml 的 external_tools 节）。
@@ -251,38 +283,35 @@ class ExternalToolsConfig(BaseModel):
     2026-07-03 外部依赖优化（批8）：ComfyUI / CosyVoice / GPT-SoVITS / Wav2Lip /
     ffmpeg 等"本地进阶功能"的安装路径此前散落在各 adapter 里硬编码，换机器要改源码。
     现收拢为可配置节，解析顺序统一为：
-        环境变量(保留各处历史 WS_*) → 本节配置 → adapter 内置默认值(== 历史硬编码值)
+        环境变量(保留各处历史 WS_*) → 本节配置
 
     重要（用户方向：云端为主、本地进阶可选）：这些字段**只有用本地进阶功能才需要**，
-    只用云端（填 API key 就能用）的用户可以全部留空。默认值全为空字符串="不覆盖，
-    沿用环境变量或 adapter 内置默认值"——老用户行为完全不变。
-
-    真实的内置默认值定义在 adapters/tools/external_paths.py（DEFAULT_* 常量），
-    与各文件历史硬编码值逐字一致。
+    只用云端（填 API key 就能用）的用户可以全部留空。默认值全为空字符串="未配置"；
+    对应本地增强功能会给出明确提示或自动降级，不再回退到作者机器的固定路径。
     """
     comfyui_bat: str = Field(
         default="",
-        description="ComfyUI 启动脚本(.bat)路径；空=用 WS_COMFYUI_BAT 环境变量或内置默认",
+        description="ComfyUI 启动脚本(.bat)路径；空=不自动启动本地 ComfyUI",
     )
     comfyui_input: str = Field(
         default="",
-        description="ComfyUI 的 input 目录（图生视频时复制输入图进去）；空=用内置默认",
+        description="ComfyUI 的 input 目录（图生视频时复制输入图进去）；空=不使用本地 ComfyUI input",
     )
     gpt_sovits_dir: str = Field(
         default="",
-        description="GPT-SoVITS 安装目录（本地高质量TTS/声音克隆）；空=用内置默认",
+        description="GPT-SoVITS 安装目录（本地高质量TTS/声音克隆）；空=不启动本地 GPT-SoVITS",
     )
     cosyvoice_bat: str = Field(
         default="",
-        description="CosyVoice 启动脚本(.bat)路径（本地无过滤TTS）；空=用内置默认",
+        description="CosyVoice 启动脚本(.bat)路径（本地无过滤TTS）；空=不自动启动本地 CosyVoice",
     )
     wav2lip_dir: str = Field(
         default="",
-        description="Wav2Lip 安装目录（视频口型同步）；空=用内置默认",
+        description="Wav2Lip 安装目录（视频口型同步）；空=不启用 Wav2Lip",
     )
     ffmpeg_path: str = Field(
         default="",
-        description="ffmpeg.exe 完整路径（视频/音频转码）；空=用 PATH 或内置候选路径",
+        description="ffmpeg.exe 完整路径（视频/音频转码）；空=只查系统 PATH",
     )
 
 
@@ -360,8 +389,13 @@ class AppConfig(BaseModel):
     auto_chat: AutoChatConfig = Field(default_factory=AutoChatConfig)
     features: FeaturesConfig = Field(default_factory=FeaturesConfig)
 
+    # 2026-07-03 功能大项（批11二波）：B站直播弹幕互动配置节——装配早已实现但
+    # 无人调用的 BilibiliLiveAdapter（死架子）。默认 enabled=false=关闭，不影响
+    # 现有用户；依赖可选库 bilibili-api-python，未装时 run_server 装配段优雅跳过。
+    bilibili: BilibiliConfig = Field(default_factory=BilibiliConfig)
+
     # 2026-07-03 外部依赖优化（批8）：外部本地工具路径配置节——把散落在各 adapter
     # 的硬编码安装路径(ComfyUI/CosyVoice/GPT-SoVITS/Wav2Lip/ffmpeg)收拢为可配置项。
-    # 默认全空=沿用环境变量或 adapter 内置默认值，老用户行为不变；只用云端的用户
-    # 可完全忽略本节（依据批8任务：外部工具路径配置化 + 云端降级健壮性）。
+    # 默认全空=未配置；只用云端的用户可完全忽略本节（依据批8任务：
+    # 外部工具路径配置化 + 云端降级健壮性）。
     external_tools: ExternalToolsConfig = Field(default_factory=ExternalToolsConfig)

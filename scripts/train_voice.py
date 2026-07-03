@@ -11,9 +11,9 @@ This script automates the full GPT-SoVITS v2 training pipeline:
   7. Auto-update tts_infer.yaml config
 
 Usage:
-  cd D:\AI_Tools\GPT-SoVITS
+  cd <your GPT-SoVITS directory>
   call venv_new\Scripts\activate.bat
-  python "D:\White Salary\scripts\train_voice.py"
+  python "<project-root>/scripts/train_voice.py"
 
 All paths and parameters follow the exact same logic as GPT-SoVITS webui.py
 to ensure compatibility.
@@ -29,12 +29,39 @@ from pathlib import Path
 # ============================================================
 # Configuration
 # ============================================================
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _resolve_sovits_root() -> Path:
+    try:
+        from resolve_gpt_sovits_dir import resolve_gpt_sovits_dir
+
+        path = resolve_gpt_sovits_dir()
+        if path is not None:
+            return path
+    except Exception:
+        pass
+    raise RuntimeError(
+        "GPT-SoVITS path is not configured. Set external_tools.gpt_sovits_dir "
+        "in conf.yaml or WS_GPT_SOVITS_DIR."
+    )
+
+
+def _resolve_ffmpeg_dir() -> str:
+    ffmpeg_path = os.environ.get("WS_FFMPEG_PATH", "").strip()
+    if ffmpeg_path:
+        p = Path(ffmpeg_path)
+        return str(p.parent if p.name.lower() == "ffmpeg.exe" else p)
+    found = shutil.which("ffmpeg")
+    return str(Path(found).parent) if found else ""
+
+
 TRAIN_NAME = "white_salary_v1"
-INPUT_AUDIO = r"D:\AI_Tools\GPT-SoVITS\input_audio\jiaran.mp3"
 VERSION = "v2"
 
-# GPT-SoVITS root (script must be run from here)
-SOVITS_ROOT = Path(r"D:\AI_Tools\GPT-SoVITS")
+# GPT-SoVITS root (configured by WS_GPT_SOVITS_DIR or conf.yaml external_tools.gpt_sovits_dir)
+SOVITS_ROOT = _resolve_sovits_root()
+INPUT_AUDIO = str(SOVITS_ROOT / "input_audio" / "jiaran.mp3")
 
 # Pretrained model paths (v2)
 PRETRAINED_S2G = "GPT_SoVITS/pretrained_models/gsv-v2final-pretrained/s2G2333k.pth"
@@ -67,7 +94,7 @@ SOVITS_WEIGHT_DIR = "SoVITS_weights_v2"
 GPT_WEIGHT_DIR = "GPT_weights_v2"
 TMP_DIR = "TEMP"
 
-FFMPEG_DIR = r"D:\AI_Tools\ffmpeg-8.0.1-essentials_build\bin"
+FFMPEG_DIR = _resolve_ffmpeg_dir()
 
 PYTHON = sys.executable
 
@@ -459,7 +486,7 @@ def step7_update_config():
 
     # Save reference audio dir for White Salary
     ref_dir = str(SOVITS_ROOT / "output" / TRAIN_NAME / "denoise_opt").replace("/", "\\")
-    ref_file = Path(r"D:\White Salary\data\tts_ref_audio_dir.txt")
+    ref_file = PROJECT_ROOT / "data" / "tts_ref_audio_dir.txt"
     ref_file.parent.mkdir(parents=True, exist_ok=True)
     with open(ref_file, "w") as f:
         f.write(ref_dir)
@@ -571,8 +598,8 @@ def main():
     print("=" * 60)
     print()
     print("  Next steps:")
-    print('    1. Start TTS: D:\\White Salary\\Start-TTS-Local.bat')
-    print('    2. Start all: D:\\White Salary\\Start.bat')
+    print(f"    1. Start TTS: {PROJECT_ROOT / 'Start-TTS-Local.bat'}")
+    print(f"    2. Start all: {PROJECT_ROOT / 'Start.bat'}")
     print()
 
 
