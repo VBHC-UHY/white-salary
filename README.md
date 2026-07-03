@@ -173,7 +173,7 @@ python scripts/first_run_check.py
 装好依赖 + 填一把 LLM 密钥 + `Start.bat` 即可。这是主形态，其它三种都在它之上叠加。
 
 ### 💬 QQ 机器人
-1. 安装并登录 [NapCat](https://github.com/NapNeko/NapCatQQ)（本仓库自带 `NapCat/` 与 `NapCat_OneKey/` 目录，遵循其各自许可证）。
+1. 自行下载并登录 [NapCat](https://github.com/NapNeko/NapCatQQ)（第三方开源 QQ 框架，**不随本仓库分发**，请到其官方仓库获取；新手推荐它的一键版 NapCat_OneKey）。
 2. 在 NapCat 里配置**正向 WebSocket**（默认端口，配一个 token）。
 3. 在 `conf.yaml` 设置 `qq.enabled: true`、`qq.ws_url`、`qq.token`、`qq.family_qq`（你自己的 QQ 号，会被认成"主人"）。
 4. 重启后端生效。详见 [docs/CONFIG.md](docs/CONFIG.md) 的 `qq` 节。

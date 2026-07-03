@@ -180,13 +180,16 @@ cd frontend && npx electron .
 
 ### 6.2 QQ 机器人（NapCat）
 
-- **作用**：白接入 QQ，私聊 + 群聊，多用户各自好感度。
-- **不装会怎样**：QQ 形态关闭，桌面聊天不受影响。
+- **作用**：让白接入 QQ，能私聊 + 群聊，每个人各自积累好感度。
+- **不装会怎样**：QQ 形态关闭，桌面聊天完全不受影响。
+- **NapCat 是什么**：一个**第三方开源**的 QQ 协议框架（不是本项目做的、也**不随本仓库下载**），负责"登录 QQ 并转发消息"，白通过它收发 QQ 消息。
 - **装法**：
-  1. 安装并登录 [NapCat](https://github.com/NapNeko/NapCatQQ)（仓库自带 `NapCat/`、`NapCat_OneKey/` 目录，遵循其许可证）。
-  2. 在 NapCat 里开启**正向 WebSocket**，设一个 token。
-  3. `conf.yaml` 配 `qq.enabled: true`、`qq.ws_url`（如 `ws://127.0.0.1:3001`）、`qq.token`、`qq.family_qq: [你的QQ号]`。
-  4. 重启后端。详见 [CONFIG.md](CONFIG.md) 的 `qq` 节。
+  1. **下载 NapCat**：去官方仓库 <https://github.com/NapNeko/NapCatQQ> 的 Releases 下载。**新手强烈建议用一键版 `NapCat.OneKey`**（解压双击就能跑）。
+  2. **登录 QQ**：运行 NapCat，扫码或账密登录给白用的 QQ 号（建议用小号，别用主号）。
+  3. **开正向 WebSocket**：在 NapCat 的 WebUI（网页配置界面）里新建一个 **"WebSocket 服务器"**（正向 WS），记下**端口**（如 3001）和你设的 **token**。
+  4. **配 White Salary**：编辑 `conf.yaml` 的 `qq` 节——`enabled: true`、`ws_url: "ws://127.0.0.1:3001"`（端口对上 NapCat）、`token:`（和 NapCat 里一致）、`family_qq: [你自己的QQ号]`（白会把你认成"主人"）。
+  5. **重启后端**。启动日志出现 `[QQ] WebSocket 已连接` 就成了。
+- **排查**：白收不到 QQ 消息，99% 是 `ws_url` 端口或 `token` 和 NapCat 里对不上——回第 3、4 步核对。详见 [CONFIG.md](CONFIG.md) 的 `qq` 节。
 
 ### 6.3 ComfyUI（本地文生图 / 图生视频）
 
