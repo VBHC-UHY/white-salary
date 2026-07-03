@@ -33,6 +33,24 @@
 
 ## 最近完成
 
+### 2026-07-03 插件市场路径一致性修复
+
+问题：
+- 插件核心代码、根目录插件、社区插件、内置插件的目录含义容易混在一起。
+- 插件市场之前主要扫描根目录 `plugins/<id>`，没有和运行时发现规则完全对齐。
+- 新建/下载插件如果直接放根目录，后续和内置/社区插件区分不够清楚。
+
+处理：
+- `PluginMarket` 增加统一的插件目录迭代逻辑，识别 `plugins/<id>`、`plugins/community/<id>`、`plugins/builtin/<id>`。
+- 新建模板插件和市场安装插件默认进入 `plugins/community/`。
+- 卸载逻辑支持 community 插件，并保护 builtin 插件不被删除。
+- 安装列表返回插件来源和路径，方便面板显示与排查。
+
+验收：
+- 已新增 `tests/unit/test_plugin_market_paths.py`。
+- 已运行 `python -m pytest tests/unit/test_plugin_market_paths.py -q`，结果 3 passed。
+- 已运行 `python -m compileall -q src/white_salary/core/plugins/market.py`。
+
 ### 2026-07-03 桌面端语音反馈修复
 
 问题：
