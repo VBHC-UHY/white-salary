@@ -11,7 +11,8 @@ White Salary - 图形配置向导（2026-07-03 新手体验（批10））
      tkinter 是 Python 自带的，零额外依赖，双击 安装.bat 最后会自动弹出本向导。
 
 用法：
-    python scripts/setup_wizard.py
+    .venv\Scripts\python.exe scripts\setup_wizard.py    # Windows
+    .venv/bin/python scripts/setup_wizard.py             # Linux / macOS
 
 本脚本只写 conf.yaml（必要时从 conf.default.yaml 复制模板），不碰其它文件、
 不启动服务器。写入采用"按行替换"的方式，尽量保留 conf.yaml 里的中文注释。
@@ -61,9 +62,9 @@ _FALLBACK_PRESETS: dict[str, dict[str, str]] = {
 }
 
 # 向导里展示给新手选的供应商（id, 显示名, 拿 Key 的网址）。
-# 默认推荐硅基流动：注册送额度、国内直连、同一把 key 还能顺带打通看图和语音。
+# 默认推荐硅基流动：注册送额度、国内直连、同一把 key 还能顺带打通看图、语音和生图/视频云端兜底。
 WIZARD_PROVIDERS: list[tuple[str, str, str]] = [
-    ("siliconflow", "硅基流动（推荐：注册送额度，一把 key 聊天/看图/语音全通）",
+    ("siliconflow", "硅基流动（推荐：注册送额度，一把 key 聊天/看图/语音/生图全通）",
      "https://cloud.siliconflow.cn/account/ak"),
     ("deepseek", "DeepSeek 官方",
      "https://platform.deepseek.com/api_keys"),
@@ -213,8 +214,8 @@ def write_key_to_conf(conf_path: Path, provider_id: str, api_key: str) -> dict[s
          factory.PRESET_PROVIDERS）+ llm.api_key
       2. 如果选的是硅基流动：同一把 key 顺手填进 llm_vision.api_key——
          llm_vision 模板默认就是硅基流动的看图模型，这样"看图"直接就通了；
-         而 ASR/TTS 的密钥留空时会自动从角色 LLM 里扫硅基流动的 key，
-         所以语音识别/语音合成也顺带通了（一把 key 三件事）。
+         而 ASR/TTS/生图/生视频云端兜底会自动从角色 LLM 里扫硅基流动的 key，
+         所以语音识别、语音合成和云端绘图/视频兜底也顺带通了。
       3. 写完立刻用 yaml 重新解析校验，确保没把配置写坏——校验不过就恢复原文并报错。
 
     参数:
@@ -252,7 +253,7 @@ def write_key_to_conf(conf_path: Path, provider_id: str, api_key: str) -> dict[s
     if provider_id == "siliconflow":
         # 同一把硅基流动 key 填进视觉通道（模板里 llm_vision 默认就是硅基流动的
         # Qwen3-VL 看图模型），这样"发图给白看"零额外配置就能用；
-        # 语音（ASR/TTS）留空密钥时会自动扫到这把 key，也一并通了。
+        # 语音（ASR/TTS）和生图/生视频云端兜底会自动扫到这把 key，也一并通了。
         text = set_yaml_scalar(text, "llm_vision", "api_key", api_key)
         vision_filled = True
 
@@ -407,7 +408,7 @@ class SetupWizardApp:
         tk.Label(page, text="粘贴你的 API Key", font=("Microsoft YaHei UI", 15, "bold")).pack(anchor="w")
         tk.Label(
             page,
-            text="推荐用「硅基流动」：注册就送额度，一把 key 聊天 / 看图 / 语音全通。",
+            text="推荐用「硅基流动」：注册就送额度，一把 key 聊天 / 看图 / 语音 / 生图全通。",
             font=("Microsoft YaHei UI", 10), fg="#555",
         ).pack(anchor="w", pady=(4, 10))
 
@@ -543,7 +544,7 @@ class SetupWizardApp:
         page = self._new_page()
 
         tk.Label(page, text="🎉 配置完成！", font=("Microsoft YaHei UI", 18, "bold")).pack(pady=(24, 10))
-        extra = "（看图 / 语音也一并配好了）" if summary.get("vision_filled") == "yes" else ""
+        extra = "（看图 / 语音 / 生图云端兜底也一并配好了）" if summary.get("vision_filled") == "yes" else ""
         tk.Label(
             page,
             text=f"主对话已接入：{self._provider_label(summary['provider'])}\n"

@@ -4,7 +4,7 @@
 
 <!-- 2026-07-03 便捷化文档：开头强调一把云端 key 全功能 + 图形面板配置 -->
 > ⭐ **先记住两件事，能省掉大量麻烦：**
-> 1. **一把云端 key 点亮全部 AI 能力**：只要一把[硅基流动](https://cloud.siliconflow.cn) key，**聊天 / 语音识别 / 语音合成 / 看图 / 生图 全部开箱即用，无需安装任何本地模型**（faster-whisper / GPT-SoVITS / ComfyUI 都只是可选进阶）。**"语音必须本地"是误解**——云端 CosyVoice2 / SenseVoice 默认就能说能听。
+> 1. **一把云端 key 点亮全部 AI 能力**：只要一把[硅基流动](https://cloud.siliconflow.cn) key，**聊天 / 语音识别 / 语音合成 / 看图 / 生图 / 生视频云端兜底全部开箱即用，无需安装任何本地模型**（faster-whisper / GPT-SoVITS / ComfyUI 都只是可选进阶）。**"语音必须本地"是误解**——云端 CosyVoice2 / SenseVoice 默认就能说能听。
 > 2. **配置全程图形化，不用碰配置文件**：启动后在桌宠上按 `Ctrl+,` 打开控制面板，QQ / 语音 / LLM / B站 / QQ空间 / 人设 每页填表单→点保存→点『重启后端』按钮即可，**不需要手动编辑 conf.yaml、不需要命令行**。下文凡涉及改配置处，都可用面板完成；手改 conf.yaml 仅作进阶备选。
 
 分三个层次：
@@ -13,7 +13,7 @@
 2. **完整桌面体验**：加上语音（云端开箱即用，或本地 GPT-SoVITS）、长期记忆（ChromaDB）。
 3. **多平台形态**：QQ 机器人、QQ 空间、B 站直播、AI 绘图。
 
-> 配置项的逐节详解见 [CONFIG.md](CONFIG.md)。遇到问题先跑 `python scripts/first_run_check.py` 自检。
+> 配置项的逐节详解见 [CONFIG.md](CONFIG.md)。遇到问题先跑 `.venv\Scripts\python.exe scripts\first_run_check.py`（Windows）或 `.venv/bin/python scripts/first_run_check.py`（Linux/macOS）自检。
 >
 > **外部 AI 服务怎么配**：白的智能功能都来自外部 AI 服务。**最省事的云端方式**（注册→拿 key→填配置，不用下模型）见 [EXTERNAL_SERVICES.md](EXTERNAL_SERVICES.md)；想免费 / 离线 / 定制的**本地大模型进阶**（ComfyUI / GPT-SoVITS / ffmpeg 等）见 [LOCAL_ADVANCED.md](LOCAL_ADVANCED.md)。
 
@@ -55,39 +55,40 @@ python -m venv .venv
 source .venv/Scripts/activate
 ```
 
-然后以可编辑模式安装项目（会自动装齐所有**必需**依赖）：
+然后以可编辑模式安装项目（会自动装齐所有**必需**依赖）。下面的 `python` 指的是刚刚激活的 `.venv` 里的 Python；不想激活也可以直接写 `.venv\Scripts\python.exe`：
 
 ```bash
-pip install -e .
+python -m pip install --upgrade pip setuptools wheel
+python -m pip install -e .
 ```
 
 这会安装：FastAPI、Uvicorn、WebSocket、Pydantic、PyYAML、loguru、aiofiles、aiohttp/httpx、numpy、OpenAI 兼容 SDK，以及几个**运行时实际会用到、容易被漏掉**的库：
 
-- **`openai`** —— 当前主 LLM 适配器使用 OpenAI 兼容 SDK 调各家兼容接口；`uv sync` / `pip install -e .` 默认会安装。
+- **`openai`** —— 当前主 LLM 适配器使用 OpenAI 兼容 SDK 调各家兼容接口；`uv sync` / `python -m pip install -e .` 默认会安装。
 - **`python-multipart`** —— 控制面板上传图片（multipart 表单）需要它，缺了图片上传会报错。
 - **`ddgs`** —— `web_search` 等搜索工具的后端（DuckDuckGo），缺了搜索工具不可用。
 - **`yt-dlp`** —— `download_video` 视频下载工具的后端，缺了发视频下载任务会失败。
 - **`Pillow` + `mss`** —— 截图/看屏幕/部分 ComfyUI GIF 合成会用到。
 - **`httpx`** —— 部分服务调用和向量搜索工具会用到。
 
-> 这些已经写进 `pyproject.toml` 的主依赖，`pip install -e .` / `uv sync` 会自动装。若你是用旧的 `requirements` 方式手动装，务必补上。
+> 这些已经写进 `pyproject.toml` 的主依赖，`python -m pip install -e .` / `uv sync` 会自动装。若你是用旧的 `requirements` 方式手动装，务必补上。
 
 ### 可选依赖分组（按需装）
 
 `pyproject.toml` 用 `optional-dependencies` 分了组，按需安装：
 
 ```bash
-pip install -e ".[llm-openai]"      # 兼容旧命令；OpenAI SDK 已在主依赖里默认安装
-pip install -e ".[llm-anthropic]"   # Anthropic Claude SDK
-pip install -e ".[asr-whisper]"     # 本地语音识别 faster-whisper
-pip install -e ".[vad-silero]"      # Silero VAD（不装会自动降级到 EnergyVAD）
-pip install -e ".[memory-vector]"   # 长期记忆向量库 ChromaDB
-pip install -e ".[desktop-control]"  # 桌面鼠标/键盘控制工具（pyautogui/pyperclip）
-pip install -e ".[bilibili]"         # B站直播/扫码登录增强
-pip install -e ".[singing-rvc]"      # 保留兼容入口；RVC 需独立环境，见下方说明
-pip install -e ".[tts-edge]"        # Edge TTS（注：当前版本 Edge TTS 未接入，装了也暂不生效）
-pip install -e ".[all]"             # 一次装齐常用可选项（不含 RVC，避免 numpy 冲突）
-pip install -e ".[dev]"             # 开发工具：pytest / ruff / mypy / pre-commit
+python -m pip install -e ".[llm-openai]"      # 兼容旧命令；OpenAI SDK 已在主依赖里默认安装
+python -m pip install -e ".[llm-anthropic]"   # Anthropic Claude SDK
+python -m pip install -e ".[asr-whisper]"     # 本地语音识别 faster-whisper
+python -m pip install -e ".[vad-silero]"      # Silero VAD（不装会自动降级到 EnergyVAD）
+python -m pip install -e ".[memory-vector]"   # 长期记忆向量库 ChromaDB
+python -m pip install -e ".[desktop-control]"  # 桌面鼠标/键盘控制工具（pyautogui/pyperclip）
+python -m pip install -e ".[bilibili]"         # B站直播/扫码登录增强
+python -m pip install -e ".[singing-rvc]"      # 保留兼容入口；RVC 需独立环境，见下方说明
+python -m pip install -e ".[tts-edge]"        # Edge TTS（注：当前版本 Edge TTS 未接入，装了也暂不生效）
+python -m pip install -e ".[all]"             # 一次装齐常用可选项（不含 RVC，避免 numpy 冲突）
+python -m pip install -e ".[dev]"             # 开发工具：pytest / ruff / mypy / pre-commit
 ```
 
 > **注意**：项目的 LLM 适配器是"OpenAI 兼容"实现，当前默认需要 `openai` SDK；它已经在主依赖中。`anthropic` SDK 仍只在需要官方 Anthropic 路径时按需安装。
@@ -129,6 +130,8 @@ PYTHONPATH=src python run_server.py --host 0.0.0.0 --port 12400
 
 脚本会优先寻找 Python 3.12 / 3.11 / 3.10；如果机器只有 Python 3.13，请先安装 3.11 或 3.12，避免可选 AI 依赖解析失败。
 
+> `./install.sh` 和 Windows 的 `安装.bat` 一样都会创建项目专用 `.venv`。两边配置方式相同：先填 `conf.yaml` 或用桌面控制面板写配置，再启动后端。`--with-memory` 只是在服务器安装时顺手装 ChromaDB 长期记忆；不加它不会影响主聊天、看图、语音或云端生图兜底。
+
 ---
 
 ## 4. 配置 API 密钥（最少填一把就能跑）
@@ -166,7 +169,7 @@ llm:
 ### 验证配置
 
 ```bash
-python scripts/first_run_check.py
+.venv\Scripts\python.exe scripts\first_run_check.py
 ```
 
 看到"主 LLM 密钥已填写"和"关键依赖齐全"就可以启动了。
@@ -244,31 +247,31 @@ cd frontend && npx electron .
 - **作用**：语义检索历史，白能"想起"很久以前聊过的相关内容。
 - **不装会怎样**：把 `memory.long_term_provider` 设为 `none`（默认即 none），长期记忆引擎关闭，其余四层记忆照常。
 <!-- 2026-07-03 便捷化文档：开启长期记忆也可走控制面板 -->
-- **装法**：`pip install -e ".[memory-vector]"`，然后把 `memory.long_term_provider` 设为 `chroma` → 打开控制面板（在桌宠上按 `Ctrl+,`）→ 记忆相关设置页改好 → 点保存 → 点『重启后端』按钮。（进阶用户也可直接改 `conf.yaml` 的 `memory` 节。）
+- **装法**：`python -m pip install -e ".[memory-vector]"`，然后把 `memory.long_term_provider` 设为 `chroma` → 打开控制面板（在桌宠上按 `Ctrl+,`）→ 记忆相关设置页改好 → 点保存 → 点『重启后端』按钮。（进阶用户也可直接改 `conf.yaml` 的 `memory` 节。）
 
 ### 6.5 本地语音识别（faster-whisper）
 
 - **作用**：本地把你的语音转文字（ASR）。
 - **不装会怎样**：降级到云端 ASR（SiliconFlow SenseVoice）；语音输入需要至少一种可用。
-- **装法**：`pip install -e ".[asr-whisper]"`。
-  - 想用神经网络 VAD 检测语音活动，再装：`pip install -e ".[vad-silero]"`。不装也能跑，会自动使用零依赖的 EnergyVAD。
+- **装法**：`python -m pip install -e ".[asr-whisper]"`。
+  - 想用神经网络 VAD 检测语音活动，再装：`python -m pip install -e ".[vad-silero]"`。不装也能跑，会自动使用零依赖的 EnergyVAD。
 
 ### 6.6 B 站直播
 
 - **作用**：监听直播弹幕并回复。
 - **不装会怎样**：B 站形态关闭。
-- **装法**：`pip install -e ".[bilibili]"`，在控制面板 B 站页登录后开启。这个 extra 会同时安装扫码登录和浏览器 Cookie 解密所需的 `qrcode[pil]` / `cryptography`。
+- **装法**：`python -m pip install -e ".[bilibili]"`，在控制面板 B 站页登录后开启。这个 extra 会同时安装扫码登录和浏览器 Cookie 解密所需的 `qrcode[pil]` / `cryptography`。
 
 ---
 
 ## 7. 跑测试（确认环境健康）
 
 ```bash
-pip install -e ".[dev]"
+python -m pip install -e ".[dev]"
 set PYTHONPATH=src   &&  python -m pytest tests -q     # CMD
 ```
 
-基线为 **468 个测试全绿**。若数量对得上、无 FAILED，说明后端环境正常。
+当前公开仓库基线约为 **699 passed / 3 skipped**（数量会随版本增加）。只要无 FAILED，说明后端环境正常。
 
 ---
 
@@ -276,11 +279,11 @@ set PYTHONPATH=src   &&  python -m pytest tests -q     # CMD
 
 | 现象 | 原因 / 解决 |
 |------|-------------|
-| 启动报 `ModuleNotFoundError: white_salary` | 没设 `PYTHONPATH=src`，或没 `pip install -e .` |
+| 启动报 `ModuleNotFoundError: white_salary` | 没设 `PYTHONPATH=src`，或没在 `.venv` 里执行 `python -m pip install -e .` |
 | 后端起了但桌面白屏 / 连不上 | 确认后端在 12400 端口、`http://localhost:12400/health` 返回正常 |
-| 图片上传报错 | 缺 `python-multipart`，重装 `pip install -e .` |
-| 搜索工具不工作 | 缺 `ddgs`，重装 `pip install -e .` |
-| 截图 / 看屏幕失败 | 缺 `Pillow` 或 `mss`，重装 `pip install -e .` |
+| 图片上传报错 | 缺 `python-multipart`，在 `.venv` 里重装 `python -m pip install -e .` |
+| 搜索工具不工作 | 缺 `ddgs`，在 `.venv` 里重装 `python -m pip install -e .` |
+| 截图 / 看屏幕失败 | 缺 `Pillow` 或 `mss`，在 `.venv` 里重装 `python -m pip install -e .` |
 | 白不说话（无语音） | 本地 GPT-SoVITS 未启动且未配云端 TTS 兜底；见 6.1 |
 | 记忆提取 / 看图不工作 | 记忆看 `llm_memory`；看图会优先用 `llm_vision`，为空时自动复用主 `llm` 的硅基流动 key。若仍不可用，检查模型是否下架或 key 是否有效；见 [CONFIG.md](CONFIG.md) |
 | QQ 收不到消息 | `qq.enabled`、`ws_url`、`token` 与 NapCat 配置不一致；见 6.2 |

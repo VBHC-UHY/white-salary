@@ -37,14 +37,14 @@ Python 3.10-3.12 · FastAPI · Electron · Live2D · 六边形架构
 | 步骤 | 做什么 | 说明 |
 |------|--------|------|
 | **① 下载** | 点本页绿色 **Code** 按钮 → **Download ZIP**，解压到任意文件夹（会用 Git 的也可以 `git clone`） | 路径里最好别带奇怪符号 |
-| **② 双击 `安装.bat`** | 在解压出来的文件夹里双击它，等它自动装完 | 它会自动检查/安装 Python 环境、后端与前端依赖、复制配置模板 |
-| **③ 粘贴一把 key** | 安装向导会提示你粘贴 API key。去 **[硅基流动注册](https://cloud.siliconflow.cn)**（手机号即可，新号常送免费额度），复制一把 `sk-` 开头的 key 粘进去 | 一把 key 就能打通聊天/看图/语音/生图（详见[全供应商注册表](docs/EXTERNAL_SERVICES.md#providers)） |
+| **② 双击 `安装.bat`** | 在解压出来的文件夹里双击它，等它自动装完 | 它会检查 Python 版本、创建项目专用 `.venv`、安装后端与前端依赖、复制配置模板 |
+| **③ 粘贴一把 key** | 安装向导会提示你粘贴 API key。去 **[硅基流动注册](https://cloud.siliconflow.cn)**（手机号即可，新号常送免费额度），复制一把 `sk-` 开头的 key 粘进去 | 一把 key 就能打通聊天/看图/语音/生图/生视频云端兜底（详见[全供应商注册表](docs/EXTERNAL_SERVICES.md#providers)） |
 
 装完之后，白就会出现在你的桌面上。以后每次想找她，双击 **`Start.bat`** 即可。
 
 > - 想用别家服务（DeepSeek / Kimi / OpenRouter…）？→ [全供应商注册与拿 key 直达表](docs/EXTERNAL_SERVICES.md#providers)
 > - 安装卡住了 / 想手动装？→ [docs/INSTALL.md 详细安装指南](docs/INSTALL.md)
-> - 不确定配好没？双击安装后运行 `python scripts/first_run_check.py`，它会用中文告诉你下一步做什么。
+> - 不确定配好没？双击安装后运行 `.venv\Scripts\python.exe scripts\first_run_check.py`，它会用中文告诉你下一步做什么。
 
 ---
 
@@ -73,10 +73,10 @@ Python 3.10-3.12 · FastAPI · Electron · Live2D · 六边形架构
 | 🖥️ **Electron 桌面宠物** | 透明全屏置顶、鼠标穿透、Live2D 形象 + 口型同步、科幻冰晶 UI、语音对话 | 必装（主形态） |
 | 💬 **QQ 机器人** | 经 NapCat（OneBot v11）私聊 + 群聊，多用户好感度 | 需装 NapCat（可选） |
 | 🌐 **QQ 空间社交** | 自动发说说 / 评论 / 逛空间 / 兴趣匹配 / 限流 | 需 QQ 登录（可选） |
-| 📺 **B 站直播** | 弹幕监听 + 回复 | 需 `pip install -e ".[bilibili]"`（可选） |
+| 📺 **B 站直播** | 弹幕监听 + 回复 | 需在项目 `.venv` 中安装 `.[bilibili]`（可选） |
 
 <!-- 2026-07-03 便捷化文档：破除"语音必须本地"误解，强调一把云端 key 全功能 -->
-> ⭐ **一把云端 key 点亮全部 AI 能力**：只要一把[硅基流动](https://cloud.siliconflow.cn) key，**聊天 / 语音识别 / 语音合成 / 看图 / 生图 全部开箱即用，无需安装任何本地模型**。默认配置全走云端，不吃你的显卡。下面这些"本地版"都是**可选进阶**，不装照样全功能：
+> ⭐ **一把云端 key 点亮全部 AI 能力**：只要一把[硅基流动](https://cloud.siliconflow.cn) key，**聊天 / 语音识别 / 语音合成 / 看图 / 生图 / 生视频云端兜底全部开箱即用，无需安装任何本地模型**。默认配置全走云端，不吃你的显卡。下面这些"本地版"都是**可选进阶**，不装照样全功能：
 
 | 能力 | 默认（云端，一把 key 就能用） | 本地版（可选进阶） |
 |------|------------------------------|-------------------|
@@ -160,8 +160,10 @@ Python 3.10-3.12 · FastAPI · Electron · Live2D · 六边形架构
 **环境要求**：Windows 10/11 · Python 3.10-3.12（建议 3.11+）· Node.js 18+
 
 ```bash
-# 1. 装后端依赖（在项目根目录）
-pip install -e .
+# 1. 装后端依赖（在项目根目录；全部装进项目专用 .venv，不污染全局 Python）
+python -m venv .venv
+.venv\Scripts\python.exe -m pip install --upgrade pip setuptools wheel
+.venv\Scripts\python.exe -m pip install -e .
 
 # 2. 装前端依赖
 cd frontend && npm install && cd ..
@@ -187,12 +189,12 @@ source .venv/bin/activate
 PYTHONPATH=src python run_server.py --host 0.0.0.0 --port 12400
 ```
 
-> Linux 脚本会优先使用 Python 3.12 / 3.11 / 3.10，暂不选择 Python 3.13，避免部分可选 AI 依赖还没跟上新版解释器。
+> Linux 脚本会优先使用 Python 3.12 / 3.11 / 3.10，暂不选择 Python 3.13，避免部分可选 AI 依赖还没跟上新版解释器。需要 ChromaDB 长期记忆时用 `./install.sh --with-memory`；不加这个参数也能正常聊天，只是长期向量记忆保持关闭。
 
 **不确定配好了没？** 跑一次首次运行自检：
 
 ```bash
-python scripts/first_run_check.py
+.venv\Scripts\python.exe scripts\first_run_check.py
 ```
 
 它会检查 conf.yaml、主 LLM 密钥、Python 版本、关键依赖、目录结构，并用中文告诉你「下一步做什么」。
@@ -215,7 +217,7 @@ python scripts/first_run_check.py
 在控制面板（`Ctrl+,`）的 QQ 空间页扫码 / Cookie 登录后即可自动发说说、逛空间。
 
 ### 📺 B 站直播
-安装可选依赖 `pip install -e ".[bilibili]"`，在控制面板 B 站页登录后开启弹幕监听。框架完整，属可选增强。
+安装可选依赖 `.venv\Scripts\python.exe -m pip install -e ".[bilibili]"`，在控制面板 B 站页登录后开启弹幕监听。框架完整，属可选增强。
 
 ---
 

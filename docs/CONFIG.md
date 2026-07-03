@@ -237,7 +237,7 @@ singing:
 只填 `llm` 一节。`qq.enabled: false`、`memory.long_term_provider: none`、不配 TTS。→ 文字聊天、记忆（除长期向量外）、好感度、情感、桌宠全部可用。
 
 ### 场景 B：桌面 + 语音 + 长期记忆
-在 A 基础上：启动本地 GPT-SoVITS（或配 `tts.fallback_*` 云端）；`pip install ".[memory-vector]"` 后设 `memory.long_term_provider: chroma`；填 `llm_memory` / `llm_emotion` 让记忆情感更聪明。
+在 A 基础上：启动本地 GPT-SoVITS（或配 `tts.fallback_*` 云端）；在项目 `.venv` 里执行 `python -m pip install -e ".[memory-vector]"` 后设 `memory.long_term_provider: chroma`；填 `llm_memory` / `llm_emotion` 让记忆情感更聪明。
 
 ### 场景 C：全开（桌面 + QQ + QQ空间 + 绘图）
 在 B 基础上：装 NapCat，配 `qq.*` 并 `qq.enabled: true`、`family_qq` 填自己 QQ；控制面板登录 QQ 空间 / B 站；装 ComfyUI 做本地绘图；把 8 个 LLM 角色都填齐。
@@ -260,5 +260,5 @@ singing:
 
 ---
 
-配置改完不确定对不对？跑一次自检：`python scripts/first_run_check.py`。
+配置改完不确定对不对？跑一次自检：Windows 用 `.venv\Scripts\python.exe scripts\first_run_check.py`，Linux/macOS 用 `.venv/bin/python scripts/first_run_check.py`。
 安装相关见 [INSTALL.md](INSTALL.md)；参与开发见 [../CONTRIBUTING.md](../CONTRIBUTING.md)。
