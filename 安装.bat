@@ -66,7 +66,7 @@ for /f "tokens=*" %%v in ('"%PROJECT_PYTHON%" --version') do echo   [OK] .venv u
 echo.
 
 echo [4/6] Installing Python backend dependencies...
-"%PROJECT_PYTHON%" -c "import fastapi, uvicorn, pydantic, yaml, loguru, aiohttp, numpy, multipart, ddgs, openai, yt_dlp" >nul 2>&1
+"%PROJECT_PYTHON%" -c "import fastapi, uvicorn, pydantic, yaml, loguru, aiohttp, httpx, numpy, multipart, ddgs, openai, yt_dlp, PIL, mss" >nul 2>&1
 if not errorlevel 1 (
     echo   [OK] Python dependencies are already installed.
     goto :deps_done

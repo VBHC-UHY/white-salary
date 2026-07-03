@@ -10,7 +10,7 @@
 <!-- 徽章行（2026-07-03 新手体验（批10）：静态徽章，不接 CI） -->
 ![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)
 ![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)
-![Tests](https://img.shields.io/badge/tests-692%20passed-brightgreen.svg)
+![Tests](https://img.shields.io/badge/tests-695%20passed-brightgreen.svg)
 ![PRs Welcome](https://img.shields.io/badge/PRs-welcome-ff69b4.svg)
 
 Python 3.10+ · FastAPI · Electron · Live2D · 六边形架构

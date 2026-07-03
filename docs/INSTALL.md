@@ -61,12 +61,14 @@ source .venv/Scripts/activate
 pip install -e .
 ```
 
-这会安装：FastAPI、Uvicorn、WebSocket、Pydantic、PyYAML、loguru、aiofiles、aiohttp、numpy、OpenAI 兼容 SDK，以及几个**运行时实际会用到、容易被漏掉**的库：
+这会安装：FastAPI、Uvicorn、WebSocket、Pydantic、PyYAML、loguru、aiofiles、aiohttp/httpx、numpy、OpenAI 兼容 SDK，以及几个**运行时实际会用到、容易被漏掉**的库：
 
 - **`openai`** —— 当前主 LLM 适配器使用 OpenAI 兼容 SDK 调各家兼容接口；`uv sync` / `pip install -e .` 默认会安装。
 - **`python-multipart`** —— 控制面板上传图片（multipart 表单）需要它，缺了图片上传会报错。
 - **`ddgs`** —— `web_search` 等搜索工具的后端（DuckDuckGo），缺了搜索工具不可用。
 - **`yt-dlp`** —— `download_video` 视频下载工具的后端，缺了发视频下载任务会失败。
+- **`Pillow` + `mss`** —— 截图/看屏幕/部分 ComfyUI GIF 合成会用到。
+- **`httpx`** —— 部分服务调用和向量搜索工具会用到。
 
 > 这些已经写进 `pyproject.toml` 的主依赖，`pip install -e .` / `uv sync` 会自动装。若你是用旧的 `requirements` 方式手动装，务必补上。
 
@@ -78,7 +80,11 @@ pip install -e .
 pip install -e ".[llm-openai]"      # 兼容旧命令；OpenAI SDK 已在主依赖里默认安装
 pip install -e ".[llm-anthropic]"   # Anthropic Claude SDK
 pip install -e ".[asr-whisper]"     # 本地语音识别 faster-whisper
+pip install -e ".[vad-silero]"      # Silero VAD（不装会自动降级到 EnergyVAD）
 pip install -e ".[memory-vector]"   # 长期记忆向量库 ChromaDB
+pip install -e ".[desktop-control]"  # 桌面鼠标/键盘控制工具（pyautogui/pyperclip）
+pip install -e ".[bilibili]"         # B站直播/扫码登录增强
+pip install -e ".[singing-rvc]"      # RVC 唱歌/变声
 pip install -e ".[tts-edge]"        # Edge TTS（注：当前版本 Edge TTS 未接入，装了也暂不生效）
 pip install -e ".[all]"             # 一次装齐上面全部（体积较大）
 pip install -e ".[dev]"             # 开发工具：pytest / ruff / mypy / pre-commit
@@ -222,6 +228,7 @@ cd frontend && npx electron .
 - **作用**：本地把你的语音转文字（ASR）。
 - **不装会怎样**：降级到云端 ASR（SiliconFlow SenseVoice）；语音输入需要至少一种可用。
 - **装法**：`pip install -e ".[asr-whisper]"`。
+  - 想用神经网络 VAD 检测语音活动，再装：`pip install -e ".[vad-silero]"`。不装也能跑，会自动使用零依赖的 EnergyVAD。
 
 ### 6.6 B 站直播
 
@@ -250,6 +257,7 @@ set PYTHONPATH=src   &&  python -m pytest tests -q     # CMD
 | 后端起了但桌面白屏 / 连不上 | 确认后端在 12400 端口、`http://localhost:12400/health` 返回正常 |
 | 图片上传报错 | 缺 `python-multipart`，重装 `pip install -e .` |
 | 搜索工具不工作 | 缺 `ddgs`，重装 `pip install -e .` |
+| 截图 / 看屏幕失败 | 缺 `Pillow` 或 `mss`，重装 `pip install -e .` |
 | 白不说话（无语音） | 本地 GPT-SoVITS 未启动且未配云端 TTS 兜底；见 6.1 |
 | 记忆提取 / 看图不工作 | 对应分角色 LLM（`llm_memory` / `llm_vision`）未填或模型已下架；见 [CONFIG.md](CONFIG.md) |
 | QQ 收不到消息 | `qq.enabled`、`ws_url`、`token` 与 NapCat 配置不一致；见 6.2 |

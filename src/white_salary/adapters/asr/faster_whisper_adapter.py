@@ -56,8 +56,12 @@ class FasterWhisperAdapter(ASRInterface):
             # 自动选择设备
             device = self._device
             if device == "auto":
-                import torch
-                device = "cuda" if torch.cuda.is_available() else "cpu"
+                try:
+                    import torch
+                    device = "cuda" if torch.cuda.is_available() else "cpu"
+                except ImportError:
+                    logger.info("[ASR-Local] torch 未安装，自动使用 CPU 模式。")
+                    device = "cpu"
 
             # CPU不支持float16
             compute_type = self._compute_type

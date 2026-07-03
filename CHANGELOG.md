@@ -9,7 +9,7 @@
 
 ## [未发布 / 开发中] · 功能大项（发布时定为 0.2.0）
 
-在 0.1.1 之后陆续加入的新功能（累积中，达到里程碑后打 0.2.0 标签）：
+在 0.1.2 之后陆续加入的新功能（累积中，达到里程碑后打 0.2.0 标签）：
 
 - **游戏对接接口**：`POST /api/game/event` + `GET /api/game/ping`——外部游戏（如 Aurora Forge）在打 Boss / 升级 / 收伙伴等事件时上报，白在桌面实时道喜/吐槽（fire-and-forget，穿透忙碌模式）。
 - **插件热加载**：`on_message`/`on_reply` 钩子接进 QQ/桌面消息链路（此前定义了从不触发）；插件市场装完即生效不用重启；坏插件隔离 + 超时保护。
@@ -18,6 +18,34 @@
 - **稳定性**：LLM 通道从不稳定的 NVIDIA 免费接口迁移到更稳定的供应商（默认模板配置更新）。
 
 测试：677 个单元 + 集成测试全绿。
+
+---
+
+## [0.1.2] - 2026-07-03 · 依赖审计与兜底修复
+
+继续针对公开仓库下载后的“缺依赖 / 写死路径 / 版本不一致”做发布后审计。
+
+### 修复
+- **截图与看屏幕依赖补齐**：主依赖新增 `Pillow`、`mss`，避免截图/看屏幕/部分 ComfyUI GIF 合成在干净环境缺包。
+- **服务调用依赖补齐**：主依赖新增 `httpx`，覆盖向量搜索等服务模块的直接 import。
+- **前端缺包修复**：`frontend/package.json` 新增 `ws`，修复桌面端通过 Chrome DevTools Protocol 读取 B 站 Cookie 时缺 WebSocket 客户端的问题。
+- **前端安全锁文件修复**：在不做 Electron 大版本迁移的前提下，锁文件升级 `axios`、`form-data`、`path-to-regexp`、`qs` 等可安全修复项。
+- **Silero VAD 兜底**：`torch` 不再是顶层硬依赖；未安装 `torch` 或 Silero 模型加载失败时，自动降级到零依赖的 `EnergyVAD`。
+- **本地 ASR 兜底**：`faster-whisper` 自动设备选择时，缺 `torch` 会使用 CPU 模式，不再误报成 faster-whisper 未安装。
+- **可选依赖分组补齐**：新增 `desktop-control`、`bilibili`、`vad-silero`、`singing-rvc` extras，让启用桌面控制、B 站、Silero VAD、RVC 唱歌的人能按功能安装。
+- **版本元数据同步**：Python 包版本、配置默认版本、前端 package 版本、文档示例同步到 `0.1.2`。
+
+### 仍需后续单独处理
+- `npm audit` 还剩 Electron 28 的高危公告；npm 建议升到 Electron 43，属于大版本迁移，需要单独做桌宠兼容验证后再升级。
+
+### 验证
+- `python -m pip install -e .`
+- 安装脚本依赖 import 探测通过。
+- Python import 依赖审计通过。
+- 前端主进程依赖审计通过。
+- `cmd /c "安装.bat /check"`
+- `npm install --package-lock-only --ignore-scripts`
+- 完整测试：`695 passed, 3 skipped`。
 
 ---
 

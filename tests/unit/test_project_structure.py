@@ -4,6 +4,8 @@
 验证所有必要的目录和文件是否存在。
 """
 
+import json
+import re
 from pathlib import Path
 
 
@@ -80,7 +82,43 @@ class TestDirectoryStructure:
             "[project.optional-dependencies]", 1
         )[0]
         assert '"openai>=1.50.0"' in dependencies_block
+        assert '"httpx>=0.27.0"' in dependencies_block
         assert '"yt-dlp>=2026.1.0"' in dependencies_block
+        assert '"pillow>=10.0.0"' in dependencies_block
+        assert '"mss>=9.0.0"' in dependencies_block
+
+    def test_version_metadata_is_consistent(self) -> None:
+        """Published version metadata should not drift across Python/frontend/docs."""
+        pyproject = (PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        init_py = (PROJECT_ROOT / "src" / "white_salary" / "__init__.py").read_text(
+            encoding="utf-8"
+        )
+        config_models = (
+            PROJECT_ROOT / "src" / "white_salary" / "infrastructure" / "config" / "models.py"
+        ).read_text(encoding="utf-8")
+        frontend_pkg = json.loads((PROJECT_ROOT / "frontend" / "package.json").read_text(
+            encoding="utf-8"
+        ))
+
+        version = re.search(r'^version = "([^"]+)"', pyproject, re.MULTILINE).group(1)
+        assert f'__version__ = "{version}"' in init_py
+        assert f'default="{version}"' in config_models
+        assert frontend_pkg["version"] == version
+
+    def test_pyproject_optional_dependency_groups_cover_feature_imports(self) -> None:
+        """Optional feature imports should have matching extras for users who enable them."""
+        text = (PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        assert "desktop-control = [" in text
+        assert '"pyautogui>=0.9.54"' in text
+        assert '"pyperclip>=1.9.0"' in text
+        assert "bilibili = [" in text
+        assert '"bilibili-api-python>=17.0.0"' in text
+        assert '"qrcode[pil]>=8.0"' in text
+        assert '"cryptography>=42.0.0"' in text
+        assert "vad-silero = [" in text
+        assert '"torch>=2.0.0"' in text
+        assert "singing-rvc = [" in text
+        assert '"rvc-python>=0.1.0"' in text
 
     def test_windows_launcher_uses_project_venv(self) -> None:
         """Install/start scripts should use the Windows project .venv."""
@@ -90,6 +128,8 @@ class TestDirectoryStructure:
         assert ".venv\\Scripts\\python.exe" in install
         assert '"%PROJECT_PYTHON%" -m pip install -e .' in install
         assert "yt_dlp" in install
+        assert "PIL" in install
+        assert "mss" in install
         assert ".venv\\Scripts\\python.exe" in start_backend
 
     def test_gpt_sovits_launchers_use_configured_path(self) -> None:

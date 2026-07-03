@@ -7,7 +7,7 @@
 
 [project]
 name = "white-salary"
-version = "0.1.1"
+version = "0.1.2"
 description = "White Salary - 超强AI智能体，对标Neuro-sama级别的AI VTuber"
 readme = "README.md"
 license = { text = "MIT" }
@@ -37,6 +37,7 @@ dependencies = [
     # --- AI/ML 基础 ---
     "numpy>=1.26.0",             # 数值计算（音频处理等会用到）
     "openai>=1.50.0",            # OpenAI compatible SDK used by the default LLM adapter
+    "httpx>=0.27.0",             # 异步 HTTP 客户端（向量搜索/部分服务调用）
 
     # --- 2026-07-03 审计修复（批5）补齐实际在用但未声明的依赖 ---
     "python-multipart>=0.0.9",   # FastAPI 解析 multipart 表单（设置面板图片上传）
@@ -44,6 +45,10 @@ dependencies = [
 
     # --- 2026-07-03 工具实现（批9）---
     "yt-dlp>=2026.1.0",          # 视频下载工具（download_video）后端
+
+    # --- 2026-07-03 发布后审计：截图/看屏幕链路依赖 ---
+    "pillow>=10.0.0",             # 截图压缩、ComfyUI GIF 合成
+    "mss>=9.0.0",                 # 跨平台截屏后端（Windows/macOS/Linux）
 ]
 
 # ---------------------------------------------------------------------------
@@ -59,6 +64,9 @@ llm-anthropic = ["anthropic>=0.37.0"]
 asr-whisper = ["faster-whisper>=1.0.0"]
 asr-funasr = ["funasr>=1.0.0"]
 
+# 语音活动检测（VAD，可选：默认缺 torch 会自动降级到 EnergyVAD）
+vad-silero = ["torch>=2.0.0"]
+
 # 语音合成（TTS）
 tts-edge = ["edge-tts>=6.1.0"]
 tts-azure = ["azure-cognitiveservices-speech>=1.40.0"]
@@ -66,13 +74,38 @@ tts-azure = ["azure-cognitiveservices-speech>=1.40.0"]
 # 向量数据库（长期记忆用）
 memory-vector = ["chromadb>=0.5.0"]
 
+# 桌面控制工具（可选：鼠标键盘自动化）
+desktop-control = [
+    "pyautogui>=0.9.54",
+    "pyperclip>=1.9.0",
+]
+
+# B站直播/登录增强（可选）
+bilibili = [
+    "bilibili-api-python>=17.0.0",
+    "qrcode[pil]>=8.0",
+    "cryptography>=42.0.0",
+]
+
+# 唱歌 / RVC 变声（可选）
+singing-rvc = ["rvc-python>=0.1.0"]
+
 # 全部安装（开发用）
 all = [
     "openai>=1.50.0",
     "anthropic>=0.37.0",
     "faster-whisper>=1.0.0",
+    "funasr>=1.0.0",
+    "torch>=2.0.0",
     "edge-tts>=6.1.0",
+    "azure-cognitiveservices-speech>=1.40.0",
     "chromadb>=0.5.0",
+    "pyautogui>=0.9.54",
+    "pyperclip>=1.9.0",
+    "bilibili-api-python>=17.0.0",
+    "qrcode[pil]>=8.0",
+    "cryptography>=42.0.0",
+    "rvc-python>=0.1.0",
 ]
 
 # 开发工具
