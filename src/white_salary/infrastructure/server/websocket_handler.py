@@ -101,6 +101,25 @@ _content_filter = _make_content_filter(_module_features.content_filter)
 _topic_tracker: Optional[TopicTracker] = _make_topic_tracker(_module_features.topic_tracker)
 
 
+def _get_plugin_manager():
+    """
+    2026-07-03 功能大项（批11）：从 settings_api 运行实例注册表取 PluginManager。
+
+    run_server 创建 PluginManager 后经 register_runtime_instance('plugins', ...)
+    登记；桌面链路的 on_message 抢答 / on_reply 改写从这里取用。取不到返回
+    None（未注册/注册表异常），调用方跳过钩子按原流程走，绝不因此报错。
+
+    Returns:
+        PluginManager 实例或 None
+    """
+    try:
+        from white_salary.infrastructure.server.settings_api import get_runtime_instance
+        return get_runtime_instance("plugins")
+    except Exception as e:
+        logger.debug(f"[WS] 取插件管理器失败（跳过插件钩子）: {e}")
+        return None
+
+
 def _presence_is_quiet() -> bool:
     """
     2026-07-03 工具实现（批9）：查询忙碌/静默状态。
@@ -137,27 +156,34 @@ def _partition_bridge_messages(messages: list[dict]) -> tuple[list[str], list[st
     """
     2026-07-03 工具实现（批9）：把跨平台桥消息分成「提醒类」与「普通播报」两组提示片段。
 
-    source=="reminder" 的是 ReminderService 到点推送的提醒——用户明确设的提醒
-    不算"主动搭话"，静默期间也要照常通知（穿透静默）；其余为QQ转发等普通播报，
-    静默期间跳过。纯函数便于单测。
+    穿透静默的两类（第一组）：
+      - source=="reminder"：用户明确设的提醒到点，不算"主动搭话"，静默期也要通知。
+      - source=="game"：游戏事件触发的道喜/吐槽（批11 游戏对接）——是对用户当下
+        操作的即时回应，静默期也应照常出现，否则打赢 Boss 白却不吭声，体验割裂。
+    其余（source=="qq" 等普通转发播报）归第二组，静默期间跳过。纯函数便于单测。
 
     Args:
         messages: CrossPlatformBridge.pop_desktop_messages() 的结果
 
     Returns:
-        (提醒类提示片段列表, 普通播报提示片段列表)
+        (穿透静默的提示片段列表, 普通播报提示片段列表)
     """
-    reminder_parts: list[str] = []
+    passthrough_parts: list[str] = []
     normal_parts: list[str] = []
     for msg in messages:
         text = msg.get("message", "")
         if not text:
             continue
-        if msg.get("source", "qq") == "reminder":
-            reminder_parts.append(f"你之前设的提醒到点了，请自然地转告用户：{text}")
+        source = msg.get("source", "qq")
+        if source == "reminder":
+            passthrough_parts.append(f"你之前设的提醒到点了，请自然地转告用户：{text}")
+        elif source == "game":
+            # 2026-07-03 功能大项（批11）：游戏事件提示已是"翻译好的一句自然话术"，
+            # 直接作为触发提示交给白（穿透静默），让她对玩家刚发生的游戏事件即时回应
+            passthrough_parts.append(text)
         else:
-            normal_parts.append(f"收到来自{msg.get('source', 'qq')}的消息：{text}")
-    return reminder_parts, normal_parts
+            normal_parts.append(f"收到来自{source}的消息：{text}")
+    return passthrough_parts, normal_parts
 
 
 _SENTENCE_END = re.compile(r"[。！？!?…\n]")
@@ -537,16 +563,17 @@ async def handle_chat_websocket(
                 # 2026-07-03 工具实现（批9）：桥消息分流——提醒类（source=reminder）
                 # 穿透静默照常播报；普通播报静默期间丢弃（不留队列，避免静默结束后
                 # 一次性轰炸；主人下静默命令即表示不要这些转发）
-                reminder_parts, normal_parts = _partition_bridge_messages(messages)
+                # 2026-07-03 功能大项（批11）：passthrough=提醒+游戏事件（穿透静默）
+                passthrough_parts, normal_parts = _partition_bridge_messages(messages)
                 if normal_parts and _presence_is_quiet():
                     logger.info(
                         f"[Bridge] 忙碌/静默模式：丢弃{len(normal_parts)}条主动播报"
                     )
                     normal_parts = []
-                parts: list[str] = reminder_parts + normal_parts
+                parts: list[str] = passthrough_parts + normal_parts
                 if parts:
                     hint = "；".join(parts) + "。请用语音回复用户。"
-                    await _auto_chat_send(hint, ignore_quiet=bool(reminder_parts))
+                    await _auto_chat_send(hint, ignore_quiet=bool(passthrough_parts))
             except Exception as e:
                 # 2026-07-02 审计修复（批3）：桥轮询异常不再裸吞，至少留日志
                 logger.warning(f"[Bridge] 桌面桥轮询异常: {e}")
@@ -770,6 +797,104 @@ async def handle_chat_websocket(
         await auto_chat.stop()
 
 
+async def _emit_plugin_reply(
+    websocket: WebSocket,
+    agent: ChatAgent,
+    tts: Optional[TTSInterface],
+    reply_text: str,
+    cancel: CancellationToken,
+    owner_id: str = "desktop",
+    owner_name: Optional[str] = None,
+    user_input: str = "",
+    send_lock: Optional[asyncio.Lock] = None,
+) -> None:
+    """
+    2026-07-03 功能大项（批11）：把插件抢答的回复按标准帧协议一次性下发。
+
+    插件回复不是流式的（一次拿到整段），这里补齐前端期望的帧序列：
+    reply_start(source=user) → sentence(index=0) → [sentence_audio] → done，
+    并写入跨平台对话日志（与 LLM 回复一致，保证桌面端能显示+朗读+留痕）。
+    经 process_reply 让 on_reply 型插件也有机会改写抢答内容。
+    全程 try/except 兜底：出错只记日志，不影响 WebSocket 连接。
+
+    Args:
+        websocket:   连接
+        agent:       当前 ChatAgent（取情绪语速倍率用）
+        tts:         TTS 适配器（None 则只发文本不合成语音）
+        reply_text:  插件 on_message 返回的回复原文
+        cancel:      取消令牌（取消则静默返回）
+        owner_id:    主人统一 user_id（写对话日志用）
+        owner_name:  对用户的称呼（写对话日志用，可为 None）
+        user_input:  本轮用户原始输入（写对话日志用）
+        send_lock:   连接级发送锁
+    """
+    try:
+        # on_reply 型插件仍有机会改写抢答内容
+        _plugin_mgr = _get_plugin_manager()
+        if _plugin_mgr is not None:
+            try:
+                reply_text = await _plugin_mgr.process_reply(reply_text)
+            except Exception as _pre:
+                logger.warning(f"[WS] 插件 on_reply 改写抢答内容异常，保留原文: {_pre}")
+
+        clean_text = strip_xml_tags(reply_text).strip()
+        if not clean_text or cancel.cancelled:
+            return
+
+        await _send_json(websocket, {
+            "type": "reply_start", "source": "user",
+        }, send_lock)
+        await _send_json(websocket, {
+            "type": "sentence", "content": clean_text, "index": 0,
+        }, send_lock)
+
+        # TTS 合成（可选；失败只跳过语音，不影响文本）
+        if tts is not None and not cancel.cancelled:
+            try:
+                tts_text = strip_action_tags(clean_text)
+                if tts_text and is_valid_for_tts(tts_text):
+                    if hasattr(tts, "synthesize_with_speed"):
+                        audio = await tts.synthesize_with_speed(  # type: ignore[union-attr]
+                            tts_text,
+                            speed_multiplier=_get_emotion_speed_multiplier(agent),
+                        )
+                    else:
+                        audio = await tts.synthesize(tts_text)  # type: ignore[union-attr]
+                    if audio.samples and len(audio.samples) > 0 and not cancel.cancelled:
+                        audio_b64 = base64.b64encode(audio.samples).decode("ascii")
+                        await _send_json(websocket, {
+                            "type": "sentence_audio",
+                            "content": audio_b64,
+                            "format": audio.dtype,
+                            "index": 0,
+                        }, send_lock)
+            except Exception as _te:
+                logger.warning(f"[WS] 插件回复 TTS 合成跳过: {_te}")
+
+        if cancel.cancelled:
+            return
+        await _send_json(websocket, {"type": "done", "content": clean_text}, send_lock)
+
+        # 写入跨平台对话日志（与 LLM 回复口径一致）
+        try:
+            from white_salary.core.memory.conversation_log import ConversationLog
+            conv_log = ConversationLog.get_instance()
+            conv_log.record(
+                platform="desktop",
+                user_name=owner_name or "",
+                user_id=owner_id,
+                group_id="",
+                user_msg=user_input,
+                ai_reply=clean_text,
+            )
+        except Exception as _le:
+            logger.warning(f"[WS] 插件抢答对话日志写入失败: {_le}")
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning(f"[WS] 下发插件抢答回复失败: {e}")
+
+
 async def _handle_chat_message(
     websocket: WebSocket,
     agent: ChatAgent,
@@ -808,6 +933,30 @@ async def _handle_chat_message(
         return
 
     logger.debug(f"User message: {user_input[:50]}...")
+
+    # ========== 插件消息钩子（抢答）==========
+    # 2026-07-03 功能大项（批11）：LLM 生成前先让插件处理消息。
+    # 只对真实用户消息走抢答（is_user_message=True）；auto_chat/图片流程等
+    # 系统构造输入不触发插件（它们不是"用户说的话"）。on_message 型插件返回
+    # 非空 → 直接把它作为完整回复下发（reply_start+sentence+done+TTS），
+    # 跳过整段 LLM 流式。process_message 内部有超时+异常兜底，这里再包一层：
+    # 出任何岔子都当作"无插件拦截"继续走正常 LLM 流程。
+    if is_user_message and not cancel.cancelled:
+        _plugin_mgr = _get_plugin_manager()
+        if _plugin_mgr is not None:
+            try:
+                _plugin_reply = await _plugin_mgr.process_message(user_input, owner_id)
+            except Exception as _pe:
+                logger.warning(f"[WS] 插件 on_message 钩子异常，走正常LLM流程: {_pe}")
+                _plugin_reply = None
+            if _plugin_reply and not cancel.cancelled:
+                logger.info(f"[WS] 插件抢答: {_plugin_reply[:30]}")
+                await _emit_plugin_reply(
+                    websocket, agent, tts, _plugin_reply, cancel,
+                    owner_id=owner_id, owner_name=owner_name,
+                    user_input=user_input, send_lock=send_lock,
+                )
+                return
 
     # 2026-07-02 审计修复（批3）：TTS 后台 worker —— 句子文本入队，worker 按
     # 句序合成并下发 sentence_audio；这样 TTS 合成不阻塞 LLM chunk 接收循环
@@ -977,6 +1126,18 @@ async def _handle_chat_message(
             final_text = _handle_chat_message._human_filter.filter_response(final_text)
         except Exception:
             pass
+
+        # ========== 插件回复钩子（改写）==========
+        # 2026-07-03 功能大项（批11）：done 正文与对话日志写入前让 on_reply 型
+        # 插件改写最终回复（sentence 已流式发出，这里改写的是 done 正文/留痕文本，
+        # 与 QQ 端 process_reply 口径一致）。process_reply 内部有 SafeExecutor+顶层
+        # 兜底，这里再包一层：出任何岔子都保留过滤后的原文。
+        _reply_plugin_mgr = _get_plugin_manager()
+        if _reply_plugin_mgr is not None:
+            try:
+                final_text = await _reply_plugin_mgr.process_reply(final_text)
+            except Exception as _pre:
+                logger.warning(f"[WS] 插件 on_reply 钩子异常，保留原回复: {_pre}")
 
         # Step 3: Send expression command (if emotion system available)
         if not cancel.cancelled and hasattr(agent, '_memory_manager') and agent._memory_manager:

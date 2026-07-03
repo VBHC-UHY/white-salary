@@ -450,6 +450,18 @@ class TestDesktopProactiveGate:
         assert "提醒到点" in reminder_parts[0]
         assert len(normal_parts) == 1 and "来自qq" in normal_parts[0]
 
+    def test_partition_game_events_passthrough(self) -> None:
+        """2026-07-03 批11：source=game 的游戏事件归穿透组（静默期也播报），
+        且原样作为触发提示，不加'收到来自xx的消息'前缀。"""
+        messages = [
+            {"message": "阿白刚打赢了Boss，快夸夸他！", "source": "game"},
+            {"message": "普通QQ转发", "source": "qq"},
+        ]
+        passthrough_parts, normal_parts = _partition_bridge_messages(messages)
+        assert len(passthrough_parts) == 1
+        assert passthrough_parts[0] == "阿白刚打赢了Boss，快夸夸他！"
+        assert len(normal_parts) == 1 and "来自qq" in normal_parts[0]
+
 
 # ================================================================
 # 7. 注册表：旧7名不在册、新3名+提醒三件套在册

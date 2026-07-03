@@ -23,6 +23,26 @@ from white_salary.adapters.platform.qq_adapter import QQAdapter, QQMessage
 from white_salary.infrastructure.config.models import FeaturesConfig
 
 
+def _get_plugin_manager():
+    """
+    2026-07-03 功能大项（批11）：从 settings_api 运行实例注册表取 PluginManager。
+
+    run_server 创建 PluginManager 后经 register_runtime_instance('plugins', ...)
+    登记；这里取用于消息钩子（on_message 抢答 / on_reply 改写）。
+    取不到（未注册/注册表异常）返回 None，调用方跳过钩子、按原流程走，
+    绝不因插件系统缺失而报错。
+
+    Returns:
+        PluginManager 实例或 None
+    """
+    try:
+        from white_salary.infrastructure.server.settings_api import get_runtime_instance
+        return get_runtime_instance("plugins")
+    except Exception as e:
+        logger.debug(f"[QQ] 取插件管理器失败（跳过插件钩子）: {e}")
+        return None
+
+
 def _resolve_features(features: Optional[FeaturesConfig] = None) -> FeaturesConfig:
     """
     2026-07-03 面板升级（批6）：解析功能开关配置。
@@ -595,6 +615,26 @@ async def start_qq_service(
             except Exception as _e:
                 logger.debug(f"[QQ] QZone社交联动异常: {_e}")
 
+            # ========== 插件消息钩子（抢答）==========
+            # 2026-07-03 功能大项（批11）：LLM 生成前先让插件处理消息。
+            # on_message 型插件（daily_fortune/coin_flip 等）返回非空 → 直接
+            # 用它作为回复、跳过整段 LLM 生成（"抢答"）；返回空则正常走 LLM。
+            # 钩子调用整体由 PluginManager.process_message 内部 try/except+超时
+            # 兜底（单个坏插件不拖垮消息链路），这里再包一层保险：出任何岔子都
+            # 当作"无插件拦截"继续走 LLM。插件仍受上面所有社交/过滤/静默门槛约束。
+            _plugin_mgr = _get_plugin_manager()
+            if _plugin_mgr is not None:
+                try:
+                    _plugin_reply = await _plugin_mgr.process_message(text, msg.user_id)
+                except Exception as _pe:
+                    logger.warning(f"[QQ] 插件 on_message 钩子异常，走正常LLM流程: {_pe}")
+                    _plugin_reply = None
+                if _plugin_reply:
+                    logger.info(f"[QQ] 插件抢答 {msg.sender_name}: {_plugin_reply[:30]}")
+                    # 记录到上下文并直接返回（不进 LLM）
+                    ctx_manager.add_message(context_id, bot_name, _plugin_reply[:100])
+                    return _plugin_reply
+
             # ========== 生成回复（带实时多消息拦截） ==========
             # 白生成回复期间如果收到新消息，生成完后丢掉旧回复，合并重新生成
             # 最多重新生成2次，防止对方一直发消息导致无限循环
@@ -716,6 +756,19 @@ async def start_qq_service(
                 clean_reply = handle_qq_message._human_filter.filter_response(clean_reply)
             except Exception as _e:
                     logger.debug(f'[QQ] 静默异常: {_e}')
+
+            # ========== 插件回复钩子（改写）==========
+            # 2026-07-03 功能大项（批11）：AI 回复发出前让 on_reply 型插件有机会
+            # 改写内容（如加签名/替换敏感词）。process_reply 内部对每个插件都有
+            # SafeExecutor 兜底（异常/超时返回上一版），顶层也有 try/except；
+            # 这里再包一层：出任何岔子都保留过滤后的原回复。独立取一次管理器实例
+            # （不依赖上面抢答段的局部变量，防止代码路径变动导致未定义）。
+            _reply_plugin_mgr = _get_plugin_manager()
+            if _reply_plugin_mgr is not None:
+                try:
+                    clean_reply = await _reply_plugin_mgr.process_reply(clean_reply)
+                except Exception as _pre:
+                    logger.warning(f"[QQ] 插件 on_reply 钩子异常，保留原回复: {_pre}")
 
             # 记录AI回复到上下文
             ctx_manager.add_message(context_id, bot_name, clean_reply[:100])

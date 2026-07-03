@@ -68,6 +68,13 @@ def create_app(
             "version": config.system.version,
         }
 
+    # 2026-07-03 功能大项（批11）：注册游戏对接API路由（Aurora Forge 事件上报→白桌面播报）。
+    # 不依赖 project_root/runtime，无条件挂载：游戏端只需 POST /api/game/event，
+    # 内部把事件翻译成一句提示推给跨平台桥，播报链路（websocket_handler 轮询）已存在。
+    from white_salary.infrastructure.server.game_api import create_game_router
+    app.include_router(create_game_router())
+    logger.debug("Game API registered at /api/game")
+
     # 注册设置API路由（控制面板用）
     if project_root:
         from white_salary.infrastructure.server.settings_api import create_settings_router

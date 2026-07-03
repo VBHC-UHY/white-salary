@@ -1228,19 +1228,108 @@ def create_settings_router(
         market = _get_market()
         return {"plugins": market.get_installed()}
 
+    @router.post("/plugins/reload")
+    async def reload_plugins() -> dict:
+        """
+        2026-07-03 功能大项（批11）：热重载全部插件（改完/装完不重启即生效）。
+
+        取运行中的 PluginManager（run_server 注册的 'plugins' 实例）调 reload_all()：
+        重新扫描 plugins/、清模块缓存、重载所有插件并把工具重注册进 registry。
+        未注册运行实例时提示需重启（不报错）。
+        """
+        pm = _get_runtime("plugins")
+        if pm is None or not hasattr(pm, "reload_all"):
+            return {
+                "status": "error",
+                "message": "后端未注入插件管理器运行实例，插件改动需重启后端生效",
+            }
+        try:
+            loaded = await pm.reload_all()
+            return {
+                "status": "ok",
+                "loaded": loaded,
+                "message": f"插件已热重载（当前 {loaded} 个）",
+            }
+        except Exception as e:
+            logger.error(f"[Settings] 插件热重载失败: {e}")
+            return {"status": "error", "message": f"插件热重载失败: {e}"}
+
+    async def _hot_load_plugin(plugin_id: str) -> bool:
+        """
+        2026-07-03 功能大项（批11）：市场安装成功后热加载单个插件（装完即生效）。
+
+        取运行中的 PluginManager 调 load_one(plugin_id)；取不到运行实例或调用
+        失败都不抛（安装本身已成功，仅"即时生效"降级为"重启生效"）。
+
+        Args:
+            plugin_id: 磁盘插件标识
+
+        Returns:
+            是否已热加载生效
+        """
+        pm = _get_runtime("plugins")
+        if pm is None or not hasattr(pm, "load_one"):
+            return False
+        try:
+            return bool(await pm.load_one(plugin_id))
+        except Exception as e:
+            logger.warning(f"[Settings] 热加载插件 {plugin_id} 失败（需重启生效）: {e}")
+            return False
+
+    async def _hot_unload_plugin(plugin_id: str) -> bool:
+        """
+        2026-07-03 功能大项（批11）：市场卸载成功后热卸载单个插件（卸完即下线）。
+
+        取运行中的 PluginManager 调 unload_one(plugin_id)；取不到运行实例或调用
+        失败都不抛（文件已删除，仅运行中实例延迟到重启才消失）。
+
+        Args:
+            plugin_id: 磁盘插件标识
+
+        Returns:
+            是否已热卸载生效
+        """
+        pm = _get_runtime("plugins")
+        if pm is None or not hasattr(pm, "unload_one"):
+            return False
+        try:
+            return bool(await pm.unload_one(plugin_id))
+        except Exception as e:
+            logger.warning(f"[Settings] 热卸载插件 {plugin_id} 失败（需重启生效）: {e}")
+            return False
+
     @router.post("/plugins/install-from-market")
     async def install_plugin(body: dict) -> dict:
         """从市场安装插件。"""
         plugin_id = body.get("plugin_id", "")
         market = _get_market()
-        return await market.install(plugin_id)
+        result = await market.install(plugin_id)
+        # 2026-07-03 功能大项（批11）：安装成功后尝试热加载运行中的插件系统，
+        # 实现"装完即生效不用重启"；未注入运行实例时维持"重启生效"提示
+        if isinstance(result, dict) and result.get("success"):
+            hot = await _hot_load_plugin(plugin_id)
+            result["hot_loaded"] = hot
+            if hot:
+                result["message"] = f"{result.get('message', '已安装')}（已即时生效）"
+            else:
+                result["message"] = f"{result.get('message', '已安装')}（重启后端后生效）"
+        return result
 
     @router.post("/plugins/uninstall")
     async def uninstall_plugin(body: dict) -> dict:
         """卸载插件。"""
         plugin_id = body.get("plugin_id", "")
         market = _get_market()
-        return market.uninstall(plugin_id)
+        # 2026-07-03 功能大项（批11）：先热卸载运行中的实例（反注册其工具+清钩子），
+        # 再删文件——顺序上先下线再删盘，避免删盘后运行实例还残留工具供 LLM 误选。
+        # 热卸载失败不阻断文件卸载（文件删除是用户的直接意图）。
+        hot = await _hot_unload_plugin(plugin_id)
+        result = market.uninstall(plugin_id)
+        if isinstance(result, dict) and result.get("success"):
+            result["hot_unloaded"] = hot
+            if not hot:
+                result["message"] = f"{result.get('message', '已卸载')}（运行中实例需重启后才消失）"
+        return result
 
     @router.post("/plugins/submit")
     async def submit_plugin(body: dict) -> dict:

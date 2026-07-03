@@ -291,6 +291,10 @@ def main() -> None:
     tool_registry = ToolRegistry()
 
     # 插件系统加载
+    # 2026-07-03 功能大项（批11）：加载后把 plugin_manager 注册进 settings_api
+    # 运行实例注册表（键 'plugins'）——两个消息处理器（qq_handler/websocket_handler）
+    # 与设置面板的"重载插件/装完即生效"端点都经此取用运行中的同一实例。
+    from white_salary.infrastructure.server.settings_api import register_runtime_instance
     try:
         from white_salary.core.plugins.manager import PluginManager
         plugin_manager = PluginManager(plugins_dir="plugins")
@@ -298,7 +302,8 @@ def main() -> None:
         import asyncio
         asyncio.get_event_loop().run_until_complete(plugin_manager.load_all())
         plugin_manager.register_tools_to_registry(tool_registry)
-        logger.info(f"[Startup] 插件系统: {plugin_manager.count}个插件已加载")
+        register_runtime_instance("plugins", plugin_manager)
+        logger.info(f"[Startup] 插件系统: {plugin_manager.count}个插件已加载（已注册运行实例）")
     except Exception as e:
         logger.warning(f"[Startup] 插件系统加载失败: {e}")
         plugin_manager = None
