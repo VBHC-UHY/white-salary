@@ -39,12 +39,45 @@ class QQMessage:
         self.message_id = data.get("message_id", 0)
         self.user_id = str(data.get("user_id", ""))
         self.group_id = str(data.get("group_id", ""))
-        self.raw_message = data.get("raw_message", "")
         self.message = data.get("message", "")
+        self.raw_message = data.get("raw_message", "") or self._segments_to_raw(self.message)
         self.sender = data.get("sender", {})
         self.sender_name = self.sender.get("nickname", "") or self.sender.get("card", "")
         self.self_id = str(data.get("self_id", ""))
         self.time = data.get("time", 0)
+
+    @staticmethod
+    def _segments_to_raw(message) -> str:
+        """把 OneBot 结构化 message 段轻量转成现有 CQ/text 处理链可识别的文本。"""
+        if isinstance(message, str):
+            return message
+        if not isinstance(message, list):
+            return ""
+
+        parts: list[str] = []
+        for seg in message:
+            if not isinstance(seg, dict):
+                continue
+            seg_type = seg.get("type", "")
+            data = seg.get("data", {}) or {}
+            if seg_type == "text":
+                parts.append(str(data.get("text", "")))
+            elif seg_type == "at":
+                parts.append(f"[CQ:at,qq={data.get('qq', '')}]")
+            elif seg_type == "image":
+                src = data.get("url") or data.get("file") or ""
+                key = "url" if data.get("url") else "file"
+                parts.append(f"[CQ:image,{key}={src}]")
+            elif seg_type == "record":
+                parts.append(f"[CQ:record,file={data.get('file', '')}]")
+            elif seg_type == "reply":
+                reply_id = data.get("id", "")
+                qq = data.get("qq", "")
+                suffix = f",qq={qq}" if qq else ""
+                parts.append(f"[CQ:reply,id={reply_id}{suffix}]")
+            elif seg_type == "face":
+                parts.append(f"[CQ:face,id={data.get('id', '')}]")
+        return "".join(parts)
 
     @property
     def is_private(self) -> bool:
@@ -149,7 +182,22 @@ class QQMessage:
         """提取消息中的所有图片URL。"""
         import re
         urls = re.findall(r"\[CQ:image,[^\]]*url=([^\],]+)", self.raw_message)
-        return urls
+        if isinstance(self.message, list):
+            for seg in self.message:
+                if not isinstance(seg, dict) or seg.get("type") != "image":
+                    continue
+                data = seg.get("data", {}) or {}
+                url = data.get("url") or data.get("file")
+                if url:
+                    urls.append(str(url))
+        deduped: list[str] = []
+        seen: set[str] = set()
+        for url in urls:
+            if url in seen:
+                continue
+            seen.add(url)
+            deduped.append(url)
+        return deduped
 
     @property
     def is_at_me(self) -> bool:
@@ -173,7 +221,14 @@ class QQMessage:
     @property
     def has_image(self) -> bool:
         """检查是否包含图片。"""
-        return "[CQ:image," in self.raw_message
+        if "[CQ:image," in self.raw_message:
+            return True
+        if isinstance(self.message, list):
+            return any(
+                isinstance(seg, dict) and seg.get("type") == "image"
+                for seg in self.message
+            )
+        return False
 
 
 class QQAdapter:
@@ -421,6 +476,7 @@ class QQAdapter:
                 self._smart_decider = SmartReplyDecider(
                     bot_self_id=self._self_id,
                     bot_name=self._bot_name,
+                    owner_ids=list(self._family_qq),
                 )
             from white_salary.core.smart_reply import ReplyDecision
 
@@ -428,7 +484,11 @@ class QQAdapter:
             self._smart_decider.record_user_response(msg.group_id, msg.user_id)
 
             # 引用白的消息→强制回复，跳过SmartReplyDecider
-            if not _is_reply_to_me:
+            _is_owner_media = (
+                msg.user_id in self._family_qq
+                and (msg.has_image or "[CQ:record," in msg.raw_message)
+            )
+            if not _is_reply_to_me and not _is_owner_media:
                 result = self._smart_decider.decide(msg)
                 if result.decision != ReplyDecision.REPLY:
                     return

@@ -813,6 +813,11 @@ class MemoryManager:
         if imp_ctx:
             parts.append(imp_ctx)
 
+        # 最近跨平台对话（同一 user_id 在桌面/QQ 的最近几轮）
+        recent_ctx = self._get_recent_conversation_context(user_id=user_id)
+        if recent_ctx:
+            parts.append(recent_ctx)
+
         # 跨会话关联记忆（之前对话中提到的相关人/事）
         cross_ctx = self._cross_linker.find_related_memories(current_message)
         if cross_ctx:
@@ -832,6 +837,51 @@ class MemoryManager:
             return ""
 
         return "\n\n".join(parts)
+
+    def _get_recent_conversation_context(
+        self,
+        user_id: str = "desktop",
+        limit: int = 4,
+    ) -> str:
+        """
+        获取同一用户最近的跨平台对话片段。
+
+        ConversationLog 是 QQ/桌面共同写入的轻量日志。这里按 user_id 过滤后
+        注入最近几轮，解决“QQ 刚聊过，桌面端自然对话不知道；桌面刚聊过，
+        QQ 端自然对话也不知道”的断层。只按同一 user_id 注入，避免群友内容
+        串进主人的桌面上下文。
+        """
+        if not user_id:
+            return ""
+        try:
+            from white_salary.core.memory.conversation_log import ConversationLog
+
+            entries = ConversationLog.get_instance().get_recent_by_user(
+                user_id=str(user_id),
+                limit=limit,
+            )
+        except Exception as exc:
+            logger.debug(f"[Memory] 最近跨平台对话读取失败: {exc}")
+            return ""
+
+        if not entries:
+            return ""
+
+        def _short(text: str, max_len: int = 120) -> str:
+            text = (text or "").replace("\n", " ").strip()
+            return text[:max_len] + ("..." if len(text) > max_len else "")
+
+        lines = ["[最近跨平台对话上下文]"]
+        for entry in reversed(entries):
+            platform = "QQ" if entry.platform == "qq" else "桌面"
+            if entry.platform == "qq" and entry.group_id:
+                platform = f"QQ群{entry.group_id}"
+            user_label = entry.user_name or entry.user_id or "用户"
+            if entry.user_msg:
+                lines.append(f"- [{entry.time_str} {platform}] {user_label}: {_short(entry.user_msg)}")
+            if entry.ai_reply:
+                lines.append(f"  白: {_short(entry.ai_reply)}")
+        return "\n".join(lines) if len(lines) > 1 else ""
 
     # ================================================================
     # 统计和管理

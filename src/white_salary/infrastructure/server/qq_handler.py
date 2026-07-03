@@ -18,6 +18,7 @@ from loguru import logger
 
 from white_salary.core.agent.chat_agent import ChatAgent
 from white_salary.core.affinity.manager import AffinityManager
+from white_salary.core.interfaces.types import AudioData
 from white_salary.adapters.platform.qq_adapter import QQAdapter, QQMessage
 # 2026-07-03 面板升级（批6）：功能开关配置模型（features 节，纯Pydantic无循环依赖）
 from white_salary.infrastructure.config.models import FeaturesConfig
@@ -87,6 +88,25 @@ def _expected_memory_tag(user_name: str, group_id: str, is_group: bool) -> str:
         return f"[回复 群{group_id} {name}] "
     if name != "用户":
         return f"[回复 {name}] "
+    return ""
+
+
+async def _transcribe_qq_voice(asr_adapter, audio_bytes: bytes, dtype: str = "mp3") -> str:
+    """用统一 ASRInterface.transcribe 识别 QQ 语音字节。"""
+    if not asr_adapter or not audio_bytes:
+        return ""
+
+    if hasattr(asr_adapter, "transcribe"):
+        result = await asr_adapter.transcribe(
+            AudioData(samples=audio_bytes, sample_rate=16000, dtype=dtype)
+        )
+        return str(getattr(result, "text", "") or "").strip()
+
+    # 兼容极老的自定义适配器；正式接口仍以 transcribe 为准。
+    if hasattr(asr_adapter, "recognize"):
+        result = await asr_adapter.recognize(audio_bytes)
+        return str(result or "").strip()
+
     return ""
 
 
@@ -395,7 +415,11 @@ async def start_qq_service(
                             from pathlib import Path
                             voice_path = Path(voice_data["file"])
                             if voice_path.exists():
-                                asr_text = await asr_adapter.recognize(voice_path.read_bytes())
+                                asr_text = await _transcribe_qq_voice(
+                                    asr_adapter,
+                                    voice_path.read_bytes(),
+                                    "mp3",
+                                )
                                 if asr_text:
                                     text = asr_text
                                     logger.info(f"[QQ] 语音识别: {asr_text[:30]}")
@@ -770,6 +794,9 @@ async def start_qq_service(
                 except Exception as _pre:
                     logger.warning(f"[QQ] 插件 on_reply 钩子异常，保留原回复: {_pre}")
 
+            if not clean_reply.strip():
+                clean_reply = "刚才脑袋空了一下，你再说一遍？"
+
             # 记录AI回复到上下文
             ctx_manager.add_message(context_id, bot_name, clean_reply[:100])
 
@@ -804,6 +831,9 @@ async def start_qq_service(
                         logger.debug(f'[QQ] 静默异常: {_e}')
                 # 清除<sticker>标签本身
                 clean_reply = _re.sub(r'<sticker>.*?</sticker>', '', clean_reply).strip()
+
+            if not clean_reply.strip():
+                clean_reply = "刚才脑袋空了一下，你再说一遍？"
 
             logger.info(
                 f"[QQ] {'群' if msg.is_group else '私'}聊 "

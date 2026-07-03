@@ -1107,7 +1107,9 @@ async def _handle_chat_message(
             buffer = ""
 
         if not sentences:
-            return
+            fallback = "...抱歉，我刚才走神了。你说什么？"
+            sentences.append(fallback)
+            await _emit_sentence(fallback)
 
         # 等待 TTS worker 把队列里的句子全部合成完（保证 done 帧最后到达）
         if tts_worker is not None:

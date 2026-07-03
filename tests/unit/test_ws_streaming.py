@@ -312,6 +312,18 @@ def test_timeout_with_no_content_sends_fallback(quiet_side_effects, monkeypatch)
     assert "走神" in sentence_frames[0]["content"]
 
 
+def test_empty_finished_stream_sends_fallback_and_done(quiet_side_effects):
+    """LLM正常结束但空回复：下发兜底句和done，避免前端一直等。"""
+    ws = FakeWebSocket()
+    agent = FakeAgent([])
+    _run(_handle_chat_message(ws, agent, None, "在吗", CancellationToken()))
+
+    sentence_frames = ws.of_type("sentence")
+    assert len(sentence_frames) == 1
+    assert "走神" in sentence_frames[0]["content"]
+    assert len(ws.of_type("done")) == 1
+
+
 def test_cancel_closes_generator_and_skips_done(quiet_side_effects):
     """用户取消路径：生成器被 aclose()，不再发后续句子和 done 帧。"""
     ws = FakeWebSocket()

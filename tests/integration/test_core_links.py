@@ -358,6 +358,47 @@ class TestCrossPlatformRecall:
         assert "香蕉" in only_qq
         assert "苹果" not in only_qq
 
+    def test_recent_by_user_filters_same_identity_only(self, tmp_path):
+        """最近跨平台对话必须按 user_id 过滤，不能把其他QQ用户串进来。"""
+        from white_salary.core.memory.conversation_log import ConversationLog
+
+        conv_log = ConversationLog(data_dir=str(tmp_path))
+        conv_log.record("desktop", "小白", "owner", "", "桌面聊过芝士蛋糕", "记得")
+        conv_log.record("qq", "小白", "owner", "g1", "QQ聊过草莓蛋糕", "记得")
+        conv_log.record("qq", "路人", "stranger", "g1", "路人聊过榴莲蛋糕", "嗯")
+
+        entries = conv_log.get_recent_by_user("owner", limit=10)
+        text = "\n".join(e.user_msg for e in entries)
+
+        assert "芝士蛋糕" in text
+        assert "草莓蛋糕" in text
+        assert "榴莲蛋糕" not in text
+
+    def test_memory_context_auto_injects_recent_cross_platform_log(self, tmp_path, monkeypatch):
+        """
+        普通对话也应自然带入同一 user_id 的最近 QQ/桌面对话，而不是只能靠
+        用户显式说“你还记得吗”触发 recall_conversation。
+        """
+        from white_salary.core.memory.conversation_log import ConversationLog
+
+        conv_log = ConversationLog(data_dir=str(tmp_path / "conv"))
+        monkeypatch.setattr(
+            ConversationLog,
+            "get_instance",
+            classmethod(lambda cls, data_dir="data/memory": conv_log),
+        )
+        conv_log.record("qq", "小白", "owner", "216", "QQ里说我要买蓝莓蛋糕", "好")
+        conv_log.record("desktop", "小白", "owner", "", "桌面说蛋糕要少糖", "记下了")
+        conv_log.record("qq", "路人", "stranger", "216", "路人说榴莲蛋糕", "嗯")
+
+        mgr = _make_memory_manager(tmp_path / "memory")
+        ctx = mgr.get_context_injection("继续刚才那个蛋糕", user_id="owner")
+
+        assert "[最近跨平台对话上下文]" in ctx
+        assert "蓝莓蛋糕" in ctx
+        assert "少糖" in ctx
+        assert "榴莲蛋糕" not in ctx
+
 
 # ===================================================================
 # 子项 4：好感度累积（桌面端 process_message 路径能让好感度真的涨）

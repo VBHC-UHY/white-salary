@@ -8,13 +8,16 @@ QQ链路稳定性修复的单元测试（2026-07-02 审计修复（批4））。
   4. QZone Cookie过期桌面提醒的每日一次节流（qzone_monitor）
 """
 
+import asyncio
 import time
+from types import SimpleNamespace
 
-from white_salary.adapters.platform.qq_adapter import QQAdapter
+from white_salary.adapters.platform.qq_adapter import QQAdapter, QQMessage
 from white_salary.core.interfaces.types import Message, MessageRole
 from white_salary.core.services.qzone_monitor import QzoneMonitor
 from white_salary.infrastructure.server.qq_handler import (
     _expected_memory_tag,
+    _transcribe_qq_voice,
     _undo_generation_pair,
 )
 
@@ -107,6 +110,81 @@ class TestGroupRequestDecision:
         approve, reason = self._adapter()._decide_group_request("add", "888", None)
         assert approve is True
         assert "不可用" in reason
+
+
+class TestQQMessageMedia:
+    """结构化 OneBot 消息也要进入现有文本/图片处理链。"""
+
+    def test_structured_image_message_keeps_text_and_url(self) -> None:
+        msg = QQMessage({
+            "post_type": "message",
+            "message_type": "group",
+            "user_id": "10001",
+            "group_id": "2163039710",
+            "raw_message": "",
+            "message": [
+                {"type": "text", "data": {"text": "看看这个"}},
+                {"type": "image", "data": {"url": "https://example.com/a.png"}},
+            ],
+        })
+
+        assert msg.has_image is True
+        assert msg.image_urls == ["https://example.com/a.png"]
+        assert "看看这个" in msg.text
+        assert "[图片]" in msg.text
+
+    def test_owner_group_image_bypasses_inactive_smart_reply(self) -> None:
+        adapter = QQAdapter(family_qq=["10001"])
+        adapter._self_id = "99999"
+        seen: list[str] = []
+        sent: list[str] = []
+
+        async def on_message(msg: QQMessage) -> str:
+            seen.append(msg.text)
+            return "收到图片了"
+
+        async def send_reply(msg: QQMessage, reply: str) -> None:
+            sent.append(reply)
+
+        adapter.on_message = on_message
+        adapter.send_reply = send_reply  # type: ignore[method-assign]
+        msg = QQMessage({
+            "post_type": "message",
+            "message_type": "group",
+            "user_id": "10001",
+            "group_id": "2163039710",
+            "self_id": "99999",
+            "raw_message": "",
+            "message": [
+                {"type": "image", "data": {"url": "https://example.com/a.png"}},
+            ],
+            "sender": {"nickname": "小白"},
+        })
+
+        asyncio.run(adapter._handle_message(msg))
+
+        assert seen == ["[图片]"]
+        assert sent == ["收到图片了"]
+
+
+class TestQQVoiceASR:
+    """QQ语音识别必须走 ASRInterface.transcribe。"""
+
+    def test_transcribe_helper_uses_asr_interface(self) -> None:
+        class FakeASR:
+            def __init__(self) -> None:
+                self.audio = None
+
+            async def transcribe(self, audio):
+                self.audio = audio
+                return SimpleNamespace(text="你好呀")
+
+        asr = FakeASR()
+        text = asyncio.run(_transcribe_qq_voice(asr, b"voice-bytes", "mp3"))
+
+        assert text == "你好呀"
+        assert asr.audio.samples == b"voice-bytes"
+        assert asr.audio.dtype == "mp3"
 
 
 # ================================================================

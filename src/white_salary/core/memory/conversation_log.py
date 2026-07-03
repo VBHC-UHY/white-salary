@@ -148,6 +148,7 @@ class ConversationLog:
         keyword: str = "",
         platform: str = "",
         user_name: str = "",
+        user_id: str = "",
         limit: int = 15,
         days: int = 30,
     ) -> list[ConversationEntry]:
@@ -158,6 +159,7 @@ class ConversationLog:
             keyword: 关键词（搜索用户消息和AI回复）
             platform: 过滤平台（'desktop'/'qq'，空=全部）
             user_name: 过滤用户名
+            user_id: 过滤用户ID（跨平台同一身份）
             limit: 最多返回条数
             days: 搜索最近多少天
 
@@ -186,6 +188,10 @@ class ConversationLog:
         if user_name:
             conditions.append("user_name LIKE ?")
             params.append(f"%{user_name}%")
+
+        if user_id:
+            conditions.append("user_id = ?")
+            params.append(str(user_id))
 
         where = " AND ".join(conditions)
         sql = f"""
@@ -243,7 +249,7 @@ class ConversationLog:
 
     def get_recent_by_user(self, user_id: str, limit: int = 10) -> list[ConversationEntry]:
         """获取某个用户的最近对话（跨平台）。"""
-        return self.search(user_name="", platform="", limit=limit)
+        return self.search(user_id=str(user_id), platform="", limit=limit)
 
     def get_recent_by_group(self, group_id: str, limit: int = 10) -> list[ConversationEntry]:
         """获取某个群的最近对话。"""
