@@ -857,6 +857,18 @@ class TestUserFilterListBlacklist:
         # 字段完整可供前端渲染
         assert all("reason" in e and "nickname" in e for e in entries)
 
+    def test_legacy_block_api_maps_to_persistent_blacklist(self, tmp_path: Path) -> None:
+        """旧工具接口 block/unblock/get_blocked_list 仍操作持久化黑名单。"""
+        from white_salary.core.memory.user_filter import FilterResult, UserFilter
+
+        uf = UserFilter(data_dir=str(tmp_path))
+        uf.block("444", reason="工具拉黑")
+
+        assert uf.check("444") == FilterResult.BLOCK
+        assert uf.get_blocked_list() == ["444"]
+        assert uf.unblock("444") is True
+        assert uf.check("444") == FilterResult.ALLOW
+
 
 # ====================================================================
 # developer.py 安全项

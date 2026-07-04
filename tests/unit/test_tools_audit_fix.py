@@ -12,6 +12,8 @@
 from pathlib import Path
 from typing import AsyncGenerator
 
+import pytest
+
 from white_salary.adapters.tools.registry import (
     DEFAULT_TOOL_TIMEOUT,
     TOOL_TIMEOUTS,
@@ -136,6 +138,29 @@ class TestRegistrySlimming:
     def test_registry_under_deepseek_limit(self) -> None:
         """瘦身后工具总数低于 DeepSeek 的128个上限。"""
         assert ToolRegistry().count < 128
+
+
+class TestSocialBlacklistTools:
+    """社交黑名单工具应操作 QQ 运行中的 UserFilter。"""
+
+    @pytest.mark.asyncio
+    async def test_block_tools_use_runtime_user_filter(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import white_salary.infrastructure.server.settings_api as settings_api
+        from white_salary.adapters.tools.builtin import social
+        from white_salary.core.memory.user_filter import FilterResult, UserFilter
+
+        monkeypatch.setattr(settings_api, "_runtime_registry", {})
+        runtime_filter = UserFilter(data_dir=str(tmp_path))
+        settings_api.register_runtime_instance("user_filter", runtime_filter)
+
+        assert "已屏蔽" in await social.block_user("unit-tool-user", "测试")
+        assert runtime_filter.check("unit-tool-user") == FilterResult.BLOCK
+        assert "unit-tool-user" in await social.check_blocked_users()
+
+        assert "已移出" in await social.manage_blacklist("remove", "unit-tool-user")
+        assert runtime_filter.check("unit-tool-user") == FilterResult.ALLOW
 
 
 # ================================================================

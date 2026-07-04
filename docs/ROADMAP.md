@@ -152,6 +152,28 @@
 - 需要真实 QQ 群里观察 `llm_detect` 对“继续和白说话/转头和别人说话/自言自语”的判断是否够稳。
 - 如果用户后续想加更多 QQ 唤醒词，只改 `qq.wake_words`，不要改桌面端逻辑。
 
+### 2026-07-04 QQ 黑名单工具与运行实例对齐
+
+问题：
+- 本地 `data/memory/user_filter.json` 当前处于黑名单模式但名单为空，陌生人默认不会因为黑名单被拦。
+- QQ 消息入口实际使用的是启动时注册到 `settings_api` 的持久化 `UserFilter`。
+- 社交工具里的拉黑/解除/查看仍在调用旧接口，且没有优先拿 QQ 运行中的过滤器实例，容易出现“工具显示拉黑了，但 QQ 实际处理不是同一套”的错觉。
+- 连续消息 3 秒防刷冷却、休息模式和群聊唤醒判断也可能让用户误以为是黑名单拦截，需要和黑名单问题分开排查。
+
+处理：
+- 为持久化 `UserFilter` 补回 `block/unblock/get_blocked_list` 兼容接口，旧工具不再因为接口缺失失效。
+- 社交黑名单工具优先使用 `settings_api` 注册的 QQ 运行实例，找不到运行实例时才回退到默认持久化过滤器。
+- `block_user`、`unblock_user`、`manage_blacklist` 改为操作 `add_to_blacklist/remove_from_blacklist`，确保面板、工具和 QQ 实际过滤一致。
+- 新增测试覆盖旧接口兼容和社交工具操作运行实例。
+
+验收：
+- `python -m pytest tests/unit/test_settings_panel_batch6.py::TestUserFilterListBlacklist tests/unit/test_tools_audit_fix.py::TestSocialBlacklistTools -q`，3 passed。
+- `python -m pytest tests/unit/test_tools_audit_fix.py tests/unit/test_settings_panel_batch6.py -q`，60 passed。
+- `python -m py_compile src/white_salary/core/memory/user_filter.py src/white_salary/adapters/tools/builtin/social.py`。
+
+剩余观察：
+- 如果真实 QQ 仍出现“加好友后仍不回”或“陌生人私聊不回”，优先查看社交冷却、休息模式、唤醒词/语义闸门和 NapCat 事件类型，而不是先按黑名单处理。
+
 ## 已知问题和待办
 
 ### P0 - QQ 消息处理流程重整

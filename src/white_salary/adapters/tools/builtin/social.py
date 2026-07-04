@@ -4,6 +4,17 @@ from ._helpers import tool, P, S, I, NONE_PARAMS
 
 def _get_filter():
     try:
+        from white_salary.infrastructure.server.settings_api import get_runtime_instance
+        runtime_filter = get_runtime_instance("user_filter")
+        if runtime_filter is not None:
+            if not hasattr(runtime_filter, "add_to_blacklist") and hasattr(runtime_filter, "_impl"):
+                runtime_filter = runtime_filter._impl
+            if hasattr(runtime_filter, "add_to_blacklist"):
+                return runtime_filter
+    except Exception:
+        pass
+
+    try:
         from white_salary.core.memory.user_filter import UserFilter
         return UserFilter()
     except Exception:
@@ -14,7 +25,7 @@ def _get_filter():
 async def block_user(user_id: str = "", reason: str = "") -> str:
     f = _get_filter()
     if f:
-        f.block(user_id, reason or "手动屏蔽")
+        f.add_to_blacklist(user_id, reason=reason or "手动屏蔽", permanent=True)
         return "已屏蔽该用户"
     return "屏蔽功能不可用"
 
@@ -22,15 +33,17 @@ async def block_user(user_id: str = "", reason: str = "") -> str:
 async def unblock_user(user_id: str = "") -> str:
     f = _get_filter()
     if f:
-        f.unblock(user_id)
-        return "已解除屏蔽"
+        removed = f.remove_from_blacklist(user_id)
+        return "已解除屏蔽" if removed else "该用户不在黑名单中"
     return "解除屏蔽功能不可用"
 
 @tool("check_blocked_users", "查看当前屏蔽列表")
 async def check_blocked_users() -> str:
     f = _get_filter()
     if f:
-        blocked = f.get_blocked_list() if hasattr(f, 'get_blocked_list') else []
+        blocked = f.get_blocked_list() if hasattr(f, "get_blocked_list") else [
+            str(item.get("user_id", "")) for item in f.list_blacklist()
+        ]
         if blocked:
             return "屏蔽列表: " + ", ".join(str(u) for u in blocked)
         return "当前没有屏蔽任何人"
@@ -60,11 +73,11 @@ async def manage_blacklist(action: str = "list", user_id: str = "") -> str:
     f = _get_filter()
     if f:
         if action == "add" and user_id:
-            f.block(user_id, "黑名单")
+            f.add_to_blacklist(user_id, reason="黑名单", permanent=True)
             return "已加入黑名单"
         elif action == "remove" and user_id:
-            f.unblock(user_id)
-            return "已移出黑名单"
+            removed = f.remove_from_blacklist(user_id)
+            return "已移出黑名单" if removed else "该用户不在黑名单中"
     return await check_blocked_users()
 
 @tool("switch_filter_mode", "切换内容过滤模式", P(mode=S("normal/strict/off", True)))

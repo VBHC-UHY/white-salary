@@ -159,6 +159,18 @@ class UserFilter:
                             f"第{strike}次，{expire_hours}小时后解除")
         self._save()
 
+    def block(self, user_id: str, reason: str = "") -> None:
+        """兼容旧工具接口：手动屏蔽等同于永久拉黑。"""
+        self.add_to_blacklist(user_id, reason=reason, permanent=True)
+
+    def unblock(self, user_id: str) -> bool:
+        """兼容旧工具接口：解除屏蔽。"""
+        return self.remove_from_blacklist(user_id)
+
+    def get_blocked_list(self) -> list[str]:
+        """兼容旧工具接口：返回当前未过期黑名单 QQ 号列表。"""
+        return [str(item["user_id"]) for item in self.list_blacklist()]
+
     def list_blacklist(self) -> list[dict]:
         """
         2026-07-03 面板升级（批6）：黑名单明细公开方法。
