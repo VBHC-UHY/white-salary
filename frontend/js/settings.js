@@ -147,6 +147,7 @@ function populateForm(s) {
     setVal('qq-enabled', String(s.qq?.enabled || false));
     setVal('qq-ws-url', s.qq?.ws_url || 'ws://127.0.0.1:3001');
     setVal('qq-bot-name', s.qq?.bot_name || '白');
+    setVal('qq-wake-words', (s.qq?.wake_words || ['白']).join('\n'));
     setVal('qq-token', s.qq?.token || '');
     // 家人QQ号列表
     window._familyQQList = (s.qq?.family_qq || []).map(String);
@@ -337,6 +338,10 @@ async function saveAllSettings() {
             enabled: getVal('qq-enabled') === 'true',
             ws_url: getVal('qq-ws-url'),
             bot_name: getVal('qq-bot-name'),
+            wake_words: getVal('qq-wake-words')
+                .split(/[\n,，]+/)
+                .map(s => s.trim())
+                .filter(Boolean),
             token: getVal('qq-token'),
             family_qq: (window._familyQQList || []).map(Number),
         },

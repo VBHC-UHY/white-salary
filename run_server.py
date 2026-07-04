@@ -631,6 +631,8 @@ def main() -> None:
                 user_learning=user_learning,
                 asr_adapter=asr_adapter,
                 vision_adapter=vision_adapter,
+                wake_words=qq_conf.wake_words,
+                continuation_llm=detect_llm,
                 # 2026-07-03 面板升级（批6）：功能开关下发（topic_tracker/rest_system
                 # 在 qq_handler 内消费；user_learning=false 时上面传入的已是 None）
                 features=config.features,

@@ -11,6 +11,7 @@ QQ消息处理器 — 连接QQ适配器和ChatAgent。
 
 import asyncio
 import json
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -18,7 +19,7 @@ from loguru import logger
 
 from white_salary.core.agent.chat_agent import ChatAgent
 from white_salary.core.affinity.manager import AffinityManager
-from white_salary.core.interfaces.types import AudioData
+from white_salary.core.interfaces.types import AudioData, Message, MessageRole
 from white_salary.adapters.platform.qq_adapter import QQAdapter, QQMessage
 # 2026-07-03 面板升级（批6）：功能开关配置模型（features 节，纯Pydantic无循环依赖）
 from white_salary.infrastructure.config.models import FeaturesConfig
@@ -266,6 +267,8 @@ async def start_qq_service(
     asr_adapter=None,
     vision_adapter=None,
     features: Optional[FeaturesConfig] = None,
+    wake_words: Optional[list[str]] = None,
+    continuation_llm=None,
 ) -> None:
     """
     启动QQ服务（在后台运行）。
@@ -278,6 +281,8 @@ async def start_qq_service(
         family_qq: 家人QQ号列表（自动设为家人关系）
         asr_adapter: 语音识别适配器（收到语音消息时用）
         vision_adapter: 视觉适配器（收到图片消息时用）
+        wake_words: QQ端唤醒词列表；只影响QQ群聊，不影响桌面端。
+        continuation_llm: QQ活跃窗口续聊判断模型；None=用保守分数兜底。
         features: 2026-07-03 面板升级（批6）：功能开关配置（run_server 传
                   config.features；None=自行读合并配置，失败回退全开=原行为）。
                   topic_tracker/rest_system 开关在此消费
@@ -371,11 +376,18 @@ async def start_qq_service(
     _buffer_processing: dict[str, bool] = {}  # 记录哪些用户正在处理中
     _decision_raw_parts: dict[str, list[str]] = {}
 
-    from white_salary.core.smart_reply import ReplyDecision, SmartReplyDecider
+    from white_salary.core.smart_reply import (
+        ReplyDecision,
+        SmartReplyDecider,
+        contains_wake_word,
+        normalize_wake_words,
+    )
+    qq_wake_words = normalize_wake_words(wake_words, bot_name=bot_name)
     qq_smart_decider = SmartReplyDecider(
         bot_self_id="",
         bot_name=bot_name,
         owner_ids=[str(q) for q in (family_qq or [])],
+        wake_words=qq_wake_words,
     )
 
     class _MergedQQDecisionMessage:
@@ -387,10 +399,95 @@ async def start_qq_service(
             self.user_id = source.user_id
             self.raw_message = raw_message or source.raw_message
             self.is_at_me = bool(getattr(source, "is_at_me", False))
+            self.has_media = bool(
+                getattr(source, "has_image", False)
+                or "[CQ:record," in getattr(source, "raw_message", "")
+                or "[图片" in self.raw_message
+                or "[语音" in self.raw_message
+            )
 
     def _record_qq_reply_for_smart(msg: QQMessage) -> None:
         if msg.is_group:
             qq_smart_decider.record_reply(msg.group_id, msg.user_id)
+
+    def _is_direct_to_bai(msg: QQMessage, raw: str, text: str) -> bool:
+        """Whether this QQ message explicitly calls Bai."""
+        return (
+            not msg.is_group
+            or bool(getattr(msg, "is_at_me", False))
+            or bool(getattr(msg, "_force_reply", False))
+            or contains_wake_word(raw or text, qq_wake_words)
+        )
+
+    def _is_stop_reply_request(text: str) -> bool:
+        """Hard stop phrases that must be consumed before tools/plugins/LLM."""
+        normalized = re.sub(r"\s+", "", text or "")
+        if not normalized:
+            return False
+        stop_patterns = (
+            "别回", "不要回", "不用回", "别回复", "不要回复", "不用回复",
+            "别说话", "不要说话", "先别说", "暂时别说", "闭嘴",
+            "不许发消息", "不要发消息", "别发消息", "不准发消息",
+            "别回我", "别回话", "别理我", "不用理我",
+        )
+        return any(p in normalized for p in stop_patterns)
+
+    async def _judge_active_continuation(
+        *,
+        msg: QQMessage,
+        text: str,
+        group_context: str,
+        smart_reason: str,
+        smart_score: float,
+    ) -> bool:
+        """
+        In an active QQ group window, decide if the user is still talking to Bai.
+
+        The active window is only a candidate window; it is not permission to
+        reply to unrelated self-talk or other people's conversation.
+        """
+        if continuation_llm is None:
+            return smart_score >= 30.0
+
+        system = (
+            "你是QQ群聊回复闸门，只判断“白”是否应该回复当前这条消息。"
+            "只输出 JSON：{\"reply\": true/false, \"reason\": \"...\"}。"
+            "规则：如果当前消息明确接着白上一轮的话题、是在回答白、或图片/表情/语音与刚才白参与的话题有关，reply=true；"
+            "如果用户在和别人说话、自言自语、突然换了无关话题、只是群里闲聊、或不确定，reply=false。"
+            "不要因为群处于活跃窗口就默认回复。"
+        )
+        user = (
+            f"白的名字: {bot_name}\n"
+            f"发送者: {msg.sender_name} QQ:{msg.user_id}\n"
+            f"初筛理由: {smart_reason} / 分数:{smart_score:.0f}\n\n"
+            f"最近群聊上下文:\n{group_context[-1600:] if group_context else '(无)'}\n\n"
+            f"当前合并消息:\n{text}\n\n"
+            "判断白现在该不该接话。"
+        )
+        try:
+            reply = await continuation_llm.chat_completion(
+                messages=[
+                    Message(role=MessageRole.SYSTEM, content=system),
+                    Message(role=MessageRole.USER, content=user),
+                ],
+                temperature=0.1,
+                max_tokens=120,
+            )
+        except Exception as e:
+            logger.debug(f"[QQ] 续聊语义判断失败，使用分数兜底: {e}")
+            return smart_score >= 30.0
+
+        content = (reply or "").strip()
+        try:
+            data = json.loads(re.search(r"\{.*\}", content, flags=re.S).group(0))
+            return bool(data.get("reply"))
+        except Exception:
+            lowered = content.lower()
+            if "true" in lowered or "应该回复" in content or "需要回复" in content:
+                return True
+            if "false" in lowered or "不回复" in content or "不用回复" in content:
+                return False
+            return smart_score >= 30.0
 
     # 实时多消息拦截：白生成回复期间收到新消息，合并后重新生成
     _generating: dict[str, bool] = {}       # 记录哪些用户的回复正在生成中
@@ -422,6 +519,7 @@ async def start_qq_service(
 
             text = msg.text
             decision_raw = getattr(msg, "raw_message", "") or text
+            original_text = text
 
             # ========== 语音消息识别（ASR）==========
             if asr_adapter and hasattr(msg, 'raw') and '[CQ:record,' in msg.raw.get("raw_message", ""):
@@ -474,6 +572,35 @@ async def start_qq_service(
                     text = "[对方发了一张图片]"
 
             if not text:
+                return None
+
+            # 群聊里的媒体消息在 adapter 早期只能记录到 [图片]/[语音消息]，
+            # 这里把 ASR/视觉后的富文本补进上下文。这样白被唤醒时能看到之前图片
+            # 或表情的含义；不代表当前消息一定会触发回复。
+            if msg.is_group and text != original_text and (
+                bool(getattr(msg, "has_image", False))
+                or "[CQ:record," in getattr(msg, "raw_message", "")
+            ):
+                ctx_manager.add_message(msg.group_id, msg.sender_name, text[:300])
+
+            # ========== QQ硬闭嘴指令 ==========
+            # 必须早于插件、工具和LLM；只有私聊/@白/回复白/唤醒词这种“确实在叫白”
+            # 才消费，避免群里别人闲聊一句“别回”把白全局关掉。
+            if _is_stop_reply_request(text) and _is_direct_to_bai(msg, decision_raw, text):
+                if _is_owner_msg := (msg.user_id in {str(q) for q in (family_qq or [])}):
+                    try:
+                        from white_salary.core.services.presence_state import MODE_SILENT
+
+                        qq_presence.set_quiet(
+                            MODE_SILENT,
+                            duration_minutes=0,
+                            reason="QQ用户要求暂时不要发消息",
+                        )
+                    except Exception as _presence_err:
+                        logger.debug(f"[QQ] 设置静默失败，仅跳过当前回复: {_presence_err}")
+                logger.info(
+                    f"[QQ] 收到停止回复指令，跳过回复: {msg.sender_name}({msg.user_id})"
+                )
                 return None
 
             # ========== 忙碌/静默模式闸门 ==========
@@ -582,7 +709,22 @@ async def start_qq_service(
                     smart_result = qq_smart_decider.decide(
                         _MergedQQDecisionMessage(msg, decision_raw)
                     )
-                    if smart_result.decision != ReplyDecision.REPLY:
+                    if smart_result.decision == ReplyDecision.SEMANTIC_CHECK:
+                        group_ctx_for_gate = ctx_manager.get_context(msg.group_id)
+                        should_continue = await _judge_active_continuation(
+                            msg=msg,
+                            text=text,
+                            group_context=group_ctx_for_gate,
+                            smart_reason=smart_result.reason,
+                            smart_score=smart_result.score,
+                        )
+                        if not should_continue:
+                            logger.debug(
+                                f"[QQ] 活跃窗口语义判断不接话 {msg.sender_name}({msg.user_id}): "
+                                f"{smart_result.reason}"
+                            )
+                            return None
+                    elif smart_result.decision != ReplyDecision.REPLY:
                         logger.debug(
                             f"[QQ] SmartReply不回复 {msg.sender_name}({msg.user_id}): "
                             f"{smart_result.reason}"
@@ -748,7 +890,12 @@ async def start_qq_service(
 
                     time_ctx = qq_time.get_time_context(msg.user_id)
                     if time_ctx:
-                        user_input = f"[时间] {time_ctx}\n{user_input}"
+                        user_input = (
+                            f"[时间] {time_ctx}\n"
+                            "[回复约束] 当前时间只供你理解作息和上下文；除非用户询问时间、"
+                            "讨论作息/日期，或话题确实需要，否则不要主动说“现在是晚上/下午/几点”。\n"
+                            f"{user_input}"
+                        )
 
                     # 2026-07-03 面板升级（批6）：话题追踪开关关闭时不注入提示
                     topic_hint = qq_topic_tracker.get_hint() if qq_topic_tracker is not None else ""
@@ -783,6 +930,9 @@ async def start_qq_service(
                     ):
                         reply_parts.append(chunk)
                     reply = "".join(reply_parts)
+                    if "__WHITE_SALARY_TOOL_SILENT__" in reply:
+                        logger.info("[QQ] 工具已完成且要求静默，本轮不发送额外文字")
+                        return None
 
                     # ===== 检查排队：生成期间有没有新消息进来 =====
                     # （重投递轮不碰共享队列，见上方说明）
@@ -960,6 +1110,7 @@ async def start_qq_service(
             agent=agent,
             bot_name=bot_name,
             family_qq=[str(q) for q in (family_qq or [])],
+            wake_words=wake_words,
         )
     except Exception as e:
         logger.warning(f"[QQ] StartupChecker 初始化失败，离线消息检查不可用: {e}")

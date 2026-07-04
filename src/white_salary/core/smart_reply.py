@@ -27,6 +27,7 @@ from loguru import logger
 
 class ReplyDecision(Enum):
     REPLY = "reply"
+    SEMANTIC_CHECK = "semantic_check"
     OBSERVE = "observe"
     IGNORE = "ignore"
 
@@ -38,9 +39,52 @@ class DecisionResult:
     reason: str
 
 
-# 唤醒词正则
-_NAME_ONLY_PATTERN = re.compile(r"^\s*[，,]?\s*白\s*[，,]?\s*$")
-_NAME_IN_TEXT_PATTERN = re.compile(r"(?:^|(?<=[\s，,]))白(?=[\s，,]|$)")
+_DEFAULT_WAKE_WORDS = ("白",)
+_WAKE_EDGE_CHARS = " \t\r\n，,。！？!?、~～：:；;「」『』【】[]()（）"
+_WAKE_BOUNDARY = r"\s，,。！？!?、~～：:；;「」『』【】\[\]\(\)（）"
+
+
+def normalize_wake_words(words: Optional[list[str] | tuple[str, ...]], bot_name: str = "白") -> list[str]:
+    """Return QQ-only wake words with duplicates/empty values removed."""
+    candidates = list(words or [])
+    if bot_name:
+        candidates.append(bot_name)
+    if not candidates:
+        candidates.extend(_DEFAULT_WAKE_WORDS)
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for word in candidates:
+        text = str(word or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        normalized.append(text)
+    return normalized or list(_DEFAULT_WAKE_WORDS)
+
+
+def contains_wake_word(text: str, wake_words: Optional[list[str] | tuple[str, ...]] = None) -> bool:
+    """
+    Detect QQ wake words with loose surrounding punctuation.
+
+    A configured word like "白" matches "白", "白？", "白！", "，白", " 白 "
+    and "白 在吗", but not "白白在吗".
+    """
+    if not text:
+        return False
+
+    cleaned = re.sub(r"\[CQ:[^\]]+\]", "", str(text))
+    edge_trimmed = cleaned.strip(_WAKE_EDGE_CHARS)
+    words = normalize_wake_words(wake_words, bot_name="")
+
+    for word in sorted(words, key=len, reverse=True):
+        if edge_trimmed == word:
+            return True
+        escaped = re.escape(word)
+        pattern = rf"(?:^|(?<=[{_WAKE_BOUNDARY}])){escaped}(?=[{_WAKE_BOUNDARY}]|$)"
+        if re.search(pattern, cleaned):
+            return True
+    return False
 
 
 class SmartReplyDecider:
@@ -65,10 +109,12 @@ class SmartReplyDecider:
         bot_self_id: str = "",
         bot_name: str = "白",
         owner_ids: Optional[list[str]] = None,
+        wake_words: Optional[list[str]] = None,
     ) -> None:
         self._bot_id = bot_self_id
         self._bot_name = bot_name
         self._owner_ids = set(owner_ids or [])
+        self._wake_words = normalize_wake_words(wake_words, bot_name=bot_name)
 
         # 群级别状态
         self._group_msg_times: dict[str, list[float]] = {}
@@ -118,7 +164,7 @@ class SmartReplyDecider:
         # （QQ消息的is_at_me已经覆盖了大部分情况）
 
         # 唤醒词
-        if _NAME_ONLY_PATTERN.match(raw_clean) or _NAME_IN_TEXT_PATTERN.search(raw_clean):
+        if contains_wake_word(raw_clean, self._wake_words):
             self._on_user_triggered(gid, uid)
             return DecisionResult(ReplyDecision.REPLY, 85.0, "唤醒词")
 
@@ -130,8 +176,9 @@ class SmartReplyDecider:
         if "[CQ:at," in raw:
             return DecisionResult(ReplyDecision.IGNORE, 0.0, "@别人")
 
-        # 纯表情/图片/转发
-        if not raw_clean.strip() or len(raw_clean.strip()) < 2:
+        # 纯表情/图片/转发：没有媒体信息时直接忽略；有媒体时交给活跃窗口语义判断。
+        has_media = bool(getattr(msg, "has_media", False))
+        if (not raw_clean.strip() or len(raw_clean.strip()) < 2) and not has_media:
             return DecisionResult(ReplyDecision.IGNORE, 0.0, "纯表情/空消息")
 
         # 群消息太密集（>10条/分钟）
@@ -163,7 +210,7 @@ class SmartReplyDecider:
         if len(reply_ts) >= self.MAX_REPLIES_PER_MINUTE:
             return DecisionResult(ReplyDecision.OBSERVE, 10.0, "频率限制(3条/分钟)")
 
-        # ---- 判断这条消息是不是对白说的 ----
+        # ---- 初筛这条消息和白当前对话的关系；真正是否续聊交给QQ handler里的LLM判断 ----
 
         score = 0.0
         reasons = []
@@ -194,17 +241,17 @@ class SmartReplyDecider:
             score += 10.0
             reasons.append("主人")
 
-        # 决策
+        if has_media:
+            score += 10.0
+            reasons.append("媒体消息")
+
+        # 决策：活跃窗口内不再只靠关键词/分数硬回，返回 SEMANTIC_CHECK 让上层用
+        # 最近上下文判断“是不是还在和白说话”。无检测模型时，上层可用 score 兜底。
         score = max(0, min(100, score))
 
-        if score >= 30:
-            return DecisionResult(ReplyDecision.REPLY, score, ", ".join(reasons))
-        elif score >= 10:
-            # OBSERVE不回复，但记录
-            logger.debug(f"[SmartReply] observe: {', '.join(reasons)} ({score:.0f}分)")
-            return DecisionResult(ReplyDecision.OBSERVE, score, ", ".join(reasons))
-        else:
-            return DecisionResult(ReplyDecision.IGNORE, score, "活跃状态但不是对白说的")
+        reason = ", ".join(reasons) if reasons else "活跃窗口，需语义判断"
+        logger.debug(f"[SmartReply] semantic_check: {reason} ({score:.0f}分)")
+        return DecisionResult(ReplyDecision.SEMANTIC_CHECK, score, reason)
 
     def record_reply(self, group_id: str, user_id: str = "") -> None:
         """白回复了某个用户后调用。"""

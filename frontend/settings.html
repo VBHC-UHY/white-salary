@@ -987,6 +987,11 @@
                         <input type="text" id="qq-bot-name" value="白" placeholder="白">
                     </div>
                     <div class="form-group">
+                        <label>QQ唤醒词（每行一个）</label>
+                        <textarea id="qq-wake-words" rows="3" placeholder="白" style="width:100%;background:#f5f8fc;color:#1a1a2e;border:1px solid rgba(0,153,204,0.2);border-radius:4px;padding:8px;font-size:12px;"></textarea>
+                        <p style="color:#4a5568;font-size:11px;margin-top:6px;">只影响 QQ 群聊，不影响桌面端。系统会自动允许前后空格和常见标点，例如「白？」「白！」「，白」「 白 」都会命中。</p>
+                    </div>
+                    <div class="form-group">
                         <label>鉴权Token（与NapCat WebSocket配置中的token一致）</label>
                         <input type="password" id="qq-token" value="" placeholder="留空则不鉴权">
                     </div>

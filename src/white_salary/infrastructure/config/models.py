@@ -216,6 +216,13 @@ class QQConfig(BaseModel):
     enabled: bool = Field(default=False, description="是否启用QQ集成")
     ws_url: str = Field(default="ws://127.0.0.1:3001", description="NapCat正向WebSocket地址")
     bot_name: str = Field(default="白", description="机器人在群聊中的名字（@或提到时回复）")
+    wake_words: list[str] = Field(
+        default_factory=lambda: ["白"],
+        description=(
+            "QQ端唤醒词列表；只影响QQ群聊回复判断，不影响桌面端。"
+            "匹配时会自动允许前后空格和常见标点。"
+        ),
+    )
     token: str = Field(default="", description="NapCat鉴权token")
     family_qq: list[int | str] = Field(
         default_factory=list,

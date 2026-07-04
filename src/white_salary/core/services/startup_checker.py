@@ -49,11 +49,13 @@ class StartupChecker:
         agent,
         bot_name: str = "白",
         family_qq: list[str] = None,
+        wake_words: list[str] | None = None,
         data_dir: str = "data/qq",
     ) -> None:
         self._adapter = adapter
         self._agent = agent
         self._bot_name = bot_name
+        self._wake_words = wake_words
         self._family_qq = set(family_qq or [])
         self._data_dir = Path(data_dir)
         self._data_dir.mkdir(parents=True, exist_ok=True)
@@ -452,17 +454,12 @@ class StartupChecker:
 
     def _check_wake_word(self, text: str) -> bool:
         """检查文本是否包含唤醒词（复用SmartReplyDecider的逻辑）。"""
-        if not text or not self._bot_name:
+        if not text:
             return False
-        import re
-        name = re.escape(self._bot_name)
-        # 整条消息只有唤醒词
-        if re.match(rf"^\s*[，,]?\s*{name}\s*[，,。！？!?]?\s*$", text):
-            return True
-        # 唤醒词独立出现（前后是开头/结尾/空白/标点）
-        if re.search(rf"(?:^|(?<=[\s，,。！？!?]))\s*{name}\s*(?=[\s，,。！？!?]|$)", text):
-            return True
-        return False
+        from white_salary.core.smart_reply import contains_wake_word, normalize_wake_words
+
+        words = normalize_wake_words(self._wake_words, bot_name=self._bot_name)
+        return contains_wake_word(text, words)
 
     # ================================================================
     # 工具方法

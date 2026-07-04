@@ -470,15 +470,10 @@ class QQAdapter:
                     _is_reply_to_me = True
 
         # 群聊：是否回复交给 qq_handler 在消息缓冲合并后判断。
-        # 这里仅保留 adapter 才知道的强制回复信号，避免“白”后面连发的正文
-        # 在进入 MessageBuffer 前被 SmartReplyDecider 吞掉。
-        _is_owner_media = (
-            msg.user_id in self._family_qq
-            and (msg.has_image or "[CQ:record," in msg.raw_message)
-        )
-        setattr(msg, "_force_reply", _is_reply_to_me or _is_owner_media)
+        # adapter 只保留“引用白的消息”这种只有它能准确判断的强制回复信号；
+        # 发图/语音本身不能强制唤醒，否则主人在群里发媒体会让白乱插嘴。
+        setattr(msg, "_force_reply", _is_reply_to_me)
         setattr(msg, "_is_reply_to_me", _is_reply_to_me)
-        setattr(msg, "_is_owner_media", _is_owner_media)
 
         if msg.is_group:
             logger.debug(f"[QQ] 群聊({msg.group_id}) {msg.sender_name}: {msg.text[:50]}")

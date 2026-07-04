@@ -122,6 +122,36 @@
 - 当前网页提交接口仍以 `plugin.py + config.json` 为主；完整目录上传适合走本地同步或后续单独做 ZIP 上传。
 - 依赖只记录和展示，不自动安装，后续如要做“一键装依赖”必须加用户确认和安全提示。
 
+### 2026-07-04 QQ 唤醒词、媒体合并和续聊闸门修复
+
+问题：
+- QQ 端唤醒词只写死识别少数形态，`白？`、`白！`、`，白`、前后空格等常见叫法不够稳。
+- 群聊活跃窗口曾把“白刚参与过”近似当成“可以继续接话”，容易在用户和别人聊天、自言自语或换话题时乱插嘴。
+- 主人/家人发图片或语音曾被 adapter 标成强制回复，导致没叫白也触发回复。
+- 图片/表情包和文字的理解需要进入同一轮消息合并，否则模型容易看不到图片语义。
+- QQ 发语音工具成功后不应该再补一句“语音已发送”。
+
+处理：
+- 新增 QQ 专用 `qq.wake_words` 配置和设置页入口；默认 `白`，匹配时自动允许前后空格和常见标点，只影响 QQ 端，不影响桌面端。
+- `SmartReplyDecider` 改为配置化唤醒词，并新增 `SEMANTIC_CHECK`：活跃窗口只表示“候选续聊”，不再直接放行。
+- `qq_handler.py` 在活跃窗口内调用 `llm_detect` 做“是否还在和白说话”的语义闸门；无检测模型时用保守分数兜底。
+- 去掉“家人发图片/语音强制回复”，只保留“引用白消息”作为 adapter 级强制回复。
+- 媒体消息经过 ASR/视觉理解后补进 QQ 群上下文，后续唤醒时能看到图片/表情含义。
+- “别回/不许发消息/别说话”等明确停话指令在插件、工具、LLM 前硬拦截；主人发出时写入现有静默状态。
+- 保留原时间上下文，只加 QQ 运行时回复约束：白知道时间，但不要无关地反复强调“现在是晚上/下午/几点”。
+- `qq_send_voice` 成功时走内部静默完成标记，避免再向 QQ 发送“语音已发送”文字。
+
+验收：
+- `python -m pytest tests/unit/test_smart_reply.py -q`，12 passed。
+- `python -m py_compile src/white_salary/core/smart_reply.py src/white_salary/infrastructure/server/qq_handler.py src/white_salary/core/services/startup_checker.py src/white_salary/core/agent/chat_agent.py src/white_salary/infrastructure/config/models.py run_server.py`。
+- `python -m pytest tests/unit/test_qq_stability.py tests/unit/test_batch9_media_tools.py tests/unit/test_batch9_behavior.py -q`，112 passed。
+- `python -m pytest tests/unit/test_bilibili_wiring.py tests/unit/test_settings_api.py -q`，38 passed。
+- `git diff --check` 仅报告 Windows 换行提示，无实际 whitespace 错误。
+
+剩余观察：
+- 需要真实 QQ 群里观察 `llm_detect` 对“继续和白说话/转头和别人说话/自言自语”的判断是否够稳。
+- 如果用户后续想加更多 QQ 唤醒词，只改 `qq.wake_words`，不要改桌面端逻辑。
+
 ## 已知问题和待办
 
 ### P0 - QQ 消息处理流程重整

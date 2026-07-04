@@ -8,7 +8,11 @@
 import time
 from dataclasses import dataclass
 
-from white_salary.core.smart_reply import SmartReplyDecider, ReplyDecision
+from white_salary.core.smart_reply import (
+    SmartReplyDecider,
+    ReplyDecision,
+    contains_wake_word,
+)
 
 
 @dataclass
@@ -39,6 +43,16 @@ class TestSmartReplyHardRules:
         r = d.decide(_Msg(raw_message="白 在吗"))
         assert r.decision == ReplyDecision.REPLY
 
+    def test_wakeword_punctuation_variants(self) -> None:
+        for text in ["白，", "，白", "白", "白？", "白！", " 白", "白  "]:
+            assert contains_wake_word(text, ["白"])
+        assert not contains_wake_word("白白在吗", ["白"])
+
+    def test_configurable_wakeword(self) -> None:
+        d = SmartReplyDecider(wake_words=["问白"], bot_name="")
+        r = d.decide(_Msg(raw_message="问白 这个怎么弄"))
+        assert r.decision == ReplyDecision.REPLY
+
 
 class TestSmartReplyIgnore:
     """第三档：明确不回。"""
@@ -64,11 +78,19 @@ class TestSmartReplyActiveWindow:
     """第二档：活跃状态判断。"""
 
     def test_followup_after_bot_reply(self) -> None:
-        """白刚回了这个人，对方紧接着说话 → 回复。"""
+        """白刚回了这个人，对方紧接着说话 → 交给语义续聊判断。"""
         d = SmartReplyDecider()
         d.record_reply("g1", "u1")  # 白回复 u1 → 群活跃 + 记录回了谁
         r = d.decide(_Msg(group_id="g1", user_id="u1", raw_message="那你觉得呢"))
-        assert r.decision == ReplyDecision.REPLY
+        assert r.decision == ReplyDecision.SEMANTIC_CHECK
+
+    def test_active_media_needs_semantic_check(self) -> None:
+        d = SmartReplyDecider()
+        d.record_reply("g1", "u1")
+        msg = _Msg(group_id="g1", user_id="u1", raw_message="[CQ:image,file=1.jpg]")
+        msg.has_media = True
+        r = d.decide(msg)
+        assert r.decision == ReplyDecision.SEMANTIC_CHECK
 
     def test_silence_makes_bot_shut_up(self) -> None:
         """连续没人理（ignored_count 到阈值）→ 闭嘴。"""

@@ -394,6 +394,7 @@ class ChatAgent:
         try:
             # 强制执行的工具结果（回忆直连）先并入
             tool_results: list[ToolResult] = list(forced_results)
+            silent_side_effect_done = False
 
             if tool_task is not None:
                 # 先等工具判断完成（通常很快，DeepSeek 1-2秒）
@@ -423,6 +424,8 @@ class ChatAgent:
                                 continue
                             executed_tool_keys.add(call_key)
                             result = await self._tools.execute(tc.name, args)
+                            if tc.name == "qq_send_voice" and str(result).strip().startswith("语音已发送"):
+                                silent_side_effect_done = True
                         except Exception as tool_err:
                             result = f"工具{tc.name}执行失败: {tool_err}"
                             logger.warning(f"工具执行失败 {tc.name}: {tool_err}")
@@ -430,6 +433,10 @@ class ChatAgent:
                         logger.debug(f"工具 {tc.name}: {result[:80]}")
 
             if tool_results:
+                if silent_side_effect_done and len(tool_results) == 1:
+                    yield "__WHITE_SALARY_TOOL_SILENT__"
+                    full_response = ""
+                    return
                 # 把工具结果喂给主模型（process_tool_results内部会加提示）
                 try:
                     final_reply = await self._llm.process_tool_results(
