@@ -23,6 +23,27 @@
 
 ---
 
+## [0.1.7] - 2026-07-04 · QQ 用户过滤模式与黑白名单面板
+
+面向 QQ 机器人用户过滤的修复版：补齐黑名单、白名单、关闭过滤三种模式的控制面板入口，并让设置面板、工具和 QQ 运行实例使用同一套过滤器。
+
+### 新增
+- **用户过滤模式切换**：控制面板可在黑名单模式、白名单模式、关闭过滤之间切换；运行中的 QQ 服务会即时生效。
+- **白名单管理**：控制面板新增白名单列表、加入和移除操作；白名单模式下只响应名单内用户，主人仍免检。
+- **运行实例同步**：用户过滤 API 继续优先操作 QQ 运行中的 `UserFilter`，找不到运行实例时才回退到文件实例。
+
+### 修复
+- **好感度自动拉黑边界**：黑名单模式下保留好感度厌恶/仇恨自动软/硬拉黑；手动白名单或已验证用户不再被低好感度误自动拉黑。
+- **家人号免过滤**：QQ 端家人号跳过用户过滤，避免白名单模式误伤第二个家人号。
+- **手动拉黑语义**：控制面板手动拉黑默认永久，自动好感度拉黑仍保留软拉黑和升级逻辑。
+
+### 验证
+- `python -m pytest tests/unit/test_settings_panel_batch6.py tests/unit/test_tools_audit_fix.py tests/unit/test_smart_reply.py tests/unit/test_qq_stability.py -q`
+- `python -m py_compile src/white_salary/core/memory/user_filter.py src/white_salary/infrastructure/server/settings_api.py src/white_salary/infrastructure/server/qq_handler.py`
+- `node --check frontend/js/settings.js`
+
+---
+
 ## [0.1.6] - 2026-07-04 · QQ 消息链路、当前会话续聊与插件市场 schema v2
 
 面向日常聊天和插件生态的体验修复版：重点让 QQ 多段话先合并再理解，保留工具判断 LLM；桌面端新增“当前会话自然续聊”判断；插件系统补齐角色、观察钩子、工具候选边界和市场元数据。

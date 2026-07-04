@@ -684,14 +684,29 @@
                     <button class="btn-primary" onclick="loadAllAffinity()" style="margin-top:8px;">刷新</button>
                 </div>
 
-                <!-- 黑名单管理 -->
+                <!-- 用户过滤管理 -->
                 <div class="section">
-                    <h3>用户过滤（黑名单）</h3>
+                    <h3>用户过滤（黑名单 / 白名单）</h3>
+                    <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;">
+                        <select id="filter-mode-select" style="width:160px;">
+                            <option value="blacklist">黑名单模式</option>
+                            <option value="whitelist">白名单模式</option>
+                            <option value="off">关闭过滤</option>
+                        </select>
+                        <button class="btn-primary" onclick="setUserFilterMode()">切换模式</button>
+                    </div>
                     <div id="filter-status" style="margin-bottom:10px;color:#4a5568;font-size:12px;">加载中...</div>
                     <div style="display:flex;gap:8px;margin-bottom:10px;">
                         <input type="text" id="blacklist-user-id" placeholder="QQ号" style="flex:1;">
                         <input type="text" id="blacklist-reason" placeholder="原因" style="flex:1;">
+                        <label style="display:flex;align-items:center;gap:4px;font-size:12px;color:#4a5568;">
+                            <input type="checkbox" id="blacklist-permanent" checked>永久
+                        </label>
                         <button class="btn-primary" onclick="addBlacklist()">拉黑</button>
+                    </div>
+                    <div style="display:flex;gap:8px;margin-bottom:10px;">
+                        <input type="text" id="whitelist-user-id" placeholder="白名单QQ号" style="flex:1;">
+                        <button class="btn-primary" onclick="addWhitelist()">加入白名单</button>
                     </div>
                 </div>
 

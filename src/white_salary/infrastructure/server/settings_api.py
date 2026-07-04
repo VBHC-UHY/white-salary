@@ -1723,10 +1723,13 @@ def create_settings_router(
             # 2026-07-03 面板升级（批6）：返回里加黑名单明细（list_blacklist 是
             # 本批给 UserFilter 新加的公开方法），前端可渲染名单+解除按钮
             blacklist = uf.list_blacklist() if hasattr(uf, "list_blacklist") else []
+            whitelist = uf.list_whitelist() if hasattr(uf, "list_whitelist") else []
             return {
                 "status": "ok",
                 "stats": uf.stats,
                 "blacklist": blacklist,
+                "whitelist": whitelist,
+                "modes": ["blacklist", "whitelist", "off"],
                 "runtime": is_runtime,
             }
         except Exception as e:
@@ -1754,6 +1757,28 @@ def create_settings_router(
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
 
+    @router.post("/users/filter/mode")
+    async def set_user_filter_mode(body: dict) -> dict:
+        """切换用户过滤模式：blacklist / whitelist / off。"""
+        mode = str(body.get("mode", "")).strip().lower()
+        if mode not in ("blacklist", "whitelist", "off"):
+            raise HTTPException(
+                status_code=400,
+                detail="mode must be one of: blacklist, whitelist, off",
+            )
+        try:
+            uf, is_runtime = _resolve_user_filter()
+            uf.set_mode(mode)
+            return {
+                "status": "ok",
+                "mode": mode,
+                "runtime": is_runtime,
+                "message": "过滤模式已切换（运行实例即时生效）" if is_runtime
+                else "过滤模式已写入文件；QQ服务运行中的过滤需重启后生效",
+            }
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
     @router.delete("/users/filter/blacklist/{user_id}")
     async def remove_from_blacklist(user_id: str) -> dict:
         """从黑名单移除用户。"""
@@ -1761,6 +1786,34 @@ def create_settings_router(
             # 2026-07-03 面板升级（批6）：优先操作运行实例（即时生效），回退文件实例
             uf, is_runtime = _resolve_user_filter()
             removed = uf.remove_from_blacklist(user_id)
+            return {"status": "ok", "removed": bool(removed), "runtime": is_runtime}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @router.post("/users/filter/whitelist")
+    async def add_to_whitelist(body: dict) -> dict:
+        """添加用户到白名单。"""
+        user_id = str(body.get("user_id", "")).strip()
+        if not user_id:
+            raise HTTPException(status_code=400, detail="user_id is required")
+        try:
+            uf, is_runtime = _resolve_user_filter()
+            uf.add_to_whitelist(user_id)
+            return {
+                "status": "ok",
+                "runtime": is_runtime,
+                "message": "已加入白名单（运行实例即时生效）" if is_runtime
+                else "已写入白名单文件；QQ服务运行中的过滤需重启后生效",
+            }
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @router.delete("/users/filter/whitelist/{user_id}")
+    async def remove_from_whitelist(user_id: str) -> dict:
+        """从白名单移除用户。"""
+        try:
+            uf, is_runtime = _resolve_user_filter()
+            removed = uf.remove_from_whitelist(user_id)
             return {"status": "ok", "removed": bool(removed), "runtime": is_runtime}
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))

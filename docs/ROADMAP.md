@@ -174,6 +174,30 @@
 剩余观察：
 - 如果真实 QQ 仍出现“加好友后仍不回”或“陌生人私聊不回”，优先查看社交冷却、休息模式、唤醒词/语义闸门和 NapCat 事件类型，而不是先按黑名单处理。
 
+### 2026-07-04 QQ 黑白名单模式与好感度过滤补齐
+
+问题：
+- `UserFilter` 核心已有 `blacklist/whitelist/off` 三种模式和好感度自动拉黑逻辑，但控制面板只暴露黑名单增删，没有白名单列表/移除和模式切换入口。
+- 白名单数据虽然会持久化到 `data/memory/user_filter.json`，但设置 API 未返回，前端无法确认“开白名单/开黑名单/关闭过滤”是否真实生效。
+- 好感度自动拉黑应该只在黑名单模式中作为安全兜底；手动信任的白名单用户不应被低好感度误拉黑。
+- QQ 家人号列表可能不止一个，用户过滤不能只豁免第一个主人号。
+
+处理：
+- `UserFilter` 新增 `list_whitelist/remove_from_whitelist`，并统一规范化用户 ID。
+- 黑名单模式下，手动白名单和已验证用户跳过好感度自动拉黑；好感度厌恶/仇恨仍会对普通用户触发软/硬拉黑。
+- Settings API 新增 `POST /users/filter/mode`、`POST /users/filter/whitelist`、`DELETE /users/filter/whitelist/{user_id}`，并在 `GET /users/filter` 返回白名单、模式列表和统计。
+- 控制面板用户管理页新增黑名单/白名单/关闭过滤模式切换、白名单增删、黑名单永久勾选；所有操作优先作用于 QQ 运行实例。
+- QQ 端家人号跳过用户过滤，避免白名单模式误伤第二个家人号。
+- 版本元数据更新为 `v0.1.7`。
+
+验收：
+- `python -m pytest tests/unit/test_settings_panel_batch6.py tests/unit/test_tools_audit_fix.py tests/unit/test_smart_reply.py tests/unit/test_qq_stability.py -q`，99 passed。
+- `python -m py_compile src/white_salary/core/memory/user_filter.py src/white_salary/infrastructure/server/settings_api.py src/white_salary/infrastructure/server/qq_handler.py`。
+- `node --check frontend/js/settings.js`。
+
+剩余观察：
+- 需要真实 QQ 测试三种过滤模式：黑名单模式默认回复但拦截名单/低好感用户；白名单模式只回白名单/家人；关闭过滤时不走用户过滤但仍保留休息、唤醒和社交冷却逻辑。
+
 ## 已知问题和待办
 
 ### P0 - QQ 消息处理流程重整

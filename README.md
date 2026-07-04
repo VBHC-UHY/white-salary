@@ -15,7 +15,7 @@
 
 Python 3.10-3.12 · FastAPI · Electron · Live2D · 六边形架构
 
-当前版本：**v0.1.6**
+当前版本：**v0.1.7**
 
 <!-- 2026-07-03：交流群。二维码图放到 docs/assets/qq-group.png 后可取消下一行注释显示图片 -->
 <p>

@@ -2204,14 +2204,31 @@ async function loadFilterStatus() {
             return;
         }
         const s = data.stats;
-        const modeNames = { blacklist: "黑名单模式", whitelist: "白名单模式" };
+        const modeNames = { blacklist: "黑名单模式", whitelist: "白名单模式", off: "关闭过滤" };
+        const modeSelect = document.getElementById("filter-mode-select");
+        if (modeSelect) modeSelect.value = s.mode || "blacklist";
         let html = `<div style="margin-bottom:6px;">模式: <b>${escapeHtml(modeNames[s.mode] || String(s.mode))}</b>
+            · 白名单 <b>${s.whitelist_count || 0}</b> 人
             · 永久拉黑 <b>${s.hard_blacklist || 0}</b> 人 · 限时拉黑 <b>${s.soft_blacklist || 0}</b> 人
+            · 已验证 <b>${s.verified || 0}</b> 人
             ${data.runtime ? '<span style="color:#22c55e;">（运行实例，即时生效）</span>' : '<span style="color:#f59e0b;">（文件实例，重启后生效）</span>'}</div>`;
+        const whitelist = data.whitelist || [];
+        if (whitelist.length === 0) {
+            html += '<div style="color:#6b7b8d;margin-bottom:6px;">白名单为空</div>';
+        } else {
+            html += '<div style="margin-bottom:4px;color:#4a5568;">白名单：</div>';
+            for (const uid of whitelist) {
+                const uidEnc = encodeJsArg(uid);
+                html += `<div class="log-line">✅ <b>${escapeHtml(String(uid))}</b>
+                    <span style="color:#22c55e;cursor:pointer;margin-left:6px;" onclick="removeWhitelist(decodeURIComponent('${uidEnc}'))">[移除]</span>
+                </div>`;
+            }
+        }
         const blacklist = data.blacklist || [];
         if (blacklist.length === 0) {
             html += '<div style="color:#6b7b8d;">黑名单为空</div>';
         } else {
+            html += '<div style="margin:6px 0 4px;color:#4a5568;">黑名单：</div>';
             for (const b of blacklist) {
                 const uidEnc = encodeJsArg(b.user_id);
                 const typeLabel = b.type === "hard" ? "永久" : "限时";
@@ -2226,6 +2243,26 @@ async function loadFilterStatus() {
     } catch (e) {
         container.innerHTML = '<span style="color:#e74c3c;">无法连接后端</span>';
     }
+}
+
+async function setUserFilterMode() {
+    const mode = document.getElementById("filter-mode-select")?.value || "blacklist";
+    try {
+        const resp = await fetch(`${API_BASE}/api/settings/users/filter/mode`, {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({mode}),
+        });
+        const data = await resp.json();
+        if (resp.ok && data.status === "ok") {
+            showHint(data.message || "过滤模式已切换");
+        } else {
+            showHint("切换失败: " + (data.detail || data.error || "未知错误"), true);
+        }
+    } catch (e) {
+        showHint("切换失败: " + e.message, true);
+    }
+    loadFilterStatus();
 }
 
 /**
@@ -2252,12 +2289,17 @@ async function removeBlacklist(userId) {
 async function addBlacklist() {
     const userId = document.getElementById("blacklist-user-id").value.trim();
     const reason = document.getElementById("blacklist-reason").value.trim();
+    const permanent = document.getElementById("blacklist-permanent")?.checked !== false;
     if (!userId) { showHint("请输入QQ号", true); return; }
     try {
         const resp = await fetch(`${API_BASE}/api/settings/users/filter/blacklist`, {
             method: "POST",
             headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({user_id: userId, reason: reason || "手动拉黑"}),
+            body: JSON.stringify({
+                user_id: userId,
+                reason: reason || "手动拉黑",
+                permanent,
+            }),
         });
         const data = await resp.json();
         if (data.status === "ok") {
@@ -2270,6 +2312,46 @@ async function addBlacklist() {
     } catch (e) {
         showHint("拉黑失败: " + e.message, true);
     }
+}
+
+async function addWhitelist() {
+    const userId = document.getElementById("whitelist-user-id").value.trim();
+    if (!userId) { showHint("请输入白名单QQ号", true); return; }
+    try {
+        const resp = await fetch(`${API_BASE}/api/settings/users/filter/whitelist`, {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({user_id: userId}),
+        });
+        const data = await resp.json();
+        if (resp.ok && data.status === "ok") {
+            showHint(data.message || `已加入白名单 ${userId}`);
+            document.getElementById("whitelist-user-id").value = "";
+            loadFilterStatus();
+        } else {
+            showHint("加入白名单失败: " + (data.detail || data.error || "未知错误"), true);
+        }
+    } catch (e) {
+        showHint("加入白名单失败: " + e.message, true);
+    }
+}
+
+async function removeWhitelist(userId) {
+    if (!confirm(`确定从白名单移除 ${userId}？`)) return;
+    try {
+        const resp = await fetch(`${API_BASE}/api/settings/users/filter/whitelist/${encodeURIComponent(userId)}`, {
+            method: "DELETE",
+        });
+        const data = await resp.json();
+        if (resp.ok && data.status === "ok") {
+            showHint(data.removed ? `已移除白名单 ${userId}` : `${userId} 不在白名单中`);
+        } else {
+            showHint("移除白名单失败: " + (data.detail || data.error || "未知错误"), true);
+        }
+    } catch (e) {
+        showHint("移除白名单失败: " + e.message, true);
+    }
+    loadFilterStatus();
 }
 
 async function loadSecrets() {

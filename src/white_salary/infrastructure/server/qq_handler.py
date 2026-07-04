@@ -755,6 +755,7 @@ async def start_qq_service(
                 from white_salary.core.memory.user_filter import FilterResult
                 if (
                     qq_user_filter is not None
+                    and not _is_family
                     and qq_user_filter.check(msg.user_id) == FilterResult.BLOCK
                 ):
                     return None

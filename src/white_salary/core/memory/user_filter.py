@@ -67,7 +67,7 @@ class UserFilter:
     def __init__(self, data_dir: str = "data/memory", owner_id: str = "") -> None:
         self._data_path = Path(data_dir) / "user_filter.json"
         self._data_path.parent.mkdir(parents=True, exist_ok=True)
-        self._owner_id = owner_id
+        self._owner_id = self._normalize_user_id(owner_id)
 
         self._mode: str = FilterMode.BLACKLIST  # 默认黑名单模式
         self._whitelist: set[str] = set()
@@ -85,6 +85,10 @@ class UserFilter:
             FilterResult.ALLOW / BLOCK / DETECT
         """
         # 主人永远免检
+        user_id = self._normalize_user_id(user_id)
+        if not user_id:
+            return FilterResult.BLOCK
+
         if user_id == self._owner_id:
             return FilterResult.ALLOW
 
@@ -110,6 +114,9 @@ class UserFilter:
                 return FilterResult.BLOCK
 
         # 好感度自动拉黑检查
+        if user_id in self._verified or user_id in self._whitelist:
+            return FilterResult.ALLOW
+
         affinity_result = self._check_affinity_blacklist(user_id)
         if affinity_result == FilterResult.BLOCK:
             return FilterResult.BLOCK
@@ -124,6 +131,9 @@ class UserFilter:
                          reason: str = "", permanent: bool = False,
                          expire_hours: int = DEFAULT_SOFT_EXPIRE_HOURS) -> None:
         """拉黑用户。"""
+        user_id = self._normalize_user_id(user_id)
+        if not user_id:
+            return
         if user_id == self._owner_id:
             return  # 不能拉黑主人
 
@@ -201,6 +211,7 @@ class UserFilter:
 
     def remove_from_blacklist(self, user_id: str) -> bool:
         """解除拉黑。"""
+        user_id = self._normalize_user_id(user_id)
         removed = False
         if user_id in self._hard_blacklist:
             del self._hard_blacklist[user_id]
@@ -239,11 +250,30 @@ class UserFilter:
 
     def add_to_whitelist(self, user_id: str) -> None:
         """加入白名单。"""
+        user_id = self._normalize_user_id(user_id)
+        if not user_id:
+            return
         self._whitelist.add(user_id)
         self._save()
 
+    def remove_from_whitelist(self, user_id: str) -> bool:
+        """从白名单移除用户。"""
+        user_id = self._normalize_user_id(user_id)
+        if user_id not in self._whitelist:
+            return False
+        self._whitelist.remove(user_id)
+        self._save()
+        return True
+
+    def list_whitelist(self) -> list[str]:
+        """返回白名单 QQ 号列表。"""
+        return sorted(self._whitelist)
+
     def verify_user(self, user_id: str) -> None:
         """标记用户为已验证（跳过后续检测）。"""
+        user_id = self._normalize_user_id(user_id)
+        if not user_id:
+            return
         self._verified.add(user_id)
         self._save()
 
@@ -252,6 +282,11 @@ class UserFilter:
         if mode in (FilterMode.OFF, FilterMode.WHITELIST, FilterMode.BLACKLIST):
             self._mode = mode
             self._save()
+
+    @staticmethod
+    def _normalize_user_id(user_id: str) -> str:
+        """统一把 QQ 号/用户 id 转成去空格字符串。"""
+        return str(user_id or "").strip()
 
     @property
     def stats(self) -> dict:

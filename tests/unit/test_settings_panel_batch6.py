@@ -6,7 +6,7 @@
 - GET/PUT /api/settings/expression-map：情绪→表情映射存取（键合法性校验）
 - GET /api/settings/live2d/expressions：枚举模型表情
 - POST /api/settings/users/affinity/{user_id}/set：按用户改好感度/家人标记
-- GET /api/settings/users/filter + 黑名单增删：优先运行实例（注册表键 user_filter）
+- GET /api/settings/users/filter + 黑/白名单增删 + 模式切换：优先运行实例（注册表键 user_filter）
 - GET /api/settings/voice-clone/status：读 tts_infer.yaml（候选路径可注入）
 - GET /api/settings/memory/search：长期记忆检索
 - POST /api/settings/modules/toggle + GET /modules：模块开关写 modules.disabled
@@ -307,10 +307,18 @@ class _FakeUserFilter:
     def __init__(self) -> None:
         self.added: list[tuple] = []
         self.removed: list[str] = []
+        self.whitelist: list[str] = ["888"]
+        self.mode = "blacklist"
 
     @property
     def stats(self) -> dict:
-        return {"mode": "blacklist", "hard_blacklist": 1, "soft_blacklist": 0}
+        return {
+            "mode": self.mode,
+            "whitelist_count": len(self.whitelist),
+            "hard_blacklist": 1,
+            "soft_blacklist": 0,
+            "verified": 0,
+        }
 
     def add_to_blacklist(self, user_id: str, nickname: str = "",
                          reason: str = "", permanent: bool = False) -> None:
@@ -322,6 +330,22 @@ class _FakeUserFilter:
 
     def list_blacklist(self) -> list[dict]:
         return [{"user_id": "666", "nickname": "捣蛋鬼", "type": "hard"}]
+
+    def set_mode(self, mode: str) -> None:
+        self.mode = mode
+
+    def add_to_whitelist(self, user_id: str) -> None:
+        self.whitelist.append(str(user_id))
+
+    def remove_from_whitelist(self, user_id: str) -> bool:
+        user_id = str(user_id)
+        if user_id not in self.whitelist:
+            return False
+        self.whitelist.remove(user_id)
+        return True
+
+    def list_whitelist(self) -> list[str]:
+        return list(self.whitelist)
 
 
 class TestUsersManagement:
@@ -377,6 +401,8 @@ class TestUsersManagement:
         assert resp["status"] == "ok"
         assert resp["runtime"] is True
         assert resp["blacklist"][0]["user_id"] == "666"
+        assert resp["whitelist"] == ["888"]
+        assert "whitelist" in resp["modes"]
 
     async def test_blacklist_add_remove_via_runtime(self, tmp_path: Path) -> None:
         """拉黑/解除优先操作运行实例（即时生效）。"""
@@ -409,6 +435,40 @@ class TestUsersManagement:
         assert resp["status"] == "ok"
         assert resp["runtime"] is False
         assert resp["blacklist"] == []
+        assert resp["whitelist"] == []
+
+    async def test_filter_mode_and_whitelist_via_runtime(self, tmp_path: Path) -> None:
+        """白名单和过滤模式优先操作运行实例（即时生效）。"""
+        fake_uf = _FakeUserFilter()
+        register_runtime_instance("user_filter", fake_uf)
+        router = create_settings_router(_make_project(tmp_path))
+
+        set_mode = _endpoint(router, "/api/settings/users/filter/mode", "POST")
+        resp = await set_mode({"mode": "whitelist"})
+        assert resp["status"] == "ok"
+        assert resp["runtime"] is True
+        assert fake_uf.mode == "whitelist"
+
+        add_wl = _endpoint(router, "/api/settings/users/filter/whitelist", "POST")
+        resp2 = await add_wl({"user_id": "999"})
+        assert resp2["status"] == "ok"
+        assert "999" in fake_uf.whitelist
+
+        del_wl = _endpoint(
+            router, "/api/settings/users/filter/whitelist/{user_id}", "DELETE"
+        )
+        resp3 = await del_wl("999")
+        assert resp3["status"] == "ok"
+        assert resp3["removed"] is True
+        assert "999" not in fake_uf.whitelist
+
+    async def test_filter_mode_rejects_invalid_value(self, tmp_path: Path) -> None:
+        """过滤模式只能是 blacklist / whitelist / off。"""
+        router = create_settings_router(_make_project(tmp_path))
+        set_mode = _endpoint(router, "/api/settings/users/filter/mode", "POST")
+        with pytest.raises(HTTPException) as exc:
+            await set_mode({"mode": "unknown"})
+        assert exc.value.status_code == 400
 
 
 # ====================================================================
@@ -868,6 +928,47 @@ class TestUserFilterListBlacklist:
         assert uf.get_blocked_list() == ["444"]
         assert uf.unblock("444") is True
         assert uf.check("444") == FilterResult.ALLOW
+
+    def test_whitelist_mode_allows_only_whitelisted_users(self, tmp_path: Path) -> None:
+        """白名单模式下只响应白名单用户，主人仍免检。"""
+        from white_salary.core.memory.user_filter import FilterMode, FilterResult, UserFilter
+
+        uf = UserFilter(data_dir=str(tmp_path), owner_id="owner")
+        uf.add_to_whitelist("111")
+        uf.set_mode(FilterMode.WHITELIST)
+
+        assert uf.check("111") == FilterResult.ALLOW
+        assert uf.check("222") == FilterResult.BLOCK
+        assert uf.check("owner") == FilterResult.ALLOW
+        assert uf.remove_from_whitelist("111") is True
+        assert uf.list_whitelist() == []
+
+    def test_whitelist_skips_affinity_auto_blacklist(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """黑名单模式下，手动白名单用户不再被低好感度自动拉黑。"""
+        from white_salary.core.memory.user_filter import FilterResult, UserFilter
+
+        class _BadAffinity:
+            def get_stats(self) -> dict:
+                return {"points": -200}
+
+        class _BadAffinityManager:
+            @classmethod
+            def get_for_user(cls, user_id: str) -> _BadAffinity:
+                return _BadAffinity()
+
+        import white_salary.core.affinity.manager as aff_module
+
+        monkeypatch.setattr(aff_module, "AffinityManager", _BadAffinityManager)
+
+        uf = UserFilter(data_dir=str(tmp_path))
+        uf.add_to_whitelist("trusted")
+
+        assert uf.check("trusted") == FilterResult.ALLOW
+        assert uf.check("blocked") == FilterResult.BLOCK
+        assert "blocked" in uf.get_blocked_list()
+        assert "trusted" not in uf.get_blocked_list()
 
 
 # ====================================================================
