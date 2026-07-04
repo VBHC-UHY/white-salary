@@ -1,6 +1,6 @@
 # White Salary 项目计划书
 
-更新时间：2026-07-03
+更新时间：2026-07-04
 
 这个文件用于记录项目当前结构、已完成事项、已知问题、下一步计划和验收结果。以后每次做完比较重要的功能或修复，都应该同步更新这里，避免任务做到一半后上下文丢失。
 
@@ -68,16 +68,70 @@
 - 用户已确认桌面端持续监听和长按说话反馈恢复正常。
 - 已运行 `node --check frontend/js/chat-controller.js`。
 
+### 2026-07-04 当前会话续聊、插件角色和工具候选边界
+
+问题：
+- 现有 `auto_chat` 更偏“隔一段时间主动关心/随机话题”，不能解决用户当前聊天停顿后白自然接一句的问题。
+- 插件目前主要是 `on_message` 抢答、`on_reply` 改写、`get_tools` 注册工具，缺少“只观察/学习但不抢答”的明确角色。
+- 工具数量已经较多，后续插件继续提供工具时需要平台、权限、服务可用性边界，但不能把 tool_llm 判断替换成关键词硬判。
+
+处理：
+- 新增 `InitiativeEngine`，用于在真实用户一轮聊天结束后记录 `pending_continuation`，到期后由 LLM 判断 `silence/wait/speak`。
+- 桌面 WebSocket 接入当前会话续聊：用户新消息/语音/图片会取消 pending；续聊通过统一 `_launch_reply` 下发，可被 interrupt 打断。
+- 主动续聊默认 `allow_tools=False`，只自然接话，不主动调用工具或操作电脑；真实用户消息仍保留原 `tool_llm` 工具判断。
+- 插件元数据新增 `roles`，兼容默认 `interceptor/rewriter/tool_provider`；新增 `observer` 钩子用于只观察消息、不抢答。
+- QQ 和桌面消息链路都会给插件注入平台、群号、发送者等上下文；QQ observer 仍在“决定需要回复”之后执行，不绕过群聊回复门槛。
+- `ToolRegistry` 增加 `ToolAccessContext` 和工具元数据：`platforms/requires_permission/requires_service/side_effect`。当前只过滤明确标注不可用/无权限的工具，未标注工具继续交给 tool_llm 判断。
+
+验收：
+- `python -m pytest tests\unit\test_initiative_engine.py -q`
+- `python -m pytest tests\unit\test_plugin_hooks.py -q`
+- `python -m pytest tests\unit\test_tool_access_filter.py tests\unit\test_chat_agent.py -q`
+- `python -m pytest tests\unit\test_qq_stability.py tests\unit\test_qq_sticker_policy.py -q`
+- `python -m pytest tests\unit\test_ws_streaming.py -q`
+- `python -m pytest tests\unit\test_batch9_behavior.py tests\unit\test_tools_audit_fix.py -q`
+- `python -m pytest tests\integration\test_core_links.py -q`
+
+剩余观察：
+- 需要真实桌面端观察续聊语气是否自然、是否过于频繁；必要时调 `first_delay_seconds` 和 LLM 判断提示。
+- 需要逐步给高风险/平台专属工具补元数据标签，才能让工具候选过滤发挥更大作用。
+- QQ 端当前先不主动续聊群消息，后续如要加，必须单独做群聊打扰度和主人私聊优先级策略。
+
+### 2026-07-04 插件市场元数据兼容层
+
+问题：
+- 运行时插件已经开始区分 `interceptor/rewriter/tool_provider/observer`，但插件市场仍主要只认识 `plugin.py/config.json/plugins.json` 的旧字段。
+- 第三方插件如果带素材、提示词或 README，旧同步逻辑不够明确，容易出现“代码上传了，资源没上传”或“市场列表看不出权限/类型”的问题。
+- 旧插件、新型插件和复杂插件需要共存，不能为了新字段破坏老插件。
+
+处理：
+- `PluginMarket` 增加市场元数据规范化：旧插件缺 `roles/platforms/permissions/requires_service/assets/dependencies` 时自动补默认值。
+- 市场提交和同步会写入 `schema_version=2`、插件角色、平台、权限、服务、依赖和资源声明。
+- 市场同步会上传 `README.md`、`assets/`、`prompts/`、`docs/` 以及 `config.json` 中声明的资源文件，并同步更新 `plugins.json` 索引。
+- 新建插件模板支持 `classic/interceptor/observer/rewriter/tool_provider` 类型；默认仍是旧式通用插件。
+- 插件市场页面显示插件类型、平台、权限和服务要求。
+- 新增 `docs/PLUGIN_MARKET.md` 说明插件市场路径、角色、元数据和安全边界。
+
+验收：
+- 已运行 `python -m pytest tests\unit\test_plugin_market_paths.py tests\unit\test_plugin_hooks.py -q`，结果 30 passed。
+- 已运行 `python -m compileall -q src\white_salary\core\plugins\market.py src\white_salary\infrastructure\server\settings_api.py`。
+- 已运行 `node --check frontend\js\settings.js`。
+- 已运行 `git diff --check`，仅剩 Windows 换行转换提示，无实际 whitespace 错误。
+
+剩余观察：
+- 当前网页提交接口仍以 `plugin.py + config.json` 为主；完整目录上传适合走本地同步或后续单独做 ZIP 上传。
+- 依赖只记录和展示，不自动安装，后续如要做“一键装依赖”必须加用户确认和安全提示。
+
 ## 已知问题和待办
 
 ### P0 - QQ 消息处理流程重整
 
-现状：
-- QQ 群聊消息会先经过 `QQAdapter` 的 `SmartReplyDecider`，之后才进入 `qq_handler.py` 的消息缓冲和对话生成。
-- `MessageBuffer` 已存在，但主要按“群 + 用户”合并，不能完整合并多用户群聊话题。
-- 如果消息在智能回复判断阶段被忽略，它不会进入后续缓冲、学习和完整处理链路。
-- 表情包目前主要依赖模型输出 `<sticker>` 标签，后处理再随机附加，不是真正按心情和概率稳定触发。
-- QQ 工具调用走通用 `ChatAgent`，后续改 QQ 时要避免影响桌面端。
+本轮完成（2026-07-03）：
+- QQ 群聊不再由 `QQAdapter` 提前吞消息；adapter 只标记“引用白/主人发图或语音”等强制回复信号，实际是否回复改到 `qq_handler.py` 的消息合并之后判断。
+- `MessageBuffer` 满上限时会唤醒等待中的 flush，不再只返回 `False` 但仍等超时。
+- QQ 调用 `ChatAgent.chat_stream_with_tools()` 时会传入 `route_text`，工具路由和 tool_llm 判断只看当前合并后的用户话，主模型仍保留完整群上下文。
+- 插件 `on_message(text, user_id)` 签名保持不变，同时可通过 `self.context.get_message_context()` 读取平台、群号、发送者等 QQ 上下文。
+- QQ 表情包补成专用策略：显式 `<sticker>` 必发；普通轻松回复按概率附带；报错、权限、隐私、长回复、代码等严肃场景跳过。
 
 目标：
 - 按正常聊天逻辑重排 QQ 入口：消息归一化 -> 同人短时间连发合并 -> 是否回复判断 -> 忙碌/隐私/休息判断 -> Agent/工具 -> QQ 专属后处理 -> 发送和记录。
@@ -85,6 +139,21 @@
 - 把 `family_qq`/主人身份正确传入智能回复判断。
 - 表情包做成 QQ 专属策略：按情绪、上下文、冷却和概率决定是否带图，不影响桌面端。
 - 给 QQ 消息合并、主人优先级、表情包策略补测试。
+
+验证：
+- `python -m pytest tests\unit\test_message_processing.py -q`
+- `python -m pytest tests\unit\test_qq_stability.py tests\unit\test_qq_sticker_policy.py -q`
+- `python -m pytest tests\unit\test_batch9_behavior.py::TestHintInjection -q`
+- `python -m pytest tests\unit\test_plugin_hooks.py -q`
+- `python -m pytest tests\unit\test_smart_reply.py -q`
+- `python -m pytest tests\unit\test_tools_audit_fix.py -q`
+- `python -m pytest tests\unit\test_ws_streaming.py -q`
+- `python -m pytest tests\integration\test_core_links.py -q`
+
+剩余观察：
+- 真实 QQ 群内还要观察多用户插话、长时间活跃群、主人连续发图/语音时的回复频率。
+- 表情包概率目前是 QQ 后处理策略，后续可继续接入更细的情绪分类和标签选择。
+- 多用户同话题合并仍然是后续增强项；本轮先修“同一用户连发先合并再理解”。
 
 ### P0 - 项目计划和任务状态持续记录
 
@@ -137,6 +206,13 @@
 - 内置插件可放 `plugins/builtin/` 或代码内官方插件入口，但要和市场显示规则一致。
 - 插件市场、插件管理器、文档和测试必须认同同一套路径。
 
+新增约定：
+- `observer`：只观察消息、记录/学习，不抢答。
+- `interceptor`：可在 LLM 前抢答。
+- `rewriter`：可改写 AI 最终回复。
+- `tool_provider`：可向 ToolRegistry 注册工具。
+- 旧插件不写 `roles` 时默认保持原行为；新插件如果只想观察，应显式写 `roles=["observer"]`。
+
 ### P2 - 服务器安装和 Windows 安装说明
 
 方向：
@@ -147,7 +223,7 @@
 
 ## 下一步建议
 
-1. 先处理 QQ 消息处理流程，因为这是当前体感最怪、最容易影响日常使用的地方。
+1. 观察真实 QQ 使用反馈，重点看多段话合并、工具误触发、表情包概率是否自然。
 2. 同步补插件路径规则的测试和文档，避免市场和运行时识别不一致。
 3. 再进入主动感知方案设计，先做授权和事件记录，不直接做自主操作。
 4. 每完成一项，都更新本文件并单独提交。

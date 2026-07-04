@@ -369,6 +369,28 @@ async def start_qq_service(
     # 消息缓冲器（合并连续消息，2秒窗口）
     msg_buffer = MessageBuffer(wait_timeout=2.0, min_wait=1.0, max_buffer=20, max_total_wait=30.0)
     _buffer_processing: dict[str, bool] = {}  # 记录哪些用户正在处理中
+    _decision_raw_parts: dict[str, list[str]] = {}
+
+    from white_salary.core.smart_reply import ReplyDecision, SmartReplyDecider
+    qq_smart_decider = SmartReplyDecider(
+        bot_self_id="",
+        bot_name=bot_name,
+        owner_ids=[str(q) for q in (family_qq or [])],
+    )
+
+    class _MergedQQDecisionMessage:
+        """Message-like object for SmartReply after QQ text buffering."""
+
+        def __init__(self, source: QQMessage, raw_message: str) -> None:
+            self.is_group = source.is_group
+            self.group_id = source.group_id
+            self.user_id = source.user_id
+            self.raw_message = raw_message or source.raw_message
+            self.is_at_me = bool(getattr(source, "is_at_me", False))
+
+    def _record_qq_reply_for_smart(msg: QQMessage) -> None:
+        if msg.is_group:
+            qq_smart_decider.record_reply(msg.group_id, msg.user_id)
 
     # 实时多消息拦截：白生成回复期间收到新消息，合并后重新生成
     _generating: dict[str, bool] = {}       # 记录哪些用户的回复正在生成中
@@ -399,6 +421,7 @@ async def start_qq_service(
                 pass
 
             text = msg.text
+            decision_raw = getattr(msg, "raw_message", "") or text
 
             # ========== 语音消息识别（ASR）==========
             if asr_adapter and hasattr(msg, 'raw') and '[CQ:record,' in msg.raw.get("raw_message", ""):
@@ -527,6 +550,7 @@ async def start_qq_service(
             # ========== 消息缓冲（合并连续消息，2秒窗口） ==========
             buffer_key = f"{msg.group_id}_{msg.user_id}" if msg.is_group else msg.user_id
             if not _is_redelivery:
+                _decision_raw_parts.setdefault(buffer_key, []).append(decision_raw)
                 msg_buffer.add(buffer_key, text)
 
                 # 如果这个用户已经有handler在等buffer → 消息已加入缓冲，直接return
@@ -539,11 +563,31 @@ async def start_qq_service(
                 try:
                     merged = await msg_buffer.wait_and_flush(buffer_key)
                     if not merged:
+                        _decision_raw_parts.pop(buffer_key, None)
                         return None
                     text = merged
+                    decision_raw = "\n".join(
+                        _decision_raw_parts.pop(buffer_key, [])
+                    ) or text
                 finally:
                     _buffer_processing[buffer_key] = False
+            else:
+                decision_raw = text
             # ========== 缓冲结束，text是合并后的完整消息 ==========
+
+            # ========== QQ群聊回复决策（合并后再判断） ==========
+            if msg.is_group and not _is_redelivery:
+                qq_smart_decider.record_user_response(msg.group_id, msg.user_id)
+                if not bool(getattr(msg, "_force_reply", False)):
+                    smart_result = qq_smart_decider.decide(
+                        _MergedQQDecisionMessage(msg, decision_raw)
+                    )
+                    if smart_result.decision != ReplyDecision.REPLY:
+                        logger.debug(
+                            f"[QQ] SmartReply不回复 {msg.sender_name}({msg.user_id}): "
+                            f"{smart_result.reason}"
+                        )
+                        return None
 
             # ========== 实时多消息拦截 ==========
             # 如果白正在为这个用户生成回复，新消息先排队，等生成完了合并重新生成
@@ -649,7 +693,24 @@ async def start_qq_service(
             _plugin_mgr = _get_plugin_manager()
             if _plugin_mgr is not None:
                 try:
-                    _plugin_reply = await _plugin_mgr.process_message(text, msg.user_id)
+                    _plugin_metadata = {
+                        "platform": "qq",
+                        "is_group": msg.is_group,
+                        "group_id": msg.group_id if msg.is_group else "",
+                        "user_id": msg.user_id,
+                        "sender_name": msg.sender_name,
+                        "is_at_me": bool(getattr(msg, "is_at_me", False)),
+                    }
+                    await _plugin_mgr.observe_message(
+                        text,
+                        msg.user_id,
+                        metadata=_plugin_metadata,
+                    )
+                    _plugin_reply = await _plugin_mgr.process_message(
+                        text,
+                        msg.user_id,
+                        metadata=_plugin_metadata,
+                    )
                 except Exception as _pe:
                     logger.warning(f"[QQ] 插件 on_message 钩子异常，走正常LLM流程: {_pe}")
                     _plugin_reply = None
@@ -657,6 +718,7 @@ async def start_qq_service(
                     logger.info(f"[QQ] 插件抢答 {msg.sender_name}: {_plugin_reply[:30]}")
                     # 记录到上下文并直接返回（不进 LLM）
                     ctx_manager.add_message(context_id, bot_name, _plugin_reply[:100])
+                    _record_qq_reply_for_smart(msg)
                     return _plugin_reply
 
             # ========== 生成回复（带实时多消息拦截） ==========
@@ -709,6 +771,15 @@ async def start_qq_service(
                         user_input, user_name=msg.sender_name,
                         user_id=msg.user_id, is_group=msg.is_group,
                         group_id=msg.group_id if msg.is_group else "",
+                        route_text=text,
+                        tool_context={
+                            "platform": "qq",
+                            "permissions": (
+                                ["owner"] if msg.user_id in {str(q) for q in (family_qq or [])}
+                                else []
+                            ),
+                            "allow_side_effects": msg.user_id in {str(q) for q in (family_qq or [])},
+                        },
                     ):
                         reply_parts.append(chunk)
                     reply = "".join(reply_parts)
@@ -815,10 +886,18 @@ async def start_qq_service(
             except Exception as _e:
                     logger.debug(f'[QQ] 静默异常: {_e}')
 
-            # 表情包处理：如果AI回复中有<sticker>标签，附加CQ图片码
+            # 表情包处理：显式<sticker>必发；普通轻松QQ回复按策略概率附带
             import re as _re
-            sticker_match = _re.search(r'<sticker>.*?</sticker>', reply)
-            if sticker_match:
+            from white_salary.adapters.platform.sticker_policy import QQStickerPolicy
+            if not hasattr(handle_qq_message, '_sticker_policy'):
+                handle_qq_message._sticker_policy = QQStickerPolicy(probability=0.5)
+            should_attach_sticker = handle_qq_message._sticker_policy.should_attach(
+                reply,
+                clean_reply,
+                text,
+                is_group=msg.is_group,
+            )
+            if should_attach_sticker:
                 try:
                     from white_salary.adapters.platform.sticker_manager import StickerManager
                     if not hasattr(handle_qq_message, '_sticker_mgr'):
@@ -829,11 +908,13 @@ async def start_qq_service(
                         clean_reply = clean_reply + "\n" + cq
                 except Exception as _e:
                         logger.debug(f'[QQ] 静默异常: {_e}')
-                # 清除<sticker>标签本身
-                clean_reply = _re.sub(r'<sticker>.*?</sticker>', '', clean_reply).strip()
+            # 清除<sticker>标签本身（strip_xml_tags通常已清理，这里兜底）
+            clean_reply = _re.sub(r'<sticker>.*?</sticker>', '', clean_reply).strip()
 
             if not clean_reply.strip():
                 clean_reply = "刚才脑袋空了一下，你再说一遍？"
+
+            _record_qq_reply_for_smart(msg)
 
             logger.info(
                 f"[QQ] {'群' if msg.is_group else '私'}聊 "

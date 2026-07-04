@@ -64,6 +64,33 @@ class MockLLM(LLMInterface):
         return self._response
 
 
+class ExplodingToolLLM(MockLLM):
+    async def chat_with_tools(
+        self,
+        messages: list[Message],
+        tools: list[dict],
+        temperature: float = 0.7,
+        max_tokens: int = 2048,
+    ) -> tuple[str, list[ToolCall]]:
+        raise AssertionError("tool_llm should not be called")
+
+
+class FakeToolRegistry:
+    @property
+    def count(self) -> int:
+        return 1
+
+    def get_openai_tools(self, context=None) -> list[dict]:
+        return [{
+            "type": "function",
+            "function": {
+                "name": "fake_tool",
+                "description": "fake",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }]
+
+
 class TestChatAgent:
     """测试对话智能体。"""
 
@@ -122,6 +149,26 @@ class TestChatAgent:
             pass
 
         assert agent.conversation_turns == 1
+
+    @pytest.mark.asyncio
+    async def test_chat_stream_with_tools_can_disable_tool_judge(self) -> None:
+        """主动续聊等系统输入可显式禁用工具，真实用户默认行为不变。"""
+        agent = ChatAgent(
+            llm=MockLLM(response="不用工具的回复"),
+            personality=PersonalityManager(project_root=PROJECT_ROOT),
+            memory=ShortTermMemory(max_turns=20),
+            tool_registry=FakeToolRegistry(),
+            tool_llm=ExplodingToolLLM(),
+        )
+
+        chunks = []
+        async for chunk in agent.chat_stream_with_tools(
+            "系统主动续聊",
+            allow_tools=False,
+        ):
+            chunks.append(chunk)
+
+        assert "".join(chunks) == "不用工具的回复"
 
     def test_reset_conversation(self) -> None:
         """重置对话清空记忆。"""

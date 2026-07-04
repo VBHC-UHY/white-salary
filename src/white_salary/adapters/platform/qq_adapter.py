@@ -469,29 +469,18 @@ class QQAdapter:
                 if any(str(m["msg_id"]) == reply_mid for m in self._sent_messages):
                     _is_reply_to_me = True
 
-        # 群聊：智能回复决策
+        # 群聊：是否回复交给 qq_handler 在消息缓冲合并后判断。
+        # 这里仅保留 adapter 才知道的强制回复信号，避免“白”后面连发的正文
+        # 在进入 MessageBuffer 前被 SmartReplyDecider 吞掉。
+        _is_owner_media = (
+            msg.user_id in self._family_qq
+            and (msg.has_image or "[CQ:record," in msg.raw_message)
+        )
+        setattr(msg, "_force_reply", _is_reply_to_me or _is_owner_media)
+        setattr(msg, "_is_reply_to_me", _is_reply_to_me)
+        setattr(msg, "_is_owner_media", _is_owner_media)
+
         if msg.is_group:
-            if not hasattr(self, '_smart_decider'):
-                from white_salary.core.smart_reply import SmartReplyDecider
-                self._smart_decider = SmartReplyDecider(
-                    bot_self_id=self._self_id,
-                    bot_name=self._bot_name,
-                    owner_ids=list(self._family_qq),
-                )
-            from white_salary.core.smart_reply import ReplyDecision
-
-            # 通知SmartReply有人说话了（用于"没人理"计数）
-            self._smart_decider.record_user_response(msg.group_id, msg.user_id)
-
-            # 引用白的消息→强制回复，跳过SmartReplyDecider
-            _is_owner_media = (
-                msg.user_id in self._family_qq
-                and (msg.has_image or "[CQ:record," in msg.raw_message)
-            )
-            if not _is_reply_to_me and not _is_owner_media:
-                result = self._smart_decider.decide(msg)
-                if result.decision != ReplyDecision.REPLY:
-                    return
             logger.debug(f"[QQ] 群聊({msg.group_id}) {msg.sender_name}: {msg.text[:50]}")
         else:
             logger.debug(f"[QQ] 私聊({msg.user_id}) {msg.sender_name}: {msg.text[:50]}")
@@ -502,9 +491,6 @@ class QQAdapter:
                 reply = await self.on_message(msg)
                 if reply:
                     await self.send_reply(msg, reply)
-                    # 记录回复（传user_id，支持对话延续）
-                    if msg.is_group and hasattr(self, '_smart_decider'):
-                        self._smart_decider.record_reply(msg.group_id, msg.user_id)
             except Exception as e:
                 logger.error(f"[QQ] 消息处理失败: {e}")
 

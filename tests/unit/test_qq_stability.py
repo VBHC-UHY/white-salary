@@ -166,6 +166,30 @@ class TestQQMessageMedia:
         assert seen == ["[图片]"]
         assert sent == ["收到图片了"]
 
+    def test_group_text_reaches_handler_before_smart_reply_decision(self) -> None:
+        adapter = QQAdapter(family_qq=["10001"])
+        adapter._self_id = "99999"
+        seen: list[str] = []
+
+        async def on_message(msg: QQMessage) -> None:
+            seen.append(msg.text)
+            return None
+
+        adapter.on_message = on_message
+        msg = QQMessage({
+            "post_type": "message",
+            "message_type": "group",
+            "user_id": "20002",
+            "group_id": "2163039710",
+            "self_id": "99999",
+            "raw_message": "白",
+            "sender": {"nickname": "路人"},
+        })
+
+        asyncio.run(adapter._handle_message(msg))
+
+        assert seen == ["白"]
+
 
 class TestQQVoiceASR:
     """QQ语音识别必须走 ASRInterface.transcribe。"""

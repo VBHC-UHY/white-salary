@@ -1458,6 +1458,7 @@ def create_settings_router(
             body.get("plugin_id", ""),
             name=body.get("name", ""),
             description=body.get("description", ""),
+            plugin_type=body.get("plugin_type", body.get("type", "classic")),
         )
 
     # ================================================================

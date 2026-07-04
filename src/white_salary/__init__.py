@@ -8,4 +8,4 @@ White Salary - 超强AI智能体
   - infrastructure/  基础设施层（服务器、配置、日志等）
 """
 
-__version__ = "0.1.5"
+__version__ = "0.1.6"

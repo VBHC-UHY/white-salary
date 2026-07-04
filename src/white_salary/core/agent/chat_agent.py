@@ -239,6 +239,9 @@ class ChatAgent:
         user_id: str = "desktop",
         is_group: bool = False,
         group_id: str = "",
+        route_text: str | None = None,
+        allow_tools: bool = True,
+        tool_context: dict | None = None,
     ) -> AsyncGenerator[str, None]:
         """
         并行双模型对话（借鉴v2架构）。
@@ -261,8 +264,8 @@ class ChatAgent:
         import json as _json
         import re
 
-        # 没有独立的tool_llm或没有工具 → 普通流式
-        if not self._tool_llm or not self._tools or self._tools.count == 0:
+        # 没有独立的tool_llm/没有工具/本轮禁止工具 → 普通流式
+        if not allow_tools or not self._tool_llm or not self._tools or self._tools.count == 0:
             async for chunk in self.chat_stream(
                 user_input, user_name=user_name, user_id=user_id,
                 is_group=is_group, group_id=group_id,
@@ -271,6 +274,7 @@ class ChatAgent:
             return
 
         logger.debug(f"收到用户输入(并行模式): {user_input[:50]}...")
+        route_source = route_text if route_text is not None else user_input
 
         # 1. 用户消息存入记忆
         self._memory.add_user_message(user_input, name=user_name)
@@ -281,6 +285,22 @@ class ChatAgent:
         )
         context = self._memory.get_context_messages(system_message=system_msg)
         context = self._strip_memory_tags(context)  # 去掉记忆标记，防大模型模仿
+
+        judge_context = context
+        if route_text is not None:
+            judge_context = list(context)
+            last_user_index = next(
+                (
+                    i for i in range(len(judge_context) - 1, -1, -1)
+                    if judge_context[i].role == MessageRole.USER
+                ),
+                None,
+            )
+            route_msg = Message(role=MessageRole.USER, content=route_source)
+            if last_user_index is None:
+                judge_context.append(route_msg)
+            else:
+                judge_context[last_user_index] = route_msg
 
         # 2.5 2026-07-02 审计修复（批2）：接通 MessageRouter.get_tool_hint（原为死代码）。
         # 2026-07-03 工具实现（批9）：把批2写死的「只认 recall_conversation」直连逻辑
@@ -294,12 +314,12 @@ class ChatAgent:
         forced_results: list[ToolResult] = []
         executed_tool_keys: set[tuple[str, str]] = set()  # (工具名, 规范化参数) 防重复执行
         try:
-            tool_hint = self._router.get_tool_hint(user_input)
+            tool_hint = self._router.get_tool_hint(route_source)
         except Exception as hint_err:
             logger.warning(f"[Agent] 工具意图提示路由失败: {hint_err}")
             tool_hint = ""
 
-        forced_name, arg_candidates = self._match_forced_route(tool_hint, user_input)
+        forced_name, arg_candidates = self._match_forced_route(tool_hint, route_source)
         if forced_name and self._tools.get_tool(forced_name):
             try:
                 result_text = ""
@@ -322,7 +342,6 @@ class ChatAgent:
         # 2026-07-03 工具实现（批9）：注入型提示——命中注册表中的提醒/静默类意图时，
         # 给 tool_llm 的判断上下文追加一条 system 提示，提高对应工具被选中的概率。
         # 只影响 tool_llm 的判断输入，不改主模型上下文、不强制执行任何工具。
-        judge_context = context
         if tool_hint and not forced_results and any(
             name in tool_hint for name in self._HINT_INJECT_TOOLS
         ):
@@ -337,11 +356,22 @@ class ChatAgent:
         async def _tool_judge():
             """Task A: tool_llm判断是否需要工具。"""
             try:
+                if tool_context is None:
+                    tools_payload = self._tools.get_openai_tools()
+                else:
+                    try:
+                        tools_payload = self._tools.get_openai_tools(context=tool_context)
+                    except TypeError:
+                        tools_payload = self._tools.get_openai_tools()
+                if not tools_payload:
+                    tool_result_holder["calls"] = []
+                    tool_result_holder["text"] = ""
+                    return
                 # 2026-07-03 工具实现（批9）：判断上下文用 judge_context——
                 # 命中提醒/静默类意图时已追加提示词（未命中时与 context 同一对象）
                 text, calls = await self._tool_llm.chat_with_tools(
                     messages=judge_context,
-                    tools=self._tools.get_openai_tools(),
+                    tools=tools_payload,
                     temperature=0.3,  # 工具判断用低temperature，更准确
                     max_tokens=1024,  # 工具判断不需要太多token
                 )

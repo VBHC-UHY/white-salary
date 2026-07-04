@@ -85,6 +85,54 @@ class _SlowPlugin(Plugin):
         return "太慢了不该看到"
 
 
+class _ContextEchoPlugin(Plugin):
+    """读取 PluginContext 当前消息上下文。"""
+
+    meta = PluginMeta(name="context_echo", priority=PluginPriority.NORMAL)
+
+    async def on_message(self, text: str, user_id: str = "") -> Optional[str]:
+        ctx = self.context.get_message_context()
+        return f"{ctx.get('platform')}:{ctx.get('group_id')}"
+
+
+class _ObserverOnlyPlugin(Plugin):
+    """只观察消息，不抢答、不改写、不提供工具。"""
+
+    meta = PluginMeta(
+        name="observer_only",
+        priority=PluginPriority.HIGHEST,
+        roles=["observer"],
+    )
+
+    def __init__(self) -> None:
+        self.seen: list[tuple[str, str, dict]] = []
+
+    async def on_observe(
+        self,
+        text: str,
+        user_id: str = "",
+        metadata: Optional[dict] = None,
+    ) -> None:
+        self.seen.append((text, user_id, dict(metadata or {})))
+
+    async def on_message(self, text: str, user_id: str = "") -> Optional[str]:
+        return "不该抢答"
+
+    async def on_reply(self, text: str) -> str:
+        return text + "不该改写"
+
+    def get_tools(self) -> list[dict]:
+        async def _handler(**kwargs):
+            return "不该注册"
+
+        return [{
+            "name": "observer_only_tool",
+            "description": "不该注册",
+            "parameters": {"type": "object", "properties": {}},
+            "handler": _handler,
+        }]
+
+
 def _make_manager_with(*plugins: Plugin) -> PluginManager:
     """构造一个 PluginManager 并直接塞入给定插件实例（跳过磁盘发现）。"""
     pm = PluginManager(plugins_dir="plugins")
@@ -141,6 +189,46 @@ async def test_process_message_no_plugins_zero_cost() -> None:
     pm._plugins = {}
     result = await pm.process_message("消息", user_id="u1")
     assert result is None
+
+
+async def test_process_message_exposes_current_message_context() -> None:
+    """QQ端可给插件提供平台/群号等上下文，但不改变旧on_message签名。"""
+    plugin = _ContextEchoPlugin()
+    pm = _make_manager_with(plugin)
+
+    result = await pm.process_message(
+        "消息",
+        user_id="u1",
+        metadata={"platform": "qq", "group_id": "g1", "is_group": True},
+    )
+
+    assert result == "qq:g1"
+    assert plugin.context.get_message_context() == {}
+
+
+async def test_observer_role_sees_message_without_intercepting() -> None:
+    """observer 插件能看消息，但不会抢答。"""
+    plugin = _ObserverOnlyPlugin()
+    pm = _make_manager_with(plugin, _PassthroughPlugin())
+
+    await pm.observe_message(
+        "观察这条",
+        user_id="u1",
+        metadata={"platform": "qq", "group_id": "g1"},
+    )
+    result = await pm.process_message("观察这条", user_id="u1")
+
+    assert result is None
+    assert plugin.seen == [("观察这条", "u1", {"platform": "qq", "group_id": "g1"})]
+
+
+async def test_observer_only_role_does_not_rewrite_or_register_tools() -> None:
+    """roles=["observer"] 不参与 on_reply/get_tools。"""
+    plugin = _ObserverOnlyPlugin()
+    pm = _make_manager_with(plugin)
+
+    assert await pm.process_reply("原文") == "原文"
+    assert pm.get_all_tools() == []
 
 
 # ====================================================================

@@ -1392,6 +1392,29 @@ let _marketFilter = '';
 let _marketCategory = '';
 let _marketTag = '';
 
+function pluginRoleLabel(role) {
+    const labels = {
+        interceptor: '抢答',
+        rewriter: '改写',
+        tool_provider: '工具',
+        observer: '观察'
+    };
+    return labels[role] || role;
+}
+
+function pluginMetaLine(plugin) {
+    const bits = [];
+    const roles = Array.isArray(plugin.roles) ? plugin.roles : [];
+    const platforms = Array.isArray(plugin.platforms) ? plugin.platforms : [];
+    const permissions = Array.isArray(plugin.permissions) ? plugin.permissions : [];
+    const services = Array.isArray(plugin.requires_service) ? plugin.requires_service : [];
+    if (roles.length) bits.push('类型: ' + roles.map(pluginRoleLabel).join('/'));
+    if (platforms.length && !platforms.includes('all')) bits.push('平台: ' + platforms.join('/'));
+    if (permissions.length) bits.push('权限: ' + permissions.join('/'));
+    if (services.length) bits.push('服务: ' + services.join('/'));
+    return bits.join(' · ');
+}
+
 async function loadMarketPlugins() {
     try {
         const resp = await fetch(`${API_BASE}/api/settings/plugins/market/list`);
@@ -1450,6 +1473,10 @@ function renderMarketPlugins() {
         const version = p.version || '1.0';
         const downloads = p.downloads || 0;
         const rating = p.rating || 0;
+        const metaLine = pluginMetaLine(p);
+        const metaHtml = metaLine
+            ? `<div style="font-size:10px;color:#38bdf8;margin-bottom:8px;">${escapeHtml(metaLine)}</div>`
+            : '';
         const featured = p.featured ? '<span style="background:#f59e0b;color:#000;padding:1px 6px;border-radius:4px;font-size:9px;margin-left:4px;">精选</span>' : '';
         const installed = p.installed;
         const btnColor = installed ? 'background:rgba(34,197,94,0.2);color:#22c55e;border-color:rgba(34,197,94,0.3);' : '';
@@ -1467,6 +1494,7 @@ function renderMarketPlugins() {
                 <span style="font-size:10px;color:#64748b;">${p.category || ''}</span>
             </div>
             <div style="font-size:12px;color:#94a3b8;margin-bottom:10px;line-height:1.5;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;">${escapeHtml(desc)}</div>
+            ${metaHtml}
             <div style="display:flex;justify-content:space-between;align-items:center;">
                 <div style="font-size:10px;color:#64748b;">
                     👤 ${escapeHtml(author)}

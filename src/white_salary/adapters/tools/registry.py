@@ -71,6 +71,34 @@ class ToolDefinition:
     parameters: dict                 # JSON Schema参数定义
     handler: Callable[..., Awaitable[str]]  # 异步执行函数
     category: str = "builtin"        # 分类：builtin/custom/mcp
+    platforms: tuple[str, ...] = ()
+    requires_permission: str = ""
+    requires_service: str = ""
+    side_effect: bool = False
+
+
+@dataclass(frozen=True)
+class ToolAccessContext:
+    """工具候选过滤上下文，只做安全/可用性过滤，不替代 tool_llm 判断。"""
+    platform: str = ""
+    permissions: frozenset[str] = field(default_factory=frozenset)
+    available_services: frozenset[str] = field(default_factory=frozenset)
+    allow_side_effects: bool = True
+
+    @classmethod
+    def from_value(cls, value: "ToolAccessContext | dict | None") -> "ToolAccessContext | None":
+        if value is None:
+            return None
+        if isinstance(value, cls):
+            return value
+        permissions = value.get("permissions") or ()
+        services = value.get("available_services") or ()
+        return cls(
+            platform=str(value.get("platform") or ""),
+            permissions=frozenset(str(p) for p in permissions),
+            available_services=frozenset(str(s) for s in services),
+            allow_side_effects=bool(value.get("allow_side_effects", True)),
+        )
 
 
 class ToolRegistry:
@@ -136,15 +164,21 @@ class ToolRegistry:
             logger.warning(f"[Tools] 执行 {name} 失败: {e}")
             return f"工具{name}执行失败了，请用你自己的话告诉用户操作没成功: {e}"
 
-    def get_openai_tools(self) -> list[dict]:
+    def get_openai_tools(
+        self,
+        context: ToolAccessContext | dict | None = None,
+    ) -> list[dict]:
         """
         生成OpenAI格式的tools列表（用于function calling）。
 
         Returns:
             OpenAI API格式的工具定义列表
         """
+        access = ToolAccessContext.from_value(context)
         tools = []
         for tool in self._tools.values():
+            if not self._is_available_for_context(tool, access):
+                continue
             tools.append({
                 "type": "function",
                 "function": {
@@ -154,6 +188,23 @@ class ToolRegistry:
                 },
             })
         return tools
+
+    def _is_available_for_context(
+        self,
+        tool: ToolDefinition,
+        context: ToolAccessContext | None,
+    ) -> bool:
+        if context is None:
+            return True
+        if tool.platforms and context.platform and context.platform not in tool.platforms:
+            return False
+        if tool.requires_permission and tool.requires_permission not in context.permissions:
+            return False
+        if tool.requires_service and tool.requires_service not in context.available_services:
+            return False
+        if tool.side_effect and not context.allow_side_effects:
+            return False
+        return True
 
     @property
     def count(self) -> int:

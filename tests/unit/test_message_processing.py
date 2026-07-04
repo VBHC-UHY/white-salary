@@ -7,6 +7,8 @@
   - MessageBuffer：缓冲、合并、清空、达上限返回 False
 """
 
+import asyncio
+
 from white_salary.core.message.processing import (
     MessageRouter,
     TimePerception,
@@ -77,3 +79,14 @@ class TestMessageBuffer:
         assert b.add("u1", "1") is True
         assert b.add("u1", "2") is True
         assert b.add("u1", "3") is False          # 达上限，让调用方立即处理
+
+    async def test_max_buffer_wakes_waiting_flush(self) -> None:
+        b = MessageBuffer(wait_timeout=30.0, min_wait=30.0, max_buffer=2)
+        assert b.add("u1", "1") is True
+        task = asyncio.create_task(b.wait_and_flush("u1"))
+        await asyncio.sleep(0)
+
+        assert b.add("u1", "2") is False
+
+        merged = await asyncio.wait_for(task, timeout=0.5)
+        assert merged == "1\n2"

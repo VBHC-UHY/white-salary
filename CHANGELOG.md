@@ -23,6 +23,31 @@
 
 ---
 
+## [0.1.6] - 2026-07-04 · QQ 消息链路、当前会话续聊与插件市场 schema v2
+
+面向日常聊天和插件生态的体验修复版：重点让 QQ 多段话先合并再理解，保留工具判断 LLM；桌面端新增“当前会话自然续聊”判断；插件系统补齐角色、观察钩子、工具候选边界和市场元数据。
+
+### 新增
+- **当前会话续聊判断**：新增 `InitiativeEngine`，在真实用户一轮聊天停下来后，由 LLM 判断是安静等待、轻轻追问，还是自然补一句想法。
+- **插件角色**：插件元数据新增 `roles`，支持 `observer`、`interceptor`、`rewriter`、`tool_provider` 四类角色；旧插件未声明时保持原行为。
+- **工具候选边界**：工具可声明平台、权限、服务依赖和副作用属性；系统只过滤明确不可用的工具，最终是否调用仍交给原本的 tool_llm 判断。
+- **插件市场 schema v2**：市场同步/模板/安装支持角色、平台、权限、服务、依赖和资源声明，并新增插件市场说明文档。
+
+### 修复
+- **QQ 多段话处理**：QQ adapter 不再提前吞掉群聊消息，改为在消息合并后统一判断是否回复，避免“白 + 后续内容”被拆散理解。
+- **QQ 表情包策略**：显式 `<sticker>` 必发，普通轻松回复按概率附带；报错、隐私、权限、长代码等严肃场景跳过。
+- **消息缓冲唤醒**：缓冲达到上限时会立即唤醒等待中的 flush，减少多段话等待超时造成的迟钝感。
+- **桌面端安全边界**：AI 自发续聊默认不调用工具、不操作电脑；真实用户消息仍走原工具链路。
+
+### 验证
+- `python -m pytest tests\unit\test_qq_stability.py tests\unit\test_qq_sticker_policy.py tests\unit\test_message_processing.py tests\unit\test_initiative_engine.py tests\unit\test_chat_agent.py tests\unit\test_tool_access_filter.py tests\unit\test_plugin_hooks.py tests\unit\test_plugin_market_paths.py -q`
+- `python -m compileall -q src\white_salary\adapters\platform\qq_adapter.py src\white_salary\adapters\platform\sticker_policy.py src\white_salary\adapters\tools\registry.py src\white_salary\core\agent\chat_agent.py src\white_salary\core\initiative.py src\white_salary\core\message\processing.py src\white_salary\core\plugins\base.py src\white_salary\core\plugins\context.py src\white_salary\core\plugins\manager.py src\white_salary\core\plugins\market.py src\white_salary\infrastructure\server\qq_handler.py src\white_salary\infrastructure\server\settings_api.py src\white_salary\infrastructure\server\websocket_handler.py`
+- `node --check frontend\js\settings.js`
+- `node --check frontend\js\chat-controller.js`
+- `git diff --check`
+
+---
+
 ## [0.1.5] - 2026-07-03 · 插件目录统一与默认 Live2D 模型
 
 面向公开仓库下载用户的体验修复版：重点解决“插件实际存在但插件市场/已安装列表看不到”的目录口径不一致问题，并把默认 Live2D 模型随源码提供，减少新手开箱后没有桌宠形象的困惑。

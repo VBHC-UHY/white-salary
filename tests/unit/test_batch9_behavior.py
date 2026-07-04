@@ -694,6 +694,23 @@ class TestHintInjection:
         assert recall_calls[0][1].get("keyword") == "周末计划"
         assert tool_llm.calls == 0
 
+    async def test_route_text_limits_tool_intent_to_current_qq_message(self) -> None:
+        """QQ群历史含回忆词时，工具路由只看当前合并后的用户话。"""
+        registry = HintFakeRegistry()
+        tool_llm = RecordingToolLLM()
+        agent = _make_hint_agent(tool_llm, registry)
+
+        enriched_input = "群历史：还记得我们之前聊过的周末计划吗\n\n路人 对你说: 今天天气真好啊"
+        async for _ in agent.chat_stream_with_tools(
+            enriched_input,
+            route_text="今天天气真好啊",
+        ):
+            pass
+
+        assert registry.execute_calls == []
+        assert tool_llm.calls == 1
+        assert "周末计划" not in tool_llm.seen_messages[0][-1].content
+
     async def test_empty_tool_postprocess_falls_back_to_tool_result(self) -> None:
         """If the main model returns empty text after a tool call, do not emit silence."""
         registry = HintFakeRegistry()

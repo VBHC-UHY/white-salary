@@ -19,8 +19,8 @@ import hashlib
 import time
 import shutil
 import base64
-from pathlib import Path
-from typing import Optional
+from pathlib import Path, PurePosixPath
+from typing import Any, Optional
 
 import aiohttp
 from loguru import logger
@@ -30,6 +30,17 @@ from loguru import logger
 DEFAULT_GITHUB_REPO = "VBHC-UHY/whitesalary-plugins"
 GITHUB_API = "https://api.github.com"
 GITHUB_RAW = "https://raw.githubusercontent.com"
+MARKET_SCHEMA_VERSION = 2
+DEFAULT_PLUGIN_ROLES = ["interceptor", "rewriter", "tool_provider"]
+DEFAULT_PLUGIN_PLATFORMS = ["all"]
+VALID_PLUGIN_ROLES = {"interceptor", "rewriter", "tool_provider", "observer"}
+ROLE_ALIASES = {
+    "message": "interceptor",
+    "reply": "rewriter",
+    "tool": "tool_provider",
+    "tools": "tool_provider",
+    "observe": "observer",
+}
 
 
 class PluginMarket:
@@ -100,6 +111,222 @@ class PluginMarket:
             h["Authorization"] = f"token {self._token}"
         return h
 
+    @staticmethod
+    def _as_list(value: Any) -> list[Any]:
+        if value is None or value == "":
+            return []
+        if isinstance(value, str):
+            return [x.strip() for x in value.replace("，", ",").split(",") if x.strip()]
+        if isinstance(value, (list, tuple, set)):
+            return list(value)
+        return [value]
+
+    @classmethod
+    def _normalize_string_list(
+        cls,
+        value: Any,
+        *,
+        default: list[str] | tuple[str, ...] = (),
+        aliases: dict[str, str] | None = None,
+        allowed: set[str] | None = None,
+        field: str = "字段",
+    ) -> list[str]:
+        raw_items = cls._as_list(value)
+        if not raw_items:
+            return list(default)
+
+        result: list[str] = []
+        invalid: list[str] = []
+        for item in raw_items:
+            text = str(item).strip().lower()
+            if not text:
+                continue
+            text = (aliases or {}).get(text, text)
+            if allowed is not None and text not in allowed:
+                invalid.append(text)
+                continue
+            if text not in result:
+                result.append(text)
+
+        if invalid:
+            allowed_text = ", ".join(sorted(allowed or ()))
+            raise ValueError(f"{field}不支持: {', '.join(invalid)}；可用值: {allowed_text}")
+        return result or list(default)
+
+    @classmethod
+    def _normalize_asset_paths(cls, value: Any) -> list[str]:
+        result: list[str] = []
+        for item in cls._as_list(value):
+            rel = str(item).strip().replace("\\", "/").lstrip("/")
+            if not rel:
+                continue
+            posix = PurePosixPath(rel)
+            if posix.is_absolute() or ".." in posix.parts:
+                raise ValueError(f"资源路径不安全: {item}")
+            if rel in {"plugin.py", "config.json", "__init__.py"}:
+                continue
+            if rel not in result:
+                result.append(rel)
+        return result
+
+    @classmethod
+    def _normalize_dependencies(cls, value: Any) -> dict[str, Any]:
+        if value in (None, ""):
+            return {}
+        if isinstance(value, dict):
+            return value
+        if isinstance(value, str):
+            return {"python": cls._normalize_string_list(value)}
+        if isinstance(value, (list, tuple, set)):
+            return {"python": [str(x).strip() for x in value if str(x).strip()]}
+        raise ValueError("dependencies 必须是对象、字符串或列表")
+
+    @classmethod
+    def _build_market_config(
+        cls,
+        plugin_id: str,
+        metadata: dict[str, Any] | None,
+        author_key: str | None = None,
+    ) -> dict[str, Any]:
+        metadata = metadata or {}
+        cn_name = metadata.get("cn_name", metadata.get("name", plugin_id))
+        config: dict[str, Any] = {
+            "schema_version": MARKET_SCHEMA_VERSION,
+            "id": plugin_id,
+            "name": metadata.get("name", plugin_id),
+            "cn_name": cn_name,
+            "version": metadata.get("version", "1.0.0"),
+            "author": metadata.get("author", "anonymous"),
+            "description": metadata.get("description", ""),
+            "full_description": metadata.get("full_description", ""),
+            "category": metadata.get("category", "其他"),
+            "features": cls._as_list(metadata.get("features", [])),
+            "usage": metadata.get("usage", ""),
+            "commands": cls._as_list(metadata.get("commands", [])),
+            "changelog": metadata.get("changelog", "v1.0.0 - 初始版本"),
+            "notes": metadata.get("notes", ""),
+            "roles": cls._normalize_string_list(
+                metadata.get("roles"),
+                default=DEFAULT_PLUGIN_ROLES,
+                aliases=ROLE_ALIASES,
+                allowed=VALID_PLUGIN_ROLES,
+                field="roles",
+            ),
+            "platforms": cls._normalize_string_list(
+                metadata.get("platforms"),
+                default=DEFAULT_PLUGIN_PLATFORMS,
+                field="platforms",
+            ),
+            "permissions": cls._normalize_string_list(metadata.get("permissions", [])),
+            "requires_service": cls._normalize_string_list(
+                metadata.get("requires_service", metadata.get("requires_services", []))
+            ),
+            "assets": cls._normalize_asset_paths(metadata.get("assets", [])),
+            "dependencies": cls._normalize_dependencies(metadata.get("dependencies", {})),
+        }
+        if author_key:
+            config["author_key"] = author_key
+        return config
+
+    @classmethod
+    def _normalize_market_entry(cls, entry: dict[str, Any]) -> dict[str, Any]:
+        try:
+            normalized = cls._build_market_config(
+                str(entry.get("id") or entry.get("name") or ""),
+                entry,
+            )
+        except ValueError:
+            normalized = {
+                "schema_version": MARKET_SCHEMA_VERSION,
+                "roles": DEFAULT_PLUGIN_ROLES[:],
+                "platforms": DEFAULT_PLUGIN_PLATFORMS[:],
+                "permissions": [],
+                "requires_service": [],
+                "assets": [],
+                "dependencies": {},
+            }
+        merged = dict(entry)
+        normalized_fields = {
+            "schema_version",
+            "features",
+            "commands",
+            "roles",
+            "platforms",
+            "permissions",
+            "requires_service",
+            "assets",
+            "dependencies",
+        }
+        for key, value in normalized.items():
+            if key in normalized_fields:
+                merged[key] = value
+            else:
+                merged.setdefault(key, value)
+        return merged
+
+    @classmethod
+    def _plugin_index_entry(
+        cls,
+        config: dict[str, Any],
+        *,
+        repo: str,
+        plugin_id: str,
+    ) -> dict[str, Any]:
+        return {
+            "schema_version": MARKET_SCHEMA_VERSION,
+            "id": plugin_id,
+            "name": config.get("name", plugin_id),
+            "cn_name": config.get("cn_name", config.get("name", plugin_id)),
+            "version": config.get("version", "1.0.0"),
+            "author": config.get("author", "anonymous"),
+            "description": config.get("description", ""),
+            "category": config.get("category", "其他"),
+            "roles": config.get("roles", DEFAULT_PLUGIN_ROLES),
+            "platforms": config.get("platforms", DEFAULT_PLUGIN_PLATFORMS),
+            "permissions": config.get("permissions", []),
+            "requires_service": config.get("requires_service", []),
+            "assets": config.get("assets", []),
+            "dependencies": config.get("dependencies", {}),
+            "downloads": int(config.get("downloads", 0) or 0),
+            "rating": float(config.get("rating", 5.0) or 5.0),
+            "featured": bool(config.get("featured", False)),
+            "download_url": f"{GITHUB_RAW}/{repo}/main/plugins/{plugin_id}",
+        }
+
+    @classmethod
+    def _local_path_for_asset(cls, plugin_dir: Path, rel_path: str) -> Path:
+        safe = cls._normalize_asset_paths([rel_path])[0]
+        return plugin_dir.joinpath(*PurePosixPath(safe).parts)
+
+    @classmethod
+    def _iter_extra_upload_files(
+        cls,
+        plugin_dir: Path,
+        config: dict[str, Any],
+    ) -> list[tuple[str, Path]]:
+        candidates: set[str] = set()
+        for name in ("README.md", "readme.md"):
+            if (plugin_dir / name).is_file():
+                candidates.add(name)
+        for folder in ("assets", "prompts", "docs"):
+            root = plugin_dir / folder
+            if root.exists():
+                for file in root.rglob("*"):
+                    if file.is_file() and "__pycache__" not in file.parts:
+                        candidates.add(file.relative_to(plugin_dir).as_posix())
+        for rel in config.get("assets", []) or []:
+            candidates.add(rel)
+
+        files: list[tuple[str, Path]] = []
+        for rel in sorted(candidates):
+            try:
+                local = cls._local_path_for_asset(plugin_dir, rel)
+            except (IndexError, ValueError):
+                continue
+            if local.is_file() and local.suffix not in {".pyc", ".pyo"}:
+                files.append((rel.replace("\\", "/"), local))
+        return files
+
     # ================================================================
     # 获取插件列表
     # ================================================================
@@ -114,6 +341,8 @@ class PluginMarket:
         plugins = await self._fetch_from_github()
         if not plugins:
             plugins = self._load_cache()
+
+        plugins = [self._normalize_market_entry(p) for p in plugins if isinstance(p, dict)]
 
         # 标记已安装的
         installed = self._get_installed_ids()
@@ -144,6 +373,7 @@ class PluginMarket:
                         plugins = raw.get("plugins", [])
                     else:
                         plugins = []
+                    plugins = [self._normalize_market_entry(p) for p in plugins if isinstance(p, dict)]
                     if plugins:
                         self._save_cache(plugins)
                         logger.debug(f"[Market] 从GitHub拉取 {len(plugins)} 个插件")
@@ -222,6 +452,37 @@ class PluginMarket:
                             config_data = await resp2.json()
                 except Exception:
                     pass
+                if isinstance(config_data, dict) and config_data:
+                    config_data = self._normalize_market_entry(
+                        {"id": plugin_id, **config_data}
+                    )
+                else:
+                    config_data = self._build_market_config(
+                        plugin_id,
+                        {"name": plugin_id, "cn_name": plugin_id},
+                    )
+
+                extra_files: dict[str, bytes] = {}
+                for rel_path in config_data.get("assets", []) or []:
+                    try:
+                        safe_rel = self._normalize_asset_paths([rel_path])[0]
+                    except (IndexError, ValueError) as e:
+                        logger.warning(f"[Market] 跳过不安全资源路径 {rel_path}: {e}")
+                        continue
+                    try:
+                        async with session.get(
+                            f"{download_url}/{safe_rel}",
+                            timeout=aiohttp.ClientTimeout(total=10),
+                        ) as asset_resp:
+                            if asset_resp.status == 200:
+                                extra_files[safe_rel] = await asset_resp.read()
+                            else:
+                                logger.warning(
+                                    f"[Market] 资源下载失败 {plugin_id}/{safe_rel}: "
+                                    f"HTTP {asset_resp.status}"
+                                )
+                    except Exception as e:
+                        logger.warning(f"[Market] 资源下载失败 {plugin_id}/{safe_rel}: {e}")
 
             # 自动替换import路径（兼容v2插件）
             import re as _re
@@ -246,6 +507,10 @@ class PluginMarket:
                 (plugin_dir / "config.json").write_text(
                     json.dumps(config_data, ensure_ascii=False, indent=2), encoding="utf-8"
                 )
+            for rel_path, content in extra_files.items():
+                asset_path = self._local_path_for_asset(plugin_dir, rel_path)
+                asset_path.parent.mkdir(parents=True, exist_ok=True)
+                asset_path.write_bytes(content)
 
             logger.info(f"[Market] 已安装: {plugin_id}")
 
@@ -298,19 +563,23 @@ class PluginMarket:
             if config_path.exists():
                 try:
                     config = json.loads(config_path.read_text(encoding="utf-8"))
-                    info.update(config)
+                    info.update(self._normalize_market_entry({"id": plugin_id, **config}))
                 except Exception:
-                    pass
+                    info.update(self._build_market_config(plugin_id, {"name": plugin_id}))
+            else:
+                info.update(self._build_market_config(plugin_id, {"name": plugin_id}))
             result.append(info)
         for f in self._plugins_dir.glob("*.py"):
             if not f.name.startswith("_"):
-                result.append({
+                info = {
                     "id": f.stem,
                     "name": f.stem,
                     "installed": True,
                     "source": "root_file",
                     "path": str(f),
-                })
+                }
+                info.update(self._build_market_config(f.stem, {"name": f.stem}))
+                result.append(info)
         return result
 
     # ================================================================
@@ -332,6 +601,7 @@ class PluginMarket:
             author_key = hashlib.md5(
                 f"{metadata.get('author', '')}{plugin_id}{time.time()}".encode()
             ).hexdigest()[:16]
+            config = self._build_market_config(plugin_id, metadata, author_key)
 
             async with aiohttp.ClientSession() as session:
                 # 1. 上传plugin.py
@@ -344,23 +614,7 @@ class PluginMarket:
                 )
 
                 # 2. 上传config.json（含author_key）
-                cn_name = metadata.get("cn_name", metadata.get("name", plugin_id))
-                config = {
-                    "id": plugin_id,
-                    "name": metadata.get("name", plugin_id),
-                    "cn_name": cn_name,
-                    "version": metadata.get("version", "1.0.0"),
-                    "author": metadata.get("author", "anonymous"),
-                    "author_key": author_key,  # 写入GitHub，作者删除时验证
-                    "description": metadata.get("description", ""),
-                    "full_description": metadata.get("full_description", ""),
-                    "category": metadata.get("category", "其他"),
-                    "features": metadata.get("features", []),
-                    "usage": metadata.get("usage", ""),
-                    "commands": metadata.get("commands", []),
-                    "changelog": metadata.get("changelog", "v1.0.0 - 初始版本"),
-                    "notes": metadata.get("notes", ""),
-                }
+                cn_name = config.get("cn_name", plugin_id)
                 config_encoded = base64.b64encode(
                     json.dumps(config, ensure_ascii=False, indent=2).encode("utf-8")
                 ).decode()
@@ -372,7 +626,7 @@ class PluginMarket:
                 )
 
                 # 3. 更新plugins.json索引（关键！不更新的话新插件不显示在列表里）
-                await self._update_plugins_index(session, plugin_id, metadata, author_key)
+                await self._update_plugins_index(session, plugin_id, config)
 
             logger.info(f"[Market] 已提交: {plugin_id}")
             return {
@@ -381,11 +635,13 @@ class PluginMarket:
                 "author_key": author_key,
             }
 
+        except ValueError as e:
+            return {"success": False, "message": f"元数据错误: {e}"}
         except Exception as e:
             return {"success": False, "message": f"提交失败: {e}"}
 
     async def _update_plugins_index(self, session, plugin_id: str,
-                                    metadata: dict, author_key: str) -> None:
+                                    config: dict) -> None:
         """更新GitHub上的plugins.json索引。"""
         url = f"{GITHUB_API}/repos/{self._repo}/contents/plugins.json"
         sha = None
@@ -404,24 +660,17 @@ class PluginMarket:
             plugins_data = {"version": "1.0.0", "plugins": plugins_data}
         plugins_list = plugins_data.get("plugins", [])
 
-        # 删除旧的同名条目
+        # 删除旧的同名条目，同时保留下载量/评分/精选等市场统计。
+        old_entry = next((p for p in plugins_list if p.get("id") == plugin_id), {})
         plugins_list = [p for p in plugins_list if p.get("id") != plugin_id]
 
         # 加入新条目
-        cn_name = metadata.get("cn_name", metadata.get("name", plugin_id))
-        new_entry = {
-            "id": plugin_id,
-            "name": metadata.get("name", plugin_id),
-            "cn_name": cn_name,
-            "version": metadata.get("version", "1.0.0"),
-            "author": metadata.get("author", "anonymous"),
-            "description": metadata.get("description", ""),
-            "category": metadata.get("category", "其他"),
-            "downloads": 0,
-            "rating": 5.0,
-            "featured": False,
-            "download_url": f"{GITHUB_RAW}/{self._repo}/main/plugins/{plugin_id}",
-        }
+        cn_name = config.get("cn_name", config.get("name", plugin_id))
+        new_entry = self._plugin_index_entry(
+            {**old_entry, **config},
+            repo=self._repo,
+            plugin_id=plugin_id,
+        )
         plugins_list.append(new_entry)
 
         plugins_data["plugins"] = plugins_list
@@ -655,6 +904,7 @@ class PluginMarket:
                 except Exception:
                     pass
             config.update(metadata)
+            config = self._normalize_market_entry({"id": plugin_id, **config})
             config["updated_at"] = time.strftime("%Y-%m-%d %H:%M")
             config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
         return {"success": True, "message": "已保存"}
@@ -664,7 +914,8 @@ class PluginMarket:
     # ================================================================
 
     def create_from_template(self, plugin_id: str, name: str = "",
-                             description: str = "") -> dict:
+                             description: str = "",
+                             plugin_type: str = "classic") -> dict:
         """从模板创建新插件。"""
         import re
         if not re.match(r'^[a-z][a-z0-9_]*$', plugin_id):
@@ -677,6 +928,17 @@ class PluginMarket:
         # 生成类名
         class_name = ''.join(w.capitalize() for w in plugin_id.split('_')) + 'Plugin'
         display_name = name or plugin_id
+        template_type = (plugin_type or "classic").strip().lower()
+        role_map = {
+            "classic": DEFAULT_PLUGIN_ROLES,
+            "interceptor": ["interceptor"],
+            "observer": ["observer"],
+            "rewriter": ["rewriter"],
+            "tool": ["tool_provider"],
+            "tool_provider": ["tool_provider"],
+        }
+        roles = role_map.get(template_type, DEFAULT_PLUGIN_ROLES)
+        role_line = "" if template_type == "classic" else f"        roles={roles!r},\n"
 
         template = f'''"""
 {display_name} 插件
@@ -692,28 +954,49 @@ class {class_name}(Plugin):
         description="{description or display_name}",
         version="1.0.0",
         author="",
+{role_line.rstrip()}
     )
 
     async def on_load(self):
         print(f"[Plugin:{{self.meta.name}}] 加载完成")
 
+    async def on_observe(self, text, user_id="", metadata=None):
+        # observer 插件在这里记录/学习消息，不抢答
+        return None
+
     async def on_message(self, text, user_id=""):
-        # 在这里写消息处理逻辑
+        # interceptor 插件在这里写消息处理逻辑
         # 返回 str = 拦截消息，返回 None = 不拦截
         return None
 
+    async def on_reply(self, text):
+        # rewriter 插件可以在这里改写 AI 最终回复
+        return text
+
     def get_tools(self):
-        # 在这里注册工具
+        # tool_provider 插件在这里注册工具
         return []
 '''
         plugin_dir.mkdir(parents=True, exist_ok=True)
         (plugin_dir / "plugin.py").write_text(template, encoding="utf-8")
         (plugin_dir / "__init__.py").write_text("from .plugin import *\n", encoding="utf-8")
-        (plugin_dir / "config.json").write_text(json.dumps({
-            "id": plugin_id, "name": display_name,
-            "cn_name": display_name, "description": description,
-            "version": "1.0.0", "enabled": True,
-        }, ensure_ascii=False, indent=2), encoding="utf-8")
+        config = self._build_market_config(
+            plugin_id,
+            {
+                "name": display_name,
+                "cn_name": display_name,
+                "description": description,
+                "version": "1.0.0",
+                "roles": roles,
+                "platforms": ["all"],
+            },
+        )
+        config["enabled"] = True
+        config["plugin_type"] = template_type
+        (plugin_dir / "config.json").write_text(
+            json.dumps(config, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
 
         return {"success": True, "message": f"已创建 {plugin_id}", "path": str(plugin_dir)}
 
@@ -744,8 +1027,25 @@ class {class_name}(Plugin):
                     )
 
                     config_path = d / "config.json"
+                    config: dict[str, Any]
                     if config_path.exists():
                         config_code = config_path.read_text(encoding="utf-8")
+                        try:
+                            config = self._normalize_market_entry(
+                                {"id": d.name, **json.loads(config_code)}
+                            )
+                            config_code = json.dumps(
+                                config,
+                                ensure_ascii=False,
+                                indent=2,
+                            )
+                        except Exception:
+                            config = self._build_market_config(d.name, {"name": d.name})
+                            config_code = json.dumps(
+                                config,
+                                ensure_ascii=False,
+                                indent=2,
+                            )
                         config_encoded = base64.b64encode(config_code.encode("utf-8")).decode()
                         await self._github_put(
                             session,
@@ -753,6 +1053,19 @@ class {class_name}(Plugin):
                             config_encoded,
                             f"Sync config: {d.name}",
                         )
+                    else:
+                        config = self._build_market_config(d.name, {"name": d.name})
+
+                    for rel_path, file_path in self._iter_extra_upload_files(d, config):
+                        file_encoded = base64.b64encode(file_path.read_bytes()).decode()
+                        await self._github_put(
+                            session,
+                            f"plugins/{d.name}/{rel_path}",
+                            file_encoded,
+                            f"Sync plugin asset: {d.name}/{rel_path}",
+                        )
+
+                    await self._update_plugins_index(session, d.name, config)
 
                     synced += 1
                 except Exception as e:

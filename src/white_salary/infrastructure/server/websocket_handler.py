@@ -35,6 +35,7 @@ from white_salary.core.agent.chat_agent import ChatAgent
 from white_salary.core.interfaces.asr import ASRInterface
 from white_salary.core.interfaces.tts import TTSInterface
 from white_salary.core.interfaces.types import AudioData
+from white_salary.core.initiative import InitiativeEngine
 from white_salary.adapters.vision.multimodal_adapter import MultimodalVisionAdapter
 from white_salary.core.filter.content_filter import ContentFilter
 from white_salary.utils.text import extract_emotion_tags, strip_action_tags, strip_xml_tags, is_valid_for_tts
@@ -404,6 +405,8 @@ async def handle_chat_websocket(
     # interrupt / 新消息随时可取消。
     current_token: Optional[CancellationToken] = None
     current_task: Optional[asyncio.Task] = None
+    initiative = InitiativeEngine(llm=getattr(agent, "_llm", None))
+    initiative_task: Optional[asyncio.Task] = None
 
     def _reply_in_progress() -> bool:
         """2026-07-02 审计修复（批3）：是否确有一轮回复正在进行。"""
@@ -431,6 +434,21 @@ async def handle_chat_websocket(
                 logger.warning(f"[WS] 回复任务取消收尾异常: {e}")
         current_task = None
         current_token = None
+
+    async def _cancel_initiative() -> None:
+        """Cancel pending current-conversation follow-up."""
+        nonlocal initiative_task
+        initiative.cancel_pending()
+        task = initiative_task
+        initiative_task = None
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:
+                logger.warning(f"[Initiative] 取消续聊任务异常: {e}")
 
     async def _launch_reply(
         reply_coro_factory: Callable[[CancellationToken], Awaitable[None]],
@@ -470,7 +488,10 @@ async def handle_chat_websocket(
         current_task = asyncio.create_task(_runner())
 
     def _chat_reply_factory(
-        text: str, *, is_user_message: bool,
+        text: str,
+        *,
+        is_user_message: bool,
+        allow_tools: bool = True,
     ) -> Callable[[CancellationToken], Awaitable[None]]:
         """构造一轮标准对话回复的协程工厂（按值捕获 text，防循环变量漂移）。"""
         def _factory(token: CancellationToken) -> Awaitable[None]:
@@ -479,8 +500,69 @@ async def handle_chat_websocket(
                 owner_id=owner_id, owner_name=owner_name,
                 user_learning=user_learning, is_user_message=is_user_message,
                 send_lock=send_lock,
+                allow_tools=allow_tools,
+                tool_context={
+                    "platform": "desktop",
+                    "permissions": ["owner"],
+                    "allow_side_effects": is_user_message,
+                },
+                on_reply_complete=_after_reply_complete,
             )
         return _factory
+
+    def _schedule_initiative(pending_id: int) -> None:
+        nonlocal initiative_task
+        if initiative_task is not None and not initiative_task.done():
+            initiative_task.cancel()
+        initiative_task = asyncio.create_task(_initiative_loop(pending_id))
+
+    async def _after_reply_complete(
+        user_text: str,
+        ai_text: str,
+        was_user_message: bool,
+    ) -> None:
+        if not was_user_message:
+            return
+        pending_id = initiative.record_turn(
+            user_text,
+            ai_text,
+            platform="desktop",
+            user_id=owner_id,
+        )
+        if pending_id is not None:
+            _schedule_initiative(pending_id)
+
+    async def _initiative_loop(pending_id: int) -> None:
+        while True:
+            delay = initiative.seconds_until_due(pending_id)
+            if delay is None:
+                return
+            if delay > 0:
+                await asyncio.sleep(delay)
+            if _should_skip_proactive(False):
+                initiative.cancel_pending()
+                return
+            if _reply_in_progress():
+                initiative.cancel_pending()
+                return
+            decision = await initiative.evaluate_if_due(pending_id)
+            if decision.action == "wait":
+                continue
+            if decision.should_speak:
+                chat_input = (
+                    "[当前会话自然续聊]\n"
+                    f"{decision.prompt}\n\n"
+                    "请你只自然地接一句或两句，像当前聊天还没结束那样继续。"
+                    "不要调用工具，不要操作电脑，不要显得刻意。"
+                )
+                await _launch_reply(
+                    _chat_reply_factory(
+                        chat_input,
+                        is_user_message=False,
+                        allow_tools=False,
+                    )
+                )
+            return
 
     # 从配置读取功能开关
     _ac_config = None
@@ -599,6 +681,7 @@ async def handle_chat_websocket(
             # 任何用户交互都通知AutoChat
             if msg_type in ("chat", "voice", "image"):
                 auto_chat.notify_user_active()
+                await _cancel_initiative()
 
             if msg_type == "chat":
                 # 冲突检测（per-connection实例）
@@ -787,6 +870,10 @@ async def handle_chat_websocket(
             await _cancel_current_reply()
         except Exception:
             pass
+        try:
+            await _cancel_initiative()
+        except Exception:
+            pass
         # 清理跨平台桥检查任务
         if '_bridge_task' in dir() and _bridge_task:
             _bridge_task.cancel()
@@ -906,6 +993,9 @@ async def _handle_chat_message(
     user_learning: Optional["UserLearningService"] = None,
     is_user_message: bool = True,
     send_lock: Optional[asyncio.Lock] = None,
+    allow_tools: bool = True,
+    tool_context: Optional[dict] = None,
+    on_reply_complete: Optional[Callable[[str, str, bool], Awaitable[None]]] = None,
 ) -> None:
     """
     处理一轮对话：LLM流式生成 → 【边生成边】逐句下发文本+TTS音频 → 收尾记录。
@@ -945,7 +1035,24 @@ async def _handle_chat_message(
         _plugin_mgr = _get_plugin_manager()
         if _plugin_mgr is not None:
             try:
-                _plugin_reply = await _plugin_mgr.process_message(user_input, owner_id)
+                _plugin_metadata = {
+                    "platform": "desktop",
+                    "is_group": False,
+                    "group_id": "",
+                    "user_id": owner_id,
+                    "sender_name": owner_name or "",
+                    "is_at_me": True,
+                }
+                await _plugin_mgr.observe_message(
+                    user_input,
+                    owner_id,
+                    metadata=_plugin_metadata,
+                )
+                _plugin_reply = await _plugin_mgr.process_message(
+                    user_input,
+                    owner_id,
+                    metadata=_plugin_metadata,
+                )
             except Exception as _pe:
                 logger.warning(f"[WS] 插件 on_message 钩子异常，走正常LLM流程: {_pe}")
                 _plugin_reply = None
@@ -956,6 +1063,11 @@ async def _handle_chat_message(
                     owner_id=owner_id, owner_name=owner_name,
                     user_input=user_input, send_lock=send_lock,
                 )
+                if on_reply_complete is not None:
+                    try:
+                        await on_reply_complete(user_input, _plugin_reply, is_user_message)
+                    except Exception as _ice:
+                        logger.warning(f"[Initiative] 插件抢答后续聊记录失败: {_ice}")
                 return
 
     # 2026-07-02 审计修复（批3）：TTS 后台 worker —— 句子文本入队，worker 按
@@ -1055,6 +1167,7 @@ async def _handle_chat_message(
         # 由模型自然称呼），不再硬编码"主人"
         stream_gen = agent.chat_stream_with_tools(
             user_input, user_name=owner_name, user_id=owner_id,
+            allow_tools=allow_tools, tool_context=tool_context,
         )
         try:
             while True:
@@ -1189,6 +1302,12 @@ async def _handle_chat_message(
             except Exception as _log_e:
                 # 2026-07-02 审计修复（批2）：不再裸吞异常，至少留日志
                 logger.warning(f"[WS] 对话日志写入失败: {_log_e}")
+
+            if on_reply_complete is not None:
+                try:
+                    await on_reply_complete(user_input, final_text, is_user_message)
+                except Exception as _ice:
+                    logger.warning(f"[Initiative] 续聊记录失败: {_ice}")
 
     except asyncio.CancelledError:
         # 2026-07-02 审计修复（批3）：任务被上层（_cancel_current_reply）取消：

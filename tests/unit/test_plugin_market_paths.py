@@ -3,6 +3,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from white_salary.core.plugins.market import PluginMarket
 
 
@@ -51,6 +53,61 @@ def test_template_plugins_are_created_under_community(tmp_path: Path) -> None:
     assert market.get_installed()[0]["source"] == "community"
 
 
+def test_observer_template_marks_runtime_role_and_market_metadata(tmp_path: Path) -> None:
+    plugins_dir = tmp_path / "plugins"
+    market = PluginMarket(plugins_dir=str(plugins_dir), cache_dir=str(tmp_path / "cache"))
+
+    result = market.create_from_template(
+        "watcher",
+        name="Watcher",
+        plugin_type="observer",
+    )
+
+    plugin_dir = plugins_dir / "community" / "watcher"
+    code = (plugin_dir / "plugin.py").read_text(encoding="utf-8")
+    config = json.loads((plugin_dir / "config.json").read_text(encoding="utf-8"))
+
+    assert result["success"] is True
+    assert "roles=['observer']" in code
+    assert config["roles"] == ["observer"]
+    assert config["platforms"] == ["all"]
+
+
+def test_market_metadata_defaults_keep_legacy_plugins_usable(tmp_path: Path) -> None:
+    market = PluginMarket(plugins_dir=str(tmp_path / "plugins"), cache_dir=str(tmp_path / "cache"))
+
+    config = market._build_market_config("legacy", {"name": "Legacy"})
+
+    assert config["schema_version"] == 2
+    assert config["roles"] == ["interceptor", "rewriter", "tool_provider"]
+    assert config["platforms"] == ["all"]
+    assert config["permissions"] == []
+
+
+def test_market_entry_normalizes_string_fields(tmp_path: Path) -> None:
+    market = PluginMarket(plugins_dir=str(tmp_path / "plugins"), cache_dir=str(tmp_path / "cache"))
+
+    entry = market._normalize_market_entry({
+        "id": "stringy",
+        "roles": "observer",
+        "platforms": "qq,desktop",
+        "requires_services": "napcat",
+        "assets": "assets/icon.png",
+    })
+
+    assert entry["roles"] == ["observer"]
+    assert entry["platforms"] == ["qq", "desktop"]
+    assert entry["requires_service"] == ["napcat"]
+    assert entry["assets"] == ["assets/icon.png"]
+
+
+def test_market_metadata_rejects_unknown_runtime_role(tmp_path: Path) -> None:
+    market = PluginMarket(plugins_dir=str(tmp_path / "plugins"), cache_dir=str(tmp_path / "cache"))
+
+    with pytest.raises(ValueError, match="roles不支持"):
+        market._build_market_config("bad", {"roles": ["unknown_role"]})
+
+
 def test_uninstall_supports_community_and_protects_builtin_paths(tmp_path: Path) -> None:
     plugins_dir = tmp_path / "plugins"
     community_dir = _write_plugin(plugins_dir, "community_plugin", "community")
@@ -64,3 +121,54 @@ def test_uninstall_supports_community_and_protects_builtin_paths(tmp_path: Path)
     assert builtin_result["success"] is False
     assert "内置插件" in builtin_result["message"]
     assert builtin_dir.exists()
+
+
+@pytest.mark.asyncio
+async def test_sync_to_github_uploads_declared_assets(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plugins_dir = tmp_path / "plugins"
+    plugin_dir = _write_plugin(plugins_dir, "asset_plugin", "community")
+    (plugin_dir / "assets").mkdir()
+    (plugin_dir / "assets" / "icon.txt").write_text("icon", encoding="utf-8")
+    (plugin_dir / "prompts").mkdir()
+    (plugin_dir / "prompts" / "system.md").write_text("prompt", encoding="utf-8")
+    config = {
+        "id": "asset_plugin",
+        "name": "Asset Plugin",
+        "assets": ["assets/icon.txt", "prompts/system.md"],
+        "roles": ["tool_provider"],
+        "dependencies": {"python": ["httpx"]},
+    }
+    (plugin_dir / "config.json").write_text(
+        json.dumps(config, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    market = PluginMarket(
+        plugins_dir=str(plugins_dir),
+        cache_dir=str(tmp_path / "cache"),
+        github_token="token",
+    )
+    uploaded: list[str] = []
+    indexed: list[tuple[str, dict]] = []
+
+    async def fake_put(session, path: str, content_b64: str, message: str) -> None:
+        uploaded.append(path)
+
+    async def fake_update_index(session, plugin_id: str, config: dict) -> None:
+        indexed.append((plugin_id, config))
+
+    monkeypatch.setattr(market, "_github_put", fake_put)
+    monkeypatch.setattr(market, "_update_plugins_index", fake_update_index)
+
+    result = await market.sync_to_github()
+
+    assert result["success"] is True
+    assert "plugins/asset_plugin/plugin.py" in uploaded
+    assert "plugins/asset_plugin/config.json" in uploaded
+    assert "plugins/asset_plugin/assets/icon.txt" in uploaded
+    assert "plugins/asset_plugin/prompts/system.md" in uploaded
+    assert indexed[0][0] == "asset_plugin"
+    assert indexed[0][1]["roles"] == ["tool_provider"]

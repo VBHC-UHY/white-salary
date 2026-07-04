@@ -141,12 +141,14 @@ class MessageBuffer:
         self._last_msg_time: dict[str, float] = {}
         self._tasks: dict[str, Optional[asyncio.Task]] = {}
         self._callbacks: dict[str, Optional[Callable]] = {}
+        self._flush_events: dict[str, asyncio.Event] = {}
 
     def add(self, user_id: str, text: str) -> bool:
         """
         添加消息到缓冲。返回True=需要等待flush，False=已满直接处理。
         """
         buf = self._buffers.setdefault(user_id, [])
+        event = self._flush_events.setdefault(user_id, asyncio.Event())
         buf.append(text)
         now = time.time()
         self._last_msg_time[user_id] = now
@@ -156,6 +158,7 @@ class MessageBuffer:
             self._first_msg_time[user_id] = now
 
         if len(buf) >= self._max:
+            event.set()
             return False  # 满了，调用方应该立即flush
         return True  # 缓冲中
 
@@ -179,7 +182,13 @@ class MessageBuffer:
             # 等5秒
             remaining_total = self._max_total - total_waited
             wait_time = min(self._timeout, remaining_total)
-            await asyncio.sleep(wait_time)
+            event = self._flush_events.setdefault(user_id, asyncio.Event())
+            try:
+                await asyncio.wait_for(event.wait(), timeout=wait_time)
+            except asyncio.TimeoutError:
+                pass
+            if event.is_set():
+                return self._flush(user_id)
 
             # 检查是否有新消息
             last = self._last_msg_time.get(user_id, 0)
@@ -212,6 +221,7 @@ class MessageBuffer:
         buf = self._buffers.pop(user_id, [])
         self._last_msg_time.pop(user_id, None)
         self._first_msg_time.pop(user_id, None)
+        self._flush_events.pop(user_id, None)
         if not buf:
             return None
         merged = "\n".join(buf)

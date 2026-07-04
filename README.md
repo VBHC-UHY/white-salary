@@ -15,7 +15,7 @@
 
 Python 3.10-3.12 · FastAPI · Electron · Live2D · 六边形架构
 
-当前版本：**v0.1.5**
+当前版本：**v0.1.6**
 
 <!-- 2026-07-03：交流群。二维码图放到 docs/assets/qq-group.png 后可取消下一行注释显示图片 -->
 <p>
@@ -291,6 +291,7 @@ curl http://127.0.0.1:12400/health
 | ☁️ [docs/EXTERNAL_SERVICES.md](docs/EXTERNAL_SERVICES.md) | 云端服务配置 + **全供应商注册直达表** | **新手主推**，填 key 就能用 |
 | 💻 [docs/LOCAL_ADVANCED.md](docs/LOCAL_ADVANCED.md) | 本地大模型进阶指南 | 想免费 / 离线 / 定制 |
 | ⚙️ [docs/CONFIG.md](docs/CONFIG.md) | 配置项逐节详解（含即时生效 / 需重启标注） | 想精细调参 |
+| 🔌 [docs/PLUGIN_MARKET.md](docs/PLUGIN_MARKET.md) | 插件市场、插件角色、资源和依赖声明 | 想写插件 / 上传插件 |
 | 🤝 [CONTRIBUTING.md](CONTRIBUTING.md) | 参与开发（架构导览、跑测试、代码规范） | 开发者 |
 | 📝 [CHANGELOG.md](CHANGELOG.md) | 版本更新日志 | 想了解版本变化 |
 | 📖 [docs/快速上手.md](docs/快速上手.md) | 完全新手图文安装说明书 | 完全不懂编程 |

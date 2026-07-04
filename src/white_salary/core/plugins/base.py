@@ -43,6 +43,9 @@ class PluginMeta:
     author: str = ""
     priority: PluginPriority = PluginPriority.NORMAL
     tools: list[dict] = field(default_factory=list)
+    roles: list[str] = field(
+        default_factory=lambda: ["interceptor", "rewriter", "tool_provider"]
+    )
 
 
 class Plugin(ABC):
@@ -104,6 +107,20 @@ class Plugin(ABC):
         Returns:
             None = 不拦截，继续正常处理
             str = 拦截消息，直接返回这个字符串作为回复
+        """
+        return None
+
+    async def on_observe(
+        self,
+        text: str,
+        user_id: str = "",
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> None:
+        """
+        只观察消息，不抢答。
+
+        observer 插件可用它记录/学习所有经过授权的消息；要启用该角色，在
+        PluginMeta.roles 里加入 "observer"。
         """
         return None
 

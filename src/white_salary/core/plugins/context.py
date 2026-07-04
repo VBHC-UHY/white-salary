@@ -9,7 +9,7 @@ white_salary/core/plugins/context.py
   - 所有返回值都是安全的副本
 """
 
-from typing import Optional
+from typing import Any, Optional
 
 from loguru import logger
 
@@ -27,7 +27,23 @@ class PluginContext:
     """
 
     def __init__(self) -> None:
-        pass
+        self._message_context: dict[str, Any] = {}
+
+    def set_message_context(self, metadata: Optional[dict[str, Any]]) -> None:
+        """设置当前消息的只读上下文，由 PluginManager 在调用钩子前注入。"""
+        self._message_context = dict(metadata or {})
+
+    def clear_message_context(self) -> None:
+        """清空当前消息上下文，避免跨消息串台。"""
+        self._message_context = {}
+
+    def get_message_context(self) -> dict[str, Any]:
+        """获取当前消息上下文副本，如 platform/group_id/is_group 等。"""
+        return dict(self._message_context)
+
+    def get_message_context_value(self, key: str, default: Any = None) -> Any:
+        """读取单个消息上下文字段。"""
+        return self._message_context.get(key, default)
 
     def get_bot_name(self) -> str:
         """获取bot名字。"""

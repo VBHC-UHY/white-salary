@@ -21,7 +21,7 @@ import importlib.util
 import json
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from loguru import logger
 
@@ -68,6 +68,17 @@ class PluginManager:
         # 2026-07-03 功能大项（批11）：消息钩子专用超时（3秒）——比工具执行的
         # 5秒更短，因为它挡在每条用户消息前，绝不能拖慢主链路（任务要求）。
         self._hook_timeout: float = 3.0
+
+    def _has_role(self, plugin: Plugin, role: str) -> bool:
+        """Return whether a plugin participates in a hook role."""
+        roles = getattr(getattr(plugin, "meta", None), "roles", None)
+        if roles is None:
+            return True
+        try:
+            role_set = {str(r).strip().lower() for r in roles}
+        except TypeError:
+            return True
+        return role in role_set
 
     def discover(self) -> list[str]:
         """扫描插件目录，返回发现的插件名列表。"""
@@ -386,7 +397,12 @@ class PluginManager:
     # 消息钩子
     # ================================================================
 
-    async def process_message(self, text: str, user_id: str = "") -> Optional[str]:
+    async def process_message(
+        self,
+        text: str,
+        user_id: str = "",
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> Optional[str]:
         """
         让所有插件处理用户消息（按优先级）。
 
@@ -403,6 +419,7 @@ class PluginManager:
         if not self._plugins:
             return None
         try:
+            self._context.set_message_context(metadata)
             return await asyncio.wait_for(
                 self._process_message_inner(text, user_id),
                 timeout=self._hook_timeout,
@@ -416,6 +433,52 @@ class PluginManager:
         except Exception as e:
             logger.warning(f"[Plugins] process_message 异常，按不拦截处理: {e}")
             return None
+        finally:
+            self._context.clear_message_context()
+
+    async def observe_message(
+        self,
+        text: str,
+        user_id: str = "",
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> None:
+        """Run observer plugins without allowing them to intercept a reply."""
+        if not self._plugins:
+            return
+        try:
+            self._context.set_message_context(metadata)
+            await asyncio.wait_for(
+                self._observe_message_inner(text, user_id, metadata or {}),
+                timeout=self._hook_timeout,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                f"[Plugins] observe_message 超时({self._hook_timeout}秒)，"
+                "已跳过观察钩子"
+            )
+        except Exception as e:
+            logger.warning(f"[Plugins] observe_message 异常，已跳过观察钩子: {e}")
+        finally:
+            self._context.clear_message_context()
+
+    async def _observe_message_inner(
+        self,
+        text: str,
+        user_id: str,
+        metadata: dict[str, Any],
+    ) -> None:
+        for plugin in sorted(
+            self._plugins.values(),
+            key=lambda p: p.meta.priority,
+        ):
+            if not self._has_role(plugin, "observer"):
+                continue
+            if not hasattr(plugin, "context"):
+                plugin.context = self._context
+            await self._executor.run(
+                plugin.on_observe(text, user_id, metadata),
+                plugin_name=plugin.meta.name,
+            )
 
     async def _process_message_inner(self, text: str, user_id: str) -> Optional[str]:
         """process_message 的实际遍历逻辑（被超时包裹，见 process_message）。"""
@@ -423,6 +486,10 @@ class PluginManager:
             self._plugins.values(),
             key=lambda p: p.meta.priority,
         ):
+            if not self._has_role(plugin, "interceptor"):
+                continue
+            if not hasattr(plugin, "context"):
+                plugin.context = self._context
             result = await self._executor.run(
                 plugin.on_message(text, user_id),
                 plugin_name=plugin.meta.name,
@@ -448,6 +515,8 @@ class PluginManager:
                 self._plugins.values(),
                 key=lambda p: p.meta.priority,
             ):
+                if not self._has_role(plugin, "rewriter"):
+                    continue
                 modified = await self._executor.run(
                     plugin.on_reply(result),
                     plugin_name=plugin.meta.name,
@@ -471,6 +540,8 @@ class PluginManager:
             self._plugins.values(),
             key=lambda p: p.meta.priority,
         ):
+            if not self._has_role(plugin, "tool_provider"):
+                continue
             try:
                 plugin_tools = plugin.get_tools()
                 for t in plugin_tools:
@@ -498,6 +569,11 @@ class PluginManager:
                     description=tool_def.get("description", ""),
                     parameters=tool_def.get("parameters", {}),
                     handler=tool_def["handler"],
+                    category="plugin",
+                    platforms=tuple(tool_def.get("platforms") or ()),
+                    requires_permission=str(tool_def.get("requires_permission") or ""),
+                    requires_service=str(tool_def.get("requires_service") or ""),
+                    side_effect=bool(tool_def.get("side_effect", False)),
                 )
                 registry.register(td)
                 # 记录该工具属于哪个插件（"_plugin" 由 get_all_tools 注入）
@@ -527,6 +603,8 @@ class PluginManager:
         if not self._registry or name not in self._plugins:
             return 0
         plugin = self._plugins[name]
+        if not self._has_role(plugin, "tool_provider"):
+            return 0
         count = 0
         try:
             plugin_tools = plugin.get_tools()
@@ -541,6 +619,11 @@ class PluginManager:
                     description=tool_def.get("description", ""),
                     parameters=tool_def.get("parameters", {}),
                     handler=tool_def["handler"],
+                    category="plugin",
+                    platforms=tuple(tool_def.get("platforms") or ()),
+                    requires_permission=str(tool_def.get("requires_permission") or ""),
+                    requires_service=str(tool_def.get("requires_service") or ""),
+                    side_effect=bool(tool_def.get("side_effect", False)),
                 )
                 self._registry.register(td)
                 self._plugin_tools.setdefault(name, []).append(td.name)
