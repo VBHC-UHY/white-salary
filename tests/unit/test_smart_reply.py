@@ -1,7 +1,7 @@
 """
 测试群聊回复决策 smart_reply.py。
 
-覆盖：私聊直接回、@机器人、唤醒词、@别人忽略、群不活跃忽略、
+覆盖：私聊直接回、@机器人、唤醒词、@别人忽略、冷群交给语义判断、
 纯表情忽略、活跃窗口内紧接回复、连续没人理闭嘴、频率限制 OBSERVE。
 """
 
@@ -13,6 +13,7 @@ from white_salary.core.smart_reply import (
     ReplyDecision,
     contains_wake_word,
 )
+from white_salary.core.runtime.engagement import EngagementLeaseBook, EngagementState
 
 
 @dataclass
@@ -62,11 +63,26 @@ class TestSmartReplyIgnore:
         r = d.decide(_Msg(raw_message="[CQ:at,qq=999] 你们好啊"))
         assert r.decision == ReplyDecision.IGNORE
 
-    def test_group_inactive_ignored(self) -> None:
+    def test_cold_group_goes_to_semantic_check(self) -> None:
         d = SmartReplyDecider()  # 全新，群从未活跃
         r = d.decide(_Msg(raw_message="今天天气不错呀大家"))
-        assert r.decision == ReplyDecision.IGNORE
-        assert "不活跃" in r.reason
+        assert r.decision == ReplyDecision.SEMANTIC_CHECK
+        assert "语义判断" in r.reason
+
+    def test_manual_unblocked_group_bypasses_inactive_gate(self) -> None:
+        d = SmartReplyDecider(unblocked_group_ids=["g1"])
+        r = d.decide(_Msg(group_id="g1", user_id="u2", raw_message="今天天气不错呀大家"))
+        assert r.decision == ReplyDecision.SEMANTIC_CHECK
+        assert "不屏蔽" in r.reason
+
+    def test_manual_unblocked_group_can_be_changed_runtime(self) -> None:
+        d = SmartReplyDecider()
+        assert not d.is_group_unblocked("g1")
+        d.set_group_unblocked("g1", True)
+        assert d.is_group_unblocked("g1")
+        assert d.list_unblocked_groups() == ["g1"]
+        d.set_group_unblocked("g1", False)
+        assert not d.is_group_unblocked("g1")
 
     def test_pure_emoji_ignored(self) -> None:
         d = SmartReplyDecider()
@@ -110,3 +126,48 @@ class TestSmartReplyActiveWindow:
         r = d.decide(_Msg(group_id="g1", user_id="u1", raw_message="再说一句吧大家"))
         assert r.decision == ReplyDecision.OBSERVE
         assert "频率" in r.reason
+
+
+class TestPersistentPerUserEngagement:
+    def test_one_users_window_never_activates_another_user(self, tmp_path) -> None:
+        leases = EngagementLeaseBook(tmp_path / "runtime.db")
+        decider = SmartReplyDecider(engagement_leases=leases)
+
+        wake = decider.decide(_Msg(group_id="g1", user_id="u1", raw_message="白，在吗"))
+        same_user = decider.decide(
+            _Msg(group_id="g1", user_id="u1", raw_message="我接着说刚才的事")
+        )
+        other_user = decider.decide(
+            _Msg(group_id="g1", user_id="u2", raw_message="我在和别人聊天")
+        )
+
+        assert wake.decision == ReplyDecision.REPLY
+        assert same_user.decision == ReplyDecision.SEMANTIC_CHECK
+        assert other_user.decision == ReplyDecision.OBSERVE
+
+    def test_delivery_promotes_pending_lease_to_engaged(self, tmp_path) -> None:
+        leases = EngagementLeaseBook(tmp_path / "runtime.db")
+        decider = SmartReplyDecider(engagement_leases=leases)
+        decider.decide(_Msg(group_id="g1", user_id="u1", raw_message="白"))
+
+        before = leases.get("qq:group:g1", "u1")
+        decider.record_reply("g1", "u1")
+        after = leases.get("qq:group:g1", "u1")
+
+        assert before is not None and before.state == EngagementState.PENDING
+        assert after is not None and after.state == EngagementState.ENGAGED
+
+    def test_unrelated_messages_cool_only_that_users_lease(self, tmp_path) -> None:
+        leases = EngagementLeaseBook(tmp_path / "runtime.db")
+        decider = SmartReplyDecider(engagement_leases=leases)
+        for user_id in ("u1", "u2"):
+            decider.decide(_Msg(group_id="g1", user_id=user_id, raw_message="白"))
+            decider.record_reply("g1", user_id)
+
+        decider.record_unrelated_message("g1", "u1")
+        decider.record_unrelated_message("g1", "u1")
+
+        first = leases.get("qq:group:g1", "u1")
+        second = leases.get("qq:group:g1", "u2")
+        assert first is not None and first.state == EngagementState.COOLING
+        assert second is not None and second.state == EngagementState.ENGAGED

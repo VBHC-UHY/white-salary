@@ -8,10 +8,12 @@ import contextvars
 import json
 from ._helpers import tool, P, S, I, NONE_PARAMS
 from loguru import logger
+from white_salary.adapters.tools.errors import ToolKnownFailure, ToolOutcomeUnknown
 
 
 # 全局QQ适配器引用（由run_server.py设置）
 _qq_adapter = None
+_sticker_manager = None
 
 # 当前消息上下文（contextvars，每个asyncio task独立，并发安全）
 # qq_handler处理消息时设置，工具读取作为默认目标
@@ -56,6 +58,20 @@ def _safe_int(value: str, name: str = "参数") -> int:
     return int(s)
 
 
+def _schedule_temp_cleanup(path, delay_seconds: float = 10.0) -> None:
+    """Delete a temporary QQ upload only after NapCat has had time to read it."""
+    import asyncio
+
+    async def cleanup() -> None:
+        await asyncio.sleep(delay_seconds)
+        try:
+            path.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    asyncio.create_task(cleanup())
+
+
 # ================================================================
 # 消息类（8个）
 # ================================================================
@@ -64,7 +80,7 @@ def _safe_int(value: str, name: str = "参数") -> int:
       P(user_id=S("私聊时填用户QQ号(纯数字)，群聊时不填"), group_id=S("群聊时填群号(纯数字)，私聊时不填"), text=S("要转语音的文本内容", True)))
 async def qq_send_voice(user_id: str = "", group_id: str = "", text: str = "") -> str:
     if not text:
-        return "请提供要转语音的文本"
+        raise ToolKnownFailure("没有提供要转成语音的内容")
     # 纠正小助理的常见错误：群聊时小助理可能只传user_id没传group_id
     # 如果上下文说是群聊，但只收到user_id → 纠正为群聊发送
     # 如果小助理明确传了group_id → 用它的（支持跨场景）
@@ -79,14 +95,16 @@ async def qq_send_voice(user_id: str = "", group_id: str = "", text: str = "") -
         elif ctx.get("user_id"):
             user_id = ctx["user_id"]
         else:
-            return "请提供user_id或group_id（纯数字QQ号/群号）"
+            raise ToolKnownFailure("没有可用的QQ私聊或群聊目标")
     # 验证QQ号格式
     user_id = str(user_id).strip()
     group_id = str(group_id).strip()
     if user_id and not user_id.isdigit():
-        return f"user_id必须是纯数字QQ号，不能是'{user_id}'"
+        raise ToolKnownFailure(f"私聊目标不是有效QQ号: {user_id}")
     if group_id and not group_id.isdigit():
-        return f"group_id必须是纯数字群号，不能是'{group_id}'"
+        raise ToolKnownFailure(f"群聊目标不是有效群号: {group_id}")
+    if not _qq_adapter or not getattr(_qq_adapter, "_ws", None):
+        raise ToolKnownFailure("QQ当前未连接，语音没有发送")
     # 先用TTS合成，然后存临时文件发送（base64群聊不支持，改用file://协议）
     try:
         from white_salary.adapters.tts.gpt_sovits_adapter import GPTSoVITSAdapter
@@ -120,27 +138,37 @@ async def qq_send_voice(user_id: str = "", group_id: str = "", text: str = "") -
                 target = {"user_id": _safe_int(user_id, "QQ号")}
                 action = "send_private_msg"
             target["message"] = [{"type": "record", "data": {"file": file_uri}}]
-            result = await _call(action, target)
+            result = await _qq_adapter._call_api(action, target, wait_response=True)
             # 延迟10秒删除临时文件（NapCat可能还在异步上传文件）
-            import asyncio as _asyncio
-            async def _delayed_delete():
-                await _asyncio.sleep(10)
-                try:
-                    temp_file.unlink(missing_ok=True)
-                except Exception:
-                    pass
-            _asyncio.create_task(_delayed_delete())
-            return "语音已发送"
+            _schedule_temp_cleanup(temp_file)
+            if not isinstance(result, dict):
+                raise ToolOutcomeUnknown(
+                    "语音发送请求已交给QQ，但平台回执格式无效；请先核对聊天记录，不要自动重发"
+                )
+            try:
+                message_id = int(result.get("message_id", 0) or 0)
+            except (TypeError, ValueError) as exc:
+                raise ToolOutcomeUnknown(
+                    "语音发送请求已交给QQ，但消息回执无法确认；请先核对聊天记录，不要自动重发"
+                ) from exc
+            if message_id:
+                return "语音已发送"
+            raise ToolOutcomeUnknown(
+                "语音发送请求已交给QQ，但没有收到消息回执；请先核对聊天记录，不要自动重发"
+            )
+    except (ToolKnownFailure, ToolOutcomeUnknown):
+        raise
     except Exception as e:
         logger.debug(f"[QQ语音] TTS失败: {e}")
-    return "语音发送失败了"
+        raise ToolKnownFailure(f"语音合成或发送前处理失败: {e}") from e
+    raise ToolKnownFailure("语音合成没有产生可发送的音频")
 
 
 @tool("qq_send_image", "发图片/发张图/看图——把图片发送到QQ。当用户说「发图片」「发张图」「把图发给我」时调用。【重要】群聊消息必须填group_id（群号），私聊消息必须填user_id（QQ号），不要搞混！",
       P(user_id=S("私聊时填用户QQ号(纯数字)，群聊时不填"), group_id=S("群聊时填群号(纯数字)，私聊时不填"), image_url=S("图片URL或本地路径", True)))
 async def qq_send_image(user_id: str = "", group_id: str = "", image_url: str = "") -> str:
     if not image_url:
-        return "请提供图片URL"
+        raise ToolKnownFailure("没有提供要发送的图片URL或本地路径")
     # 纠正小助理的常见错误：群聊时只传了user_id没传group_id → 纠正为群聊
     ctx = get_msg_context()
     if ctx.get("is_group") and ctx.get("group_id") and user_id and not group_id:
@@ -153,7 +181,7 @@ async def qq_send_image(user_id: str = "", group_id: str = "", image_url: str = 
         elif ctx.get("user_id"):
             user_id = ctx["user_id"]
         else:
-            return "请提供user_id或group_id"
+            raise ToolKnownFailure("没有可用的QQ私聊或群聊目标")
     user_id = str(user_id).strip()
     group_id = str(group_id).strip()
     if group_id and group_id.isdigit():
@@ -163,9 +191,119 @@ async def qq_send_image(user_id: str = "", group_id: str = "", image_url: str = 
         target = {"user_id": _safe_int(user_id, "QQ号")}
         action = "send_private_msg"
     else:
-        return "user_id/group_id必须是纯数字"
-    target["message"] = [{"type": "image", "data": {"file": image_url}}]
-    return await _call(action, target)
+        raise ToolKnownFailure("user_id/group_id必须是纯数字")
+    if not _qq_adapter or not getattr(_qq_adapter, "_ws", None):
+        raise ToolKnownFailure("QQ当前未连接，图片没有发送")
+
+    from pathlib import Path
+
+    normalized_url = str(image_url).strip()
+    if not normalized_url.startswith(("http://", "https://", "file://", "base64://")):
+        local_path = Path(normalized_url)
+        if not local_path.exists() or not local_path.is_file():
+            raise ToolKnownFailure(f"要发送的图片不存在: {normalized_url}")
+        normalized_url = local_path.resolve().as_uri()
+    target["message"] = [{"type": "image", "data": {"file": normalized_url}}]
+    result = await _qq_adapter._call_api(action, target, wait_response=True)
+    if not isinstance(result, dict):
+        raise ToolOutcomeUnknown(
+            "图片发送请求已交给QQ，但没有收到有效回执；请先核对聊天记录，不要自动重发"
+        )
+    try:
+        message_id = int(result.get("message_id", 0) or 0)
+    except (TypeError, ValueError) as exc:
+        raise ToolOutcomeUnknown(
+            "图片发送请求已交给QQ，但回执无法确认；请先核对聊天记录，不要自动重发"
+        ) from exc
+    if not message_id:
+        raise ToolOutcomeUnknown(
+            "图片发送请求已交给QQ，但没有消息ID；请先核对聊天记录，不要自动重发"
+        )
+    return "图片已发送"
+
+
+def _get_sticker_manager():
+    """Return the shared existing-sticker library used by direct QQ sends."""
+    global _sticker_manager
+    if _sticker_manager is None:
+        from pathlib import Path
+        from white_salary.adapters.platform.sticker_manager import StickerManager
+
+        project_root = Path(__file__).resolve().parents[5]
+        _sticker_manager = StickerManager(data_dir=str(project_root / "data"))
+        _sticker_manager.init()
+    return _sticker_manager
+
+
+@tool(
+    "qq_send_sticker",
+    "发送已有QQ表情包（不生成图片）——从项目已有表情包库选一张，直接发到当前或指定QQ会话。"
+    "当用户只是说「发个表情包」「来个表情包」「用表情包回我」时调用本工具；"
+    "不要调用generate_sticker或generate_image。只有用户明确要求生成/制作/画一个全新的表情包时，"
+    "才调用generate_sticker。",
+    P(
+        user_id=S("私聊时填用户QQ号(纯数字)，当前私聊可留空"),
+        group_id=S("群聊时填群号(纯数字)，当前群聊可留空"),
+    ),
+)
+async def qq_send_sticker(user_id: str = "", group_id: str = "") -> str:
+    """Send one existing sticker and only report success with a real message id."""
+    ctx = get_msg_context()
+    if ctx.get("is_group") and ctx.get("group_id") and user_id and not group_id:
+        group_id = str(ctx["group_id"])
+        user_id = ""
+    if not user_id and not group_id:
+        if ctx.get("is_group") and ctx.get("group_id"):
+            group_id = str(ctx["group_id"])
+        elif ctx.get("user_id"):
+            user_id = str(ctx["user_id"])
+        else:
+            raise ToolKnownFailure("没有可用的QQ私聊或群聊目标")
+
+    user_id = str(user_id).strip()
+    group_id = str(group_id).strip()
+    if group_id:
+        if not group_id.isdigit():
+            raise ToolKnownFailure(f"群聊目标不是有效群号: {group_id}")
+        action = "send_group_msg"
+        target = {"group_id": _safe_int(group_id, "群号")}
+    elif user_id:
+        if not user_id.isdigit():
+            raise ToolKnownFailure(f"私聊目标不是有效QQ号: {user_id}")
+        action = "send_private_msg"
+        target = {"user_id": _safe_int(user_id, "QQ号")}
+    else:
+        raise ToolKnownFailure("没有可用的QQ私聊或群聊目标")
+
+    if not _qq_adapter or not getattr(_qq_adapter, "_ws", None):
+        raise ToolKnownFailure("QQ当前未连接，表情包没有发送")
+
+    manager = _get_sticker_manager()
+    sticker_id = manager.get_next()
+    sticker_path = manager.get_path(sticker_id) if sticker_id else None
+    if sticker_path is None:
+        raise ToolKnownFailure("现有表情包库是空的，请先在控制面板上传表情包")
+
+    target["message"] = [{
+        "type": "image",
+        "data": {"file": sticker_path.resolve().as_uri()},
+    }]
+    result = await _qq_adapter._call_api(action, target, wait_response=True)
+    if not isinstance(result, dict):
+        raise ToolOutcomeUnknown(
+            "表情包发送请求已交给QQ，但没有收到有效回执；请先核对聊天记录，不要自动重发"
+        )
+    try:
+        message_id = int(result.get("message_id", 0) or 0)
+    except (TypeError, ValueError) as exc:
+        raise ToolOutcomeUnknown(
+            "表情包发送请求已交给QQ，但回执无法确认；请先核对聊天记录，不要自动重发"
+        ) from exc
+    if not message_id:
+        raise ToolOutcomeUnknown(
+            "表情包发送请求已交给QQ，但没有消息ID；请先核对聊天记录，不要自动重发"
+        )
+    return "表情包已发送"
 
 
 @tool("qq_send_poke", "QQ戳一戳", P(user_id=S("用户QQ号", True), group_id=S("群号")))
@@ -512,7 +650,7 @@ async def qq_recall_last() -> str:
 
 TOOLS = [fn._tool_def for fn in [
     # 消息类
-    qq_send_voice, qq_send_image, qq_send_poke, qq_send_like,
+    qq_send_voice, qq_send_image, qq_send_sticker, qq_send_poke, qq_send_like,
     qq_delete_msg, qq_get_msg, qq_get_forward_msg, qq_emoji_like,
     # 群管理
     qq_group_ban, qq_group_whole_ban, qq_group_kick, qq_set_group_card,

@@ -124,11 +124,12 @@ class TestCoreWhitelistGate:
         assert all(not r.startswith("偏好:") for r in results)
         assert not [e for e in mgr.core.get_all() if e.category == "preference"]
 
-    async def test_stranger_other_layers_unaffected(self, mgr) -> None:
-        """非主人消息只跳过核心档案，长期记忆等其它层照常写入。"""
+    async def test_stranger_cannot_pollute_owner_global_layers(self, mgr) -> None:
+        """Legacy global stores are owner-only until durable user scoping exists."""
         set_owner_user_id("111")
         results = await mgr.extract_and_store("记住我下周要考试", "", user_id="999")
-        assert "长期:记住触发" in results
+        assert results == []
+        assert mgr.long_term.search("下周要考试") == []
 
     async def test_stranger_cannot_overwrite_existing(self, mgr) -> None:
         """陌生人无法覆盖主人已有的核心事实（审计实锤场景：user_name被覆盖）。"""

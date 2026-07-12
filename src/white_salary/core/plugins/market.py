@@ -19,11 +19,14 @@ import hashlib
 import time
 import shutil
 import base64
+import uuid
 from pathlib import Path, PurePosixPath
 from typing import Any, Optional
 
 import aiohttp
 from loguru import logger
+
+from white_salary.core.plugins.security import contained_path, validate_plugin_id
 
 
 # GitHub配置
@@ -69,6 +72,13 @@ class PluginMarket:
         self._repo = github_repo
 
     @staticmethod
+    def _validated_id(plugin_id: object) -> tuple[str | None, dict[str, Any] | None]:
+        try:
+            return validate_plugin_id(plugin_id), None
+        except ValueError as exc:
+            return None, {"success": False, "message": str(exc)}
+
+    @staticmethod
     def _is_plugin_dir(path: Path) -> bool:
         return path.is_dir() and ((path / "plugin.py").exists() or (path / "__init__.py").exists())
 
@@ -85,6 +95,12 @@ class PluginMarket:
 
         def add(plugin_id: str, path: Path, source: str) -> None:
             if plugin_id in seen or not self._is_plugin_dir(path):
+                return
+            try:
+                plugin_id = validate_plugin_id(plugin_id)
+                path = contained_path(self._plugins_dir, *path.relative_to(self._plugins_dir).parts)
+            except (ValueError, OSError):
+                logger.warning(f"[Market] 跳过不安全插件目录: {path}")
                 return
             seen.add(plugin_id)
             entries.append((plugin_id, path, source))
@@ -420,12 +436,16 @@ class PluginMarket:
         Returns:
             {"success": bool, "message": str}
         """
-        if not plugin_id:
-            return {"success": False, "message": "插件ID为空"}
+        plugin_id, error = self._validated_id(plugin_id)
+        if error:
+            return error
+        assert plugin_id is not None
 
         if self._find_plugin_dir(plugin_id):
             return {"success": False, "message": f"{plugin_id} 已安装"}
-        plugin_dir = self._plugins_dir / "community" / plugin_id
+        community_dir = contained_path(self._plugins_dir, "community")
+        community_dir.mkdir(parents=True, exist_ok=True)
+        plugin_dir = contained_path(community_dir, plugin_id)
 
         # 从GitHub下载
         try:
@@ -461,6 +481,12 @@ class PluginMarket:
                         plugin_id,
                         {"name": plugin_id, "cn_name": plugin_id},
                     )
+                # Installing files is not consent to execute third-party code.
+                # The user must explicitly enable it after reviewing permissions.
+                config_data["enabled"] = False
+                config_data["source"] = "market"
+                config_data["trust_level"] = "community"
+                config_data["safety_model"] = "static_analysis"
 
                 extra_files: dict[str, bytes] = {}
                 for rel_path in config_data.get("assets", []) or []:
@@ -497,20 +523,57 @@ class PluginMarket:
             for pattern, replacement in _import_replacements:
                 plugin_code = _re.sub(pattern, replacement, plugin_code)
 
-            # 写入本地
-            plugin_dir.mkdir(parents=True, exist_ok=True)
-            (plugin_dir / "plugin.py").write_text(plugin_code, encoding="utf-8")
-            (plugin_dir / "__init__.py").write_text(
-                f"from .plugin import *\n", encoding="utf-8"
+            from white_salary.core.plugins.sandbox import check_code_safety, check_plugin_tree_safety
+
+            is_safe, issues = check_code_safety(
+                plugin_code,
+                permissions=config_data.get("permissions", []),
             )
-            if config_data:
-                (plugin_dir / "config.json").write_text(
-                    json.dumps(config_data, ensure_ascii=False, indent=2), encoding="utf-8"
+            if not is_safe:
+                return {
+                    "success": False,
+                    "message": "插件未通过安全检查",
+                    "issues": issues,
+                }
+
+            # Build the complete package in a hidden staging directory. Discover
+            # ignores hidden directories; only a fully validated package is
+            # atomically moved to its final id.
+            stage = contained_path(
+                community_dir,
+                f".install-{plugin_id}-{uuid.uuid4().hex}",
+            )
+            try:
+                stage.mkdir(parents=False, exist_ok=False)
+                (stage / "plugin.py").write_text(plugin_code, encoding="utf-8")
+                (stage / "__init__.py").write_text(
+                    "from .plugin import *\n", encoding="utf-8"
                 )
-            for rel_path, content in extra_files.items():
-                asset_path = self._local_path_for_asset(plugin_dir, rel_path)
-                asset_path.parent.mkdir(parents=True, exist_ok=True)
-                asset_path.write_bytes(content)
+                (stage / "config.json").write_text(
+                    json.dumps(config_data, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+                for rel_path, content in extra_files.items():
+                    asset_path = self._local_path_for_asset(stage, rel_path)
+                    asset_path.parent.mkdir(parents=True, exist_ok=True)
+                    asset_path.write_bytes(content)
+
+                tree_safe, tree_issues = check_plugin_tree_safety(
+                    stage,
+                    permissions=config_data.get("permissions", []),
+                )
+                if not tree_safe:
+                    return {
+                        "success": False,
+                        "message": "插件包未通过安全检查",
+                        "issues": tree_issues,
+                    }
+                if plugin_dir.exists():
+                    return {"success": False, "message": f"{plugin_id} 已安装"}
+                stage.replace(plugin_dir)
+            finally:
+                if stage.exists():
+                    shutil.rmtree(stage, ignore_errors=True)
 
             logger.info(f"[Market] 已安装: {plugin_id}")
 
@@ -518,7 +581,11 @@ class PluginMarket:
             import asyncio
             asyncio.ensure_future(self._increment_download_count(plugin_id))
 
-            return {"success": True, "message": f"已安装 {plugin_id}"}
+            return {
+                "success": True,
+                "enabled": False,
+                "message": f"已安装 {plugin_id}（默认禁用，请确认权限后手动启用）",
+            }
 
         except Exception as e:
             return {"success": False, "message": f"安装失败: {e}"}
@@ -529,8 +596,12 @@ class PluginMarket:
 
     def uninstall(self, plugin_id: str) -> dict:
         """卸载插件（删除文件）。"""
+        plugin_id, error = self._validated_id(plugin_id)
+        if error:
+            return error
+        assert plugin_id is not None
         plugin_dir = self._find_plugin_dir(plugin_id)
-        plugin_file = self._plugins_dir / f"{plugin_id}.py"
+        plugin_file = contained_path(self._plugins_dir, f"{plugin_id}.py")
 
         if plugin_dir and plugin_dir.parent == self._plugins_dir / "builtin":
             return {"success": False, "message": f"{plugin_id} 是内置插件，可禁用但不能卸载"}
@@ -592,9 +663,24 @@ class PluginMarket:
         if not self._token:
             return {"success": False, "message": "未配置GitHub Token"}
 
-        import re
-        if not re.match(r'^[a-z][a-z0-9_]*$', plugin_id):
-            return {"success": False, "message": "ID格式错误（小写字母开头，只含字母数字下划线）"}
+        plugin_id, error = self._validated_id(plugin_id)
+        if error:
+            return error
+        assert plugin_id is not None
+
+        from white_salary.core.plugins.sandbox import check_code_safety
+
+        metadata = metadata or {}
+        is_safe, issues = check_code_safety(
+            plugin_code,
+            permissions=metadata.get("permissions", []),
+        )
+        if not is_safe:
+            return {
+                "success": False,
+                "message": "插件未通过安全检查",
+                "issues": issues,
+            }
 
         try:
             # 生成作者密钥
@@ -745,6 +831,10 @@ class PluginMarket:
     async def delete_from_market(self, plugin_id: str, auth: str,
                                  auth_type: str = "admin") -> dict:
         """从GitHub市场删除插件（管理员密码或作者密钥）。"""
+        plugin_id, error = self._validated_id(plugin_id)
+        if error:
+            return error
+        assert plugin_id is not None
         if not self._token:
             return {"success": False, "message": "未配置GitHub Token"}
 
@@ -836,19 +926,27 @@ class PluginMarket:
 
     def _find_plugin_dir(self, plugin_id: str) -> Optional[Path]:
         """查找插件目录（支持builtin/community子目录）。"""
+        try:
+            plugin_id = validate_plugin_id(plugin_id)
+        except ValueError:
+            return None
         # 直接查找
-        d = self._plugins_dir / plugin_id
+        d = contained_path(self._plugins_dir, plugin_id)
         if self._is_plugin_dir(d):
             return d
         # 在子目录里查找
         for sub in ["community", "builtin"]:
-            d = self._plugins_dir / sub / plugin_id
+            d = contained_path(self._plugins_dir, sub, plugin_id)
             if self._is_plugin_dir(d):
                 return d
         return None
 
     def toggle_plugin(self, plugin_id: str, enabled: bool) -> dict:
         """启用/禁用插件。"""
+        plugin_id, error = self._validated_id(plugin_id)
+        if error:
+            return error
+        assert plugin_id is not None
         plugin_dir = self._find_plugin_dir(plugin_id)
         if not plugin_dir:
             return {"success": False, "message": f"{plugin_id} 未安装"}
@@ -869,6 +967,10 @@ class PluginMarket:
 
     def get_plugin_code(self, plugin_id: str) -> dict:
         """获取插件源代码。"""
+        plugin_id, error = self._validated_id(plugin_id)
+        if error:
+            return error
+        assert plugin_id is not None
         plugin_dir = self._find_plugin_dir(plugin_id)
         if not plugin_dir:
             return {"success": False, "message": "插件不存在"}
@@ -888,22 +990,40 @@ class PluginMarket:
     def save_plugin_code(self, plugin_id: str, code: str,
                          metadata: dict = None) -> dict:
         """保存插件代码。"""
+        plugin_id, error = self._validated_id(plugin_id)
+        if error:
+            return error
+        assert plugin_id is not None
         plugin_dir = self._find_plugin_dir(plugin_id)
         if not plugin_dir:
             return {"success": False, "message": "插件不存在"}
         plugin_file = plugin_dir / "plugin.py"
         if not plugin_file.exists():
             return {"success": False, "message": "plugin.py不存在"}
+        config_path = plugin_dir / "config.json"
+        config = {}
+        if config_path.exists():
+            try:
+                config = json.loads(config_path.read_text(encoding="utf-8"))
+            except Exception:
+                config = {}
+        if metadata:
+            config.update(metadata)
+
+        from white_salary.core.plugins.sandbox import check_code_safety
+
+        is_safe, issues = check_code_safety(
+            code,
+            permissions=config.get("permissions", []),
+        )
+        if not is_safe:
+            return {
+                "success": False,
+                "message": "代码未通过安全检查，未保存",
+                "issues": issues,
+            }
         plugin_file.write_text(code, encoding="utf-8")
         if metadata:
-            config_path = plugin_dir / "config.json"
-            config = {}
-            if config_path.exists():
-                try:
-                    config = json.loads(config_path.read_text(encoding="utf-8"))
-                except Exception:
-                    pass
-            config.update(metadata)
             config = self._normalize_market_entry({"id": plugin_id, **config})
             config["updated_at"] = time.strftime("%Y-%m-%d %H:%M")
             config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -917,13 +1037,14 @@ class PluginMarket:
                              description: str = "",
                              plugin_type: str = "classic") -> dict:
         """从模板创建新插件。"""
-        import re
-        if not re.match(r'^[a-z][a-z0-9_]*$', plugin_id):
-            return {"success": False, "message": "ID格式错误"}
+        plugin_id, error = self._validated_id(plugin_id)
+        if error:
+            return error
+        assert plugin_id is not None
 
         if self._find_plugin_dir(plugin_id):
             return {"success": False, "message": f"{plugin_id} 已存在"}
-        plugin_dir = self._plugins_dir / "community" / plugin_id
+        plugin_dir = contained_path(self._plugins_dir, "community", plugin_id)
 
         # 生成类名
         class_name = ''.join(w.capitalize() for w in plugin_id.split('_')) + 'Plugin'

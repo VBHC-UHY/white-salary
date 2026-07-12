@@ -16,6 +16,8 @@ LLM通道：detect_llm（仅新用户首次评估时用）
 """
 
 import json
+import os
+import threading
 import time
 from dataclasses import dataclass, asdict, field
 from pathlib import Path
@@ -64,10 +66,17 @@ class UserFilter:
             # 不响应
     """
 
-    def __init__(self, data_dir: str = "data/memory", owner_id: str = "") -> None:
+    def __init__(
+        self,
+        data_dir: str = "data/memory",
+        owner_id: str = "",
+        affinity_data_dir: str = "data/affinity",
+    ) -> None:
+        self._lock = threading.RLock()
         self._data_path = Path(data_dir) / "user_filter.json"
         self._data_path.parent.mkdir(parents=True, exist_ok=True)
         self._owner_id = self._normalize_user_id(owner_id)
+        self._affinity_data_dir = affinity_data_dir
 
         self._mode: str = FilterMode.BLACKLIST  # 默认黑名单模式
         self._whitelist: set[str] = set()
@@ -84,90 +93,66 @@ class UserFilter:
         Returns:
             FilterResult.ALLOW / BLOCK / DETECT
         """
-        # 主人永远免检
-        user_id = self._normalize_user_id(user_id)
-        if not user_id:
-            return FilterResult.BLOCK
-
-        if user_id == self._owner_id:
-            return FilterResult.ALLOW
-
-        if self._mode == FilterMode.OFF:
-            return FilterResult.ALLOW
-
-        if self._mode == FilterMode.WHITELIST:
-            return FilterResult.ALLOW if user_id in self._whitelist else FilterResult.BLOCK
-
-        # 黑名单模式
-        # 硬拉黑
-        if user_id in self._hard_blacklist:
-            return FilterResult.BLOCK
-
-        # 软拉黑（检查是否过期）
-        if user_id in self._soft_blacklist:
-            entry = self._soft_blacklist[user_id]
-            if entry.expires_at > 0 and time.time() > entry.expires_at:
-                # 过期了，移除
-                del self._soft_blacklist[user_id]
-                self._save()
-            else:
+        with self._lock:
+            user_id = self._normalize_user_id(user_id)
+            if not user_id:
                 return FilterResult.BLOCK
-
-        # 好感度自动拉黑检查
-        if user_id in self._verified or user_id in self._whitelist:
-            return FilterResult.ALLOW
-
-        affinity_result = self._check_affinity_blacklist(user_id)
-        if affinity_result == FilterResult.BLOCK:
-            return FilterResult.BLOCK
-
-        # 已验证
-        if user_id in self._verified:
-            return FilterResult.ALLOW
-
-        return FilterResult.ALLOW
+            if user_id == self._owner_id or self._mode == FilterMode.OFF:
+                return FilterResult.ALLOW
+            if self._mode == FilterMode.WHITELIST:
+                return FilterResult.ALLOW if user_id in self._whitelist else FilterResult.BLOCK
+            if user_id in self._hard_blacklist:
+                return FilterResult.BLOCK
+            if user_id in self._soft_blacklist:
+                entry = self._soft_blacklist[user_id]
+                if entry.expires_at > 0 and time.time() > entry.expires_at:
+                    del self._soft_blacklist[user_id]
+                    self._save()
+                else:
+                    return FilterResult.BLOCK
+            if user_id in self._verified or user_id in self._whitelist:
+                return FilterResult.ALLOW
+            return self._check_affinity_blacklist(user_id)
 
     def add_to_blacklist(self, user_id: str, nickname: str = "",
                          reason: str = "", permanent: bool = False,
                          expire_hours: int = DEFAULT_SOFT_EXPIRE_HOURS) -> None:
         """拉黑用户。"""
-        user_id = self._normalize_user_id(user_id)
-        if not user_id:
-            return
-        if user_id == self._owner_id:
-            return  # 不能拉黑主人
+        with self._lock:
+            user_id = self._normalize_user_id(user_id)
+            if not user_id or user_id == self._owner_id:
+                return
 
-        if permanent:
-            self._hard_blacklist[user_id] = BlacklistEntry(
-                user_id=user_id, nickname=nickname, reason=reason,
-                added_time=time.time(), added_by="manual", expires_at=0,
-            )
-            logger.info(f"[UserFilter] 永久拉黑: {nickname}({user_id}) 原因: {reason}")
-        else:
-            # 检查是否已有软拉黑记录
-            existing = self._soft_blacklist.get(user_id)
-            strike = (existing.strike_count + 1) if existing else 1
-
-            if strike >= HARD_BLACKLIST_THRESHOLD:
-                # 自动升级为永久
+            if permanent:
                 self._hard_blacklist[user_id] = BlacklistEntry(
-                    user_id=user_id, nickname=nickname,
-                    reason=f"累计{strike}次违规自动永久拉黑",
-                    added_time=time.time(), added_by="auto", expires_at=0,
-                    strike_count=strike,
-                )
-                self._soft_blacklist.pop(user_id, None)
-                logger.warning(f"[UserFilter] {nickname}({user_id}) 累计{strike}次→永久拉黑")
-            else:
-                self._soft_blacklist[user_id] = BlacklistEntry(
                     user_id=user_id, nickname=nickname, reason=reason,
-                    added_time=time.time(), added_by="auto",
-                    expires_at=time.time() + expire_hours * 3600,
-                    strike_count=strike,
+                    added_time=time.time(), added_by="manual", expires_at=0,
                 )
-                logger.info(f"[UserFilter] 软拉黑: {nickname}({user_id}) "
-                            f"第{strike}次，{expire_hours}小时后解除")
-        self._save()
+                logger.info(f"[UserFilter] 永久拉黑: {nickname}({user_id}) 原因: {reason}")
+            else:
+                existing = self._soft_blacklist.get(user_id)
+                strike = (existing.strike_count + 1) if existing else 1
+                if strike >= HARD_BLACKLIST_THRESHOLD:
+                    self._hard_blacklist[user_id] = BlacklistEntry(
+                        user_id=user_id, nickname=nickname,
+                        reason=f"累计{strike}次违规自动永久拉黑",
+                        added_time=time.time(), added_by="auto", expires_at=0,
+                        strike_count=strike,
+                    )
+                    self._soft_blacklist.pop(user_id, None)
+                    logger.warning(f"[UserFilter] {nickname}({user_id}) 累计{strike}次→永久拉黑")
+                else:
+                    self._soft_blacklist[user_id] = BlacklistEntry(
+                        user_id=user_id, nickname=nickname, reason=reason,
+                        added_time=time.time(), added_by="auto",
+                        expires_at=time.time() + expire_hours * 3600,
+                        strike_count=strike,
+                    )
+                    logger.info(
+                        f"[UserFilter] 软拉黑: {nickname}({user_id}) "
+                        f"第{strike}次，{expire_hours}小时后解除"
+                    )
+            self._save()
 
     def block(self, user_id: str, reason: str = "") -> None:
         """兼容旧工具接口：手动屏蔽等同于永久拉黑。"""
@@ -193,41 +178,50 @@ class UserFilter:
               strike_count, type}]，type 为 "hard"(永久)/"soft"(限时)；
             已过期的软拉黑条目不返回。按拉黑时间倒序排列。
         """
-        now = time.time()
-        result: list[dict] = []
-        for entry in self._hard_blacklist.values():
-            item = asdict(entry)
-            item["type"] = "hard"
-            result.append(item)
-        for entry in self._soft_blacklist.values():
-            # 已过期的软拉黑不展示（check() 里会惰性清理，这里只做过滤不改状态）
-            if entry.expires_at > 0 and now > entry.expires_at:
-                continue
-            item = asdict(entry)
-            item["type"] = "soft"
-            result.append(item)
-        result.sort(key=lambda x: float(x.get("added_time") or 0.0), reverse=True)
-        return result
+        with self._lock:
+            now = time.time()
+            result: list[dict] = []
+            for entry in self._hard_blacklist.values():
+                item = asdict(entry)
+                item["type"] = "hard"
+                result.append(item)
+            for entry in self._soft_blacklist.values():
+                if entry.expires_at > 0 and now > entry.expires_at:
+                    continue
+                item = asdict(entry)
+                item["type"] = "soft"
+                result.append(item)
+            result.sort(key=lambda x: float(x.get("added_time") or 0.0), reverse=True)
+            return result
 
     def remove_from_blacklist(self, user_id: str) -> bool:
         """解除拉黑。"""
-        user_id = self._normalize_user_id(user_id)
-        removed = False
-        if user_id in self._hard_blacklist:
-            del self._hard_blacklist[user_id]
-            removed = True
-        if user_id in self._soft_blacklist:
-            del self._soft_blacklist[user_id]
-            removed = True
-        if removed:
-            self._save()
-        return removed
+        with self._lock:
+            user_id = self._normalize_user_id(user_id)
+            removed = False
+            if user_id in self._hard_blacklist:
+                del self._hard_blacklist[user_id]
+                removed = True
+            if user_id in self._soft_blacklist:
+                del self._soft_blacklist[user_id]
+                removed = True
+            if removed:
+                self._save()
+            return removed
 
     def _check_affinity_blacklist(self, user_id: str) -> str:
         """根据好感度自动拉黑：厌恶(-50)→软拉黑，仇恨(-100)→硬拉黑。"""
         try:
             from white_salary.core.affinity.manager import AffinityManager
-            aff = AffinityManager.get_for_user(user_id)
+            try:
+                aff = AffinityManager.get_for_user(
+                    user_id,
+                    data_dir=self._affinity_data_dir,
+                )
+            except TypeError:
+                # Compatibility with older/custom manager shims that only
+                # accepted user_id. The built-in manager always uses data_dir.
+                aff = AffinityManager.get_for_user(user_id)
             stats = aff.get_stats()
             points = stats.get("points", 0)
 
@@ -250,38 +244,43 @@ class UserFilter:
 
     def add_to_whitelist(self, user_id: str) -> None:
         """加入白名单。"""
-        user_id = self._normalize_user_id(user_id)
-        if not user_id:
-            return
-        self._whitelist.add(user_id)
-        self._save()
+        with self._lock:
+            user_id = self._normalize_user_id(user_id)
+            if not user_id:
+                return
+            self._whitelist.add(user_id)
+            self._save()
 
     def remove_from_whitelist(self, user_id: str) -> bool:
         """从白名单移除用户。"""
-        user_id = self._normalize_user_id(user_id)
-        if user_id not in self._whitelist:
-            return False
-        self._whitelist.remove(user_id)
-        self._save()
-        return True
+        with self._lock:
+            user_id = self._normalize_user_id(user_id)
+            if user_id not in self._whitelist:
+                return False
+            self._whitelist.remove(user_id)
+            self._save()
+            return True
 
     def list_whitelist(self) -> list[str]:
         """返回白名单 QQ 号列表。"""
-        return sorted(self._whitelist)
+        with self._lock:
+            return sorted(self._whitelist)
 
     def verify_user(self, user_id: str) -> None:
         """标记用户为已验证（跳过后续检测）。"""
-        user_id = self._normalize_user_id(user_id)
-        if not user_id:
-            return
-        self._verified.add(user_id)
-        self._save()
+        with self._lock:
+            user_id = self._normalize_user_id(user_id)
+            if not user_id:
+                return
+            self._verified.add(user_id)
+            self._save()
 
     def set_mode(self, mode: str) -> None:
         """设置过滤模式。"""
-        if mode in (FilterMode.OFF, FilterMode.WHITELIST, FilterMode.BLACKLIST):
-            self._mode = mode
-            self._save()
+        with self._lock:
+            if mode in (FilterMode.OFF, FilterMode.WHITELIST, FilterMode.BLACKLIST):
+                self._mode = mode
+                self._save()
 
     @staticmethod
     def _normalize_user_id(user_id: str) -> str:
@@ -290,20 +289,21 @@ class UserFilter:
 
     @property
     def stats(self) -> dict:
-        return {
-            "mode": self._mode,
-            "whitelist_count": len(self._whitelist),
-            "hard_blacklist": len(self._hard_blacklist),
-            "soft_blacklist": len(self._soft_blacklist),
-            "verified": len(self._verified),
-        }
+        with self._lock:
+            return {
+                "mode": self._mode,
+                "whitelist_count": len(self._whitelist),
+                "hard_blacklist": len(self._hard_blacklist),
+                "soft_blacklist": len(self._soft_blacklist),
+                "verified": len(self._verified),
+            }
 
     # ================================================================
     # 持久化
     # ================================================================
 
     def _save(self) -> None:
-        try:
+        with self._lock:
             data = {
                 "mode": self._mode,
                 "whitelist": list(self._whitelist),
@@ -311,11 +311,20 @@ class UserFilter:
                 "soft_blacklist": {k: asdict(v) for k, v in self._soft_blacklist.items()},
                 "verified": list(self._verified),
             }
-            self._data_path.write_text(
-                json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+            temp_path = self._data_path.with_name(
+                f".{self._data_path.name}.{os.getpid()}.{threading.get_ident()}.tmp"
             )
-        except Exception:
-            pass
+            try:
+                temp_path.write_text(
+                    json.dumps(data, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+                os.replace(temp_path, self._data_path)
+            except Exception as exc:
+                logger.error(f"[UserFilter] 保存失败: {exc}")
+                raise
+            finally:
+                temp_path.unlink(missing_ok=True)
 
     def _load(self) -> None:
         if not self._data_path.exists():

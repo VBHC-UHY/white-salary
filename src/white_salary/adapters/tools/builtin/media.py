@@ -2,9 +2,9 @@
 from ._helpers import tool, P, S, NONE_PARAMS
 
 
-@tool("generate_image", "生成AI图片/画图/画画/自拍/自画像/发照片/发个照片/看看你长什么样——根据描述生成图片。当用户说「画个XX」「生成图片」「画一张」「发自拍」「发个照片」「看看你」时调用",
-      P(prompt=S("图片描述（越详细越好）", True), send_qq=S("是否发到QQ(true/false)")))
-async def generate_image(prompt: str = "", send_qq: str = "false") -> str:
+@tool("generate_image", "生成AI图片/画图/画画/自拍/自画像/发照片/发个照片/看看你长什么样——根据描述生成一张新图片。当用户说「画个XX」「生成图片」「画一张」「发自拍」「发个照片」「看看你」时调用。只说「发个表情包」不是生图请求，应调用qq_send_sticker",
+      P(prompt=S("图片描述（越详细越好）", True), send_qq=S("是否发到QQ(auto/true/false)，QQ会话默认auto")))
+async def generate_image(prompt: str = "", send_qq: str = "auto") -> str:
     if not prompt:
         return "请描述想要的图片"
     from white_salary.adapters.tools.image_gen import generate_image as _gen
@@ -26,27 +26,17 @@ async def generate_image(prompt: str = "", send_qq: str = "false") -> str:
             "本地 ComfyUI 路径在 conf.yaml 的 external_tools 节，详见 docs/EXTERNAL_SERVICES.md"
         )
 
-    # 如果需要发到QQ（根据上下文判断发群还是发私聊）
-    if send_qq in ("true", "True", True):
-        try:
-            from white_salary.adapters.tools.builtin.qq_api import _call, get_msg_context, _safe_int
-            from pathlib import Path as _Path
-            file_url = f"file:///{_Path(path).resolve()}" if not path.startswith("http") else path
-            ctx = get_msg_context()
-            if ctx.get("is_group") and ctx.get("group_id"):
-                # 群聊：发到群里
-                await _call("send_group_msg", {
-                    "group_id": _safe_int(ctx["group_id"], "群号"),
-                    "message": [{"type": "image", "data": {"file": file_url}}],
-                })
-            elif ctx.get("user_id"):
-                # 私聊：发给用户
-                await _call("send_private_msg", {
-                    "user_id": _safe_int(ctx["user_id"], "QQ号"),
-                    "message": [{"type": "image", "data": {"file": file_url}}],
-                })
-        except Exception:
-            pass
+    # QQ上下文默认直接把生成结果发回当前会话；真实回执由qq_send_image校验。
+    from white_salary.adapters.tools.builtin.qq_api import get_msg_context, qq_send_image
+
+    ctx = get_msg_context()
+    send_mode = str(send_qq).strip().lower()
+    should_send_qq = send_mode in ("true", "1", "yes") or (
+        send_mode in ("", "auto") and bool(ctx.get("group_id") or ctx.get("user_id"))
+    )
+    if should_send_qq:
+        await qq_send_image(image_url=path)
+        return f"图片已生成并发送到QQ，保存在{path}" if not path.startswith("http") else "图片已生成并发送到QQ"
 
     return f"图片已生成，保存在{path}" if not path.startswith("http") else "图片已生成"
 
@@ -165,7 +155,7 @@ async def describe_image(image_path: str = "") -> str:
     return result or "看图失败：视觉模型没有返回内容"
 
 
-@tool("generate_sticker", "生成自定义表情包——用AI生成表情包图片",
+@tool("generate_sticker", "AI生成/制作一张全新的自定义表情包图片。仅当用户明确说「生成一个新表情包」「制作表情包」「画个表情包」时调用；用户只说「发个表情包」「来个表情包」时不要调用，应调用qq_send_sticker发送已有表情包",
       P(emotion=S("情绪", True), style=S("风格")))
 async def generate_sticker(emotion: str = "", style: str = "anime") -> str:
     # 用图片生成来做表情包

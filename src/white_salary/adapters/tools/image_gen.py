@@ -106,20 +106,38 @@ async def generate_image(
     else:
         full_prompt = prompt
 
-    # 1. 尝试ComfyUI本地
-    result = await _try_comfyui(full_prompt, size, is_portrait)
-    if result:
-        return await _download_and_save(result)
+    provider_config = _load_style_config().get("providers", {})
+    comfyui_config = provider_config.get("comfyui", {})
+    dmxapi_config = provider_config.get("dmxapi", {})
+    siliconflow_config = provider_config.get("siliconflow", {})
+
+    # 1. 尝试ComfyUI本地。有云端可降级时只给冷启动15秒：进程会继续在后台
+    # 启动，本次请求先走云端，下一次请求即可优先使用已经就绪的本地服务。
+    if comfyui_config.get("enabled", True):
+        startup_timeout = 15 if (dmxapi_key or siliconflow_key) else 60
+        result = await _try_comfyui(
+            full_prompt,
+            size,
+            is_portrait,
+            startup_timeout=startup_timeout,
+        )
+        if result:
+            return await _download_and_save(result)
 
     # 2. 尝试DMXAPI
-    if dmxapi_key:
+    if dmxapi_key and dmxapi_config.get("enabled", True):
         result = await _try_dmxapi(full_prompt, dmxapi_key, size)
         if result:
             return await _download_and_save(result)
 
     # 3. 兜底SiliconFlow
-    if siliconflow_key:
-        result = await _try_siliconflow(full_prompt, siliconflow_key, size)
+    if siliconflow_key and siliconflow_config.get("enabled", True):
+        result = await _try_siliconflow(
+            full_prompt,
+            siliconflow_key,
+            size,
+            model=str(siliconflow_config.get("model") or "Qwen/Qwen-Image"),
+        )
         if result:
             return await _download_and_save(result)
 
@@ -192,13 +210,18 @@ async def _download_and_save(url_or_b64: str) -> Optional[str]:
     return url_or_b64
 
 
-async def _try_comfyui(prompt: str, size: str, is_portrait: bool = False) -> Optional[str]:
+async def _try_comfyui(
+    prompt: str,
+    size: str,
+    is_portrait: bool = False,
+    startup_timeout: int = 60,
+) -> Optional[str]:
     """尝试ComfyUI本地生成（通过API遥控，不修改ComfyUI文件）。"""
     try:
         from white_salary.adapters.tools.comfyui_client import generate_image as _comfyui_gen, ensure_comfyui_running
 
         # 自动检测+启动ComfyUI（没运行就启动，最多等60秒）
-        if not await ensure_comfyui_running(timeout=60):
+        if not await ensure_comfyui_running(timeout=startup_timeout):
             return None
 
         # 解析尺寸
@@ -278,14 +301,40 @@ async def _try_dmxapi(prompt: str, api_key: str, size: str) -> Optional[str]:
     return None
 
 
-async def _try_siliconflow(prompt: str, api_key: str, size: str) -> Optional[str]:
+def _siliconflow_image_size(model: str, requested: str) -> str:
+    """Map generic sizes to dimensions accepted/recommended by the selected model."""
+    if "qwen-image" not in model.lower() or "edit" in model.lower():
+        return requested
+    try:
+        width, height = (int(part) for part in requested.lower().split("x", 1))
+    except (TypeError, ValueError):
+        return "1328x1328"
+    ratio = width / max(height, 1)
+    candidates = [
+        (1328 / 1328, "1328x1328"),
+        (1664 / 928, "1664x928"),
+        (928 / 1664, "928x1664"),
+        (1472 / 1140, "1472x1140"),
+        (1140 / 1472, "1140x1472"),
+        (1584 / 1056, "1584x1056"),
+        (1056 / 1584, "1056x1584"),
+    ]
+    return min(candidates, key=lambda item: abs(item[0] - ratio))[1]
+
+
+async def _try_siliconflow(
+    prompt: str,
+    api_key: str,
+    size: str,
+    model: str = "Qwen/Qwen-Image",
+) -> Optional[str]:
     """尝试SiliconFlow FLUX生成。"""
     try:
         async with aiohttp.ClientSession() as session:
             payload = {
-                "model": "Qwen/Qwen-Image",
+                "model": model,
                 "prompt": prompt,
-                "image_size": size,
+                "image_size": _siliconflow_image_size(model, size),
                 "num_inference_steps": 20,
             }
             headers = {
@@ -306,7 +355,11 @@ async def _try_siliconflow(prompt: str, api_key: str, size: str) -> Optional[str
                             return url
                 else:
                     body = await resp.text()
-                    logger.debug(f"[ImageGen] SiliconFlow失败({resp.status}): {body[:100]}")
+                    trace_id = resp.headers.get("x-siliconcloud-trace-id", "")
+                    logger.warning(
+                        f"[ImageGen] SiliconFlow失败({resp.status}, trace={trace_id or 'none'}): "
+                        f"{body[:500]}"
+                    )
 
     except Exception as e:
         logger.debug(f"[ImageGen] SiliconFlow异常: {e}")

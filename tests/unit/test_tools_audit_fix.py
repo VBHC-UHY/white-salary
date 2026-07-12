@@ -51,11 +51,15 @@ class TestToolTimeouts:
         """local_lip_sync 内部 subprocess timeout=120，外层至少300秒。"""
         assert get_tool_timeout("local_lip_sync") >= 300
 
-    def test_original_slow_tools_keep_120(self) -> None:
-        """原慢工具白名单的六个工具维持120秒。"""
-        for name in ("watch_video", "deep_search", "research",
-                     "generate_image", "draw", "edit_image"):
+    def test_original_non_generation_slow_tools_keep_120(self) -> None:
+        """非生成类慢工具维持120秒。"""
+        for name in ("watch_video", "deep_search", "research", "edit_image"):
             assert get_tool_timeout(name) == 120, f"{name} 应为120秒"
+
+    def test_image_generation_allows_local_then_cloud_fallback(self) -> None:
+        """生图要容纳本地冷启动/推理后再转云端，不能被外层120秒提前取消。"""
+        assert get_tool_timeout("generate_image") == 360
+        assert get_tool_timeout("draw") == 360
 
     def test_unknown_tool_uses_default_30(self) -> None:
         """表外工具走默认30秒。"""
@@ -228,13 +232,20 @@ class FakeToolLLM(LLMInterface):
 class FakeMainLLM(LLMInterface):
     """主模型桩：流式返回固定文本；process_tool_results 拼接工具结果。"""
 
-    def __init__(self, stream_response: str = "普通流式回复") -> None:
+    def __init__(
+        self,
+        stream_response: str = "普通流式回复",
+        tool_result_response: str | None = None,
+    ) -> None:
         self._stream_response = stream_response
+        self._tool_result_response = tool_result_response
         self.tool_results_seen: list[list[ToolResult]] = []
+        self.chat_completion_messages: list[list[Message]] = []
 
     async def chat_completion(self, messages: list[Message],
                               temperature: float = 0.7,
                               max_tokens: int = 2048) -> str:
+        self.chat_completion_messages.append(list(messages))
         return self._stream_response
 
     async def chat_completion_stream(
@@ -255,6 +266,8 @@ class FakeMainLLM(LLMInterface):
         temperature: float = 0.7, max_tokens: int = 2048,
     ) -> str:
         self.tool_results_seen.append(list(tool_results))
+        if self._tool_result_response is not None:
+            return self._tool_result_response
         merged = "；".join(r.content for r in tool_results)
         return f"基于工具结果的回复：{merged}"
 
@@ -287,9 +300,66 @@ class FakeRegistry:
         return "执行完成"
 
 
-def _make_agent(tool_llm: LLMInterface, registry: FakeRegistry,
-                main_response: str = "普通流式回复") -> tuple[ChatAgent, FakeMainLLM]:
-    main_llm = FakeMainLLM(stream_response=main_response)
+class StickerFailureRegistry(FakeRegistry):
+    """Registry stub that makes generate_sticker time out."""
+
+    @property
+    def count(self) -> int:
+        return 1
+
+    def get_tool(self, name: str):
+        return object() if name == "generate_sticker" else None
+
+    def get_openai_tools(self) -> list[dict]:
+        return [{
+            "type": "function",
+            "function": {
+                "name": "generate_sticker",
+                "description": "生成表情包",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }]
+
+    async def execute(self, name: str, arguments: dict) -> str:
+        self.execute_calls.append((name, dict(arguments)))
+        return "工具generate_sticker执行超时了，请用你自己的话告诉用户这个操作失败了，可能需要稍后再试"
+
+
+class StickerSendSuccessRegistry(FakeRegistry):
+    """Registry stub for a confirmed existing-sticker send."""
+
+    @property
+    def count(self) -> int:
+        return 1
+
+    def get_tool(self, name: str):
+        return object() if name == "qq_send_sticker" else None
+
+    def get_openai_tools(self) -> list[dict]:
+        return [{
+            "type": "function",
+            "function": {
+                "name": "qq_send_sticker",
+                "description": "发送已有表情包",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }]
+
+    async def execute(self, name: str, arguments: dict) -> str:
+        self.execute_calls.append((name, dict(arguments)))
+        return "表情包已发送"
+
+
+def _make_agent(
+    tool_llm: LLMInterface,
+    registry: FakeRegistry,
+    main_response: str = "普通流式回复",
+    tool_result_response: str | None = None,
+) -> tuple[ChatAgent, FakeMainLLM]:
+    main_llm = FakeMainLLM(
+        stream_response=main_response,
+        tool_result_response=tool_result_response,
+    )
     agent = ChatAgent(
         llm=main_llm,
         personality=PersonalityManager(project_root=PROJECT_ROOT),
@@ -374,3 +444,90 @@ class TestForcedRecallRouting:
 
         time_calls = [c for c in registry.execute_calls if c[0] == "get_current_time"]
         assert len(time_calls) == 1, "同一工具相同参数应只执行一次"
+
+    async def test_confirmed_sticker_send_has_no_redundant_text_reply(self) -> None:
+        """发送已有表情包成功后，不再补一句“已发送”。"""
+        registry = StickerSendSuccessRegistry()
+        tool_llm = FakeToolLLM([
+            ToolCall(id="c1", name="qq_send_sticker", arguments="{}"),
+        ])
+        agent, main_llm = _make_agent(tool_llm, registry)  # type: ignore[arg-type]
+
+        chunks = []
+        async for chunk in agent.chat_stream_with_tools("白，发个表情包"):
+            chunks.append(chunk)
+
+        assert chunks == ["__WHITE_SALARY_TOOL_SILENT__"]
+        assert not main_llm.tool_results_seen
+
+    async def test_tool_failure_short_reply_reasks_main_llm(self) -> None:
+        """工具超时而主模型只回“注意”时，应再请主模型按人设自然解释。"""
+        registry = StickerFailureRegistry()
+        tool_llm = FakeToolLLM([
+            ToolCall(id="c1", name="generate_sticker", arguments="{}"),
+        ])
+        agent, main_llm = _make_agent(
+            tool_llm,
+            registry,  # type: ignore[arg-type]
+            main_response="唔，表情包那边刚才没跑出来，像是生成服务超时了，等会儿我再试一次。",
+            tool_result_response="注意",
+        )
+
+        chunks = []
+        async for chunk in agent.chat_stream_with_tools("白，发个表情包"):
+            chunks.append(chunk)
+        reply = "".join(chunks)
+
+        assert main_llm.tool_results_seen
+        assert main_llm.chat_completion_messages
+        assert reply != "注意"
+        assert "等会儿我再试一次" in reply
+        assert "工具返回结果" in main_llm.chat_completion_messages[-1][-1].content
+
+    async def test_tool_failure_if_reply_is_treated_as_weak(self) -> None:
+        """工具失败后主模型只回“如果”也不能直接发出去。"""
+        registry = StickerFailureRegistry()
+        tool_llm = FakeToolLLM([
+            ToolCall(id="c1", name="generate_sticker", arguments="{}"),
+        ])
+        agent, main_llm = _make_agent(
+            tool_llm,
+            registry,  # type: ignore[arg-type]
+            main_response="表情包那边刚才卡住了，我没生成出来，等它缓一下我再试。",
+            tool_result_response="如果",
+        )
+
+        chunks = []
+        async for chunk in agent.chat_stream_with_tools("白，发个表情包"):
+            chunks.append(chunk)
+        reply = "".join(chunks)
+
+        assert main_llm.tool_results_seen
+        assert main_llm.chat_completion_messages
+        assert reply != "如果"
+        assert "没生成出来" in reply
+
+    async def test_tool_failure_keeps_real_result_when_both_llm_passes_are_empty(self) -> None:
+        """两次自然重写都失败时也不能静默，至少保留真实工具结果。"""
+        registry = StickerFailureRegistry()
+        tool_llm = FakeToolLLM([
+            ToolCall(id="c1", name="generate_sticker", arguments="{}"),
+        ])
+        agent, main_llm = _make_agent(
+            tool_llm,
+            registry,  # type: ignore[arg-type]
+            main_response="注意",
+            tool_result_response="注意",
+        )
+
+        chunks = []
+        async for chunk in agent.chat_stream_with_tools("白，发个表情包"):
+            chunks.append(chunk)
+
+        assert main_llm.tool_results_seen
+        assert main_llm.chat_completion_messages
+        reply = "".join(chunks)
+        assert reply
+        assert reply != "注意"
+        assert "generate_sticker" in reply
+        assert "超时" in reply

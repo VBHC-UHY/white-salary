@@ -109,6 +109,63 @@ class TestSaveSettingsDeepMerge:
         saved = yaml.safe_load((root / "conf.yaml").read_text(encoding="utf-8"))
         assert saved["llm"]["api_key"] == "sk-realkey12345678"
 
+    async def test_qq_unblocked_groups_sync_runtime_decider(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """保存 QQ 不屏蔽群列表时，既写 conf.yaml，也同步运行中的 SmartReplyDecider。"""
+        import white_salary.infrastructure.server.settings_api as settings_api_module
+
+        class FakeDecider:
+            def __init__(self) -> None:
+                self.groups: list[str] = []
+
+            def set_unblocked_groups(self, group_ids: list[str]) -> None:
+                self.groups = list(group_ids)
+
+        root = _make_project(tmp_path)
+        fake_decider = FakeDecider()
+        monkeypatch.setattr(settings_api_module, "_runtime_registry", {
+            "qq_smart_reply_decider": fake_decider,
+        })
+
+        router = create_settings_router(root)
+        save_settings = _endpoint(router, "/api/settings", "POST")
+
+        resp = await save_settings(SettingsUpdate(settings={
+            "qq": {"unblocked_group_ids": ["115985242", " 9988 "]}
+        }))
+
+        saved = yaml.safe_load((root / "conf.yaml").read_text(encoding="utf-8"))
+        assert saved["qq"]["unblocked_group_ids"] == ["115985242", " 9988 "]
+        assert fake_decider.groups == ["115985242", " 9988 "]
+        assert "即时同步" in resp["message"]
+
+
+class TestAffinityOwnerProfile:
+    async def test_legacy_affinity_controls_use_the_owner_profile(self, tmp_path: Path) -> None:
+        from white_salary.core.affinity.manager import AffinityManager
+
+        root = _make_project(tmp_path)
+        config = yaml.safe_load((root / "conf.yaml").read_text(encoding="utf-8"))
+        config["qq"] = {"family_qq": ["1234567890"]}
+        _write_yaml(root / "conf.yaml", config)
+        AffinityManager._multi_user_cache.clear()
+
+        router = create_settings_router(root)
+        set_points = _endpoint(router, "/api/settings/affinity/set_points", "POST")
+        get_memory = _endpoint(router, "/api/settings/memory", "GET")
+
+        await set_points({"points": 66})
+        memory = await get_memory()
+
+        owner = AffinityManager.get_for_user(
+            "1234567890",
+            data_dir=str(root / "data" / "affinity"),
+        )
+        assert owner.get_stats()["points"] == 66.0
+        assert memory["affinity"]["user_id"] == "1234567890"
+        assert memory["affinity"]["points"] == 66.0
+
 
 class TestSavePromptGuard:
     """POST /api/settings/prompt：空 prompt 必须 400 拒绝，防止清空系统提示词。"""

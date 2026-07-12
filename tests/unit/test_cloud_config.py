@@ -100,6 +100,10 @@ def test_tts_factory_reports_missing_cloud_key(monkeypatch) -> None:
         raise OSError("closed")
 
     monkeypatch.setattr(tts_factory.socket, "create_connection", no_local_tts)
+    monkeypatch.setattr(
+        "white_salary.adapters.tools.cloud_config.resolve_siliconflow_api_key",
+        lambda config=None, explicit="": "",
+    )
 
     with pytest.raises(ValueError, match="TTS fallback API key"):
         tts_factory.create_tts(TTSConfig())

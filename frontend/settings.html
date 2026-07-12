@@ -620,6 +620,29 @@
                     </div>
                     <p style="color:#4a5568;font-size:11px;">与「语音设置」页的参考音频为同一配置（tts.ref_audio / tts.ref_text），点底部「保存设置」生效（重启后端）；注意环境变量 WS_TTS_REF_AUDIO / WS_TTS_REF_TEXT 会覆盖此配置</p>
                 </div>
+                <div class="section">
+                    <h3>云端克隆音色</h3>
+                    <div class="form-group">
+                        <label>云端音色名称</label>
+                        <input type="text" id="vc-cloud-name" value="white_salary" maxlength="64" placeholder="white_salary">
+                    </div>
+                    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
+                        <input type="file" id="vc-cloud-file" accept="audio/*" style="display:none;" onchange="uploadCloudReferenceAudio(this)">
+                        <button class="btn-small" type="button" onclick="document.getElementById('vc-cloud-file').click()">选择短参考音频</button>
+                        <button class="btn-primary" type="button" id="vc-cloud-upload-btn" onclick="uploadCloudVoice()">创建云端音色</button>
+                    </div>
+                    <div class="form-group">
+                        <label>账户中的云端音色</label>
+                        <select id="vc-cloud-voice-list"></select>
+                    </div>
+                    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+                        <button class="btn-small" type="button" onclick="refreshCloudVoices()">刷新列表</button>
+                        <button class="btn-primary" type="button" onclick="useSelectedCloudVoice()">使用选中音色</button>
+                        <button class="btn-small" type="button" onclick="deleteSelectedCloudVoice()">删除选中音色</button>
+                    </div>
+                    <div id="vc-cloud-status" style="font-size:12px;color:#7a8fa0;"></div>
+                    <p style="color:#4a5568;font-size:11px;margin-top:8px;">云端使用不超过30秒的清晰参考片段与对应文字；创建后只保存返回的 speech: 音色ID。本地 GPT-SoVITS 权重保持独立，不会上传。云端服务可能要求实名认证。</p>
+                </div>
                 <!-- 2026-07-03 功能大项（批11二波）：训练白的专属声音——面板一键触发
                      GPT-SoVITS 训练 + 轮询看进度（原来只有静态文字提示用户去命令行跑
                      train_voice.bat）。调 POST /voice-clone/train 起训练、GET
@@ -1005,6 +1028,11 @@
                         <label>QQ唤醒词（每行一个）</label>
                         <textarea id="qq-wake-words" rows="3" placeholder="白" style="width:100%;background:#f5f8fc;color:#1a1a2e;border:1px solid rgba(0,153,204,0.2);border-radius:4px;padding:8px;font-size:12px;"></textarea>
                         <p style="color:#4a5568;font-size:11px;margin-top:6px;">只影响 QQ 群聊，不影响桌面端。系统会自动允许前后空格和常见标点，例如「白？」「白！」「，白」「 白 」都会命中。</p>
+                    </div>
+                    <div class="form-group">
+                        <label>QQ群不屏蔽列表（每行一个群号）</label>
+                        <textarea id="qq-unblocked-group-ids" rows="3" placeholder="例如：115985242" style="width:100%;background:#f5f8fc;color:#1a1a2e;border:1px solid rgba(0,153,204,0.2);border-radius:4px;padding:8px;font-size:12px;"></textarea>
+                        <p style="color:#4a5568;font-size:11px;margin-top:6px;">这些群会更容易进入续聊判断；仍会先判断是不是该接话，避免白在别人闲聊时乱插话。也可以在群里让主人说“白，这个群不屏蔽”。</p>
                     </div>
                     <div class="form-group">
                         <label>鉴权Token（与NapCat WebSocket配置中的token一致）</label>

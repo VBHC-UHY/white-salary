@@ -10,13 +10,15 @@ white_salary/core/plugins/sandbox.py
   - 允许json/datetime/random/re等安全模块
 """
 
-import re
-from typing import Optional
+import ast
+from pathlib import Path
+from typing import Iterable
 
 from loguru import logger
 
 
-# 允许的模块
+# 默认允许的纯计算/标准库模块。第三方依赖仍可使用，但高风险能力必须在
+# config.json 的 permissions 中显式声明。
 ALLOWED_MODULES = {
     "json", "datetime", "time", "random", "re", "math",
     "hashlib", "base64", "collections", "dataclasses",
@@ -26,29 +28,83 @@ ALLOWED_MODULES = {
 
 # 禁止的模块
 BLOCKED_MODULES = {
-    "os", "sys", "subprocess", "shutil", "socket",
-    "http", "urllib", "requests", "importlib",
-    "io", "tempfile", "glob", "multiprocessing",
-    "threading", "pickle", "ctypes", "sqlite3",
+    "subprocess", "importlib", "multiprocessing", "pickle", "ctypes",
     "signal", "pty", "fcntl",
 }
 
-# 禁止的代码模式
-BLOCKED_PATTERNS = [
-    (r'\beval\s*\(', "eval()调用"),
-    (r'\bexec\s*\(', "exec()调用"),
-    (r'\bcompile\s*\(', "compile()调用"),
-    (r'__import__\s*\(', "__import__()调用"),
-    (r'\bopen\s*\(', "open()文件操作"),
-    (r'os\.system', "os.system()系统命令"),
-    (r'subprocess', "subprocess模块"),
-    (r'__class__', "__class__访问"),
-    (r'__globals__', "__globals__访问"),
-    (r'__builtins__', "__builtins__访问"),
-]
+PERMISSION_MODULES = {
+    "network": {"aiohttp", "httpx", "requests", "urllib", "http", "socket"},
+    "filesystem": {"pathlib", "io", "tempfile", "glob", "shutil"},
+    "database": {"sqlite3"},
+    "threads": {"threading"},
+}
+
+ALWAYS_BLOCKED_CALLS = {"eval", "exec", "compile", "__import__"}
+FILESYSTEM_CALLS = {
+    "open", "write_text", "write_bytes", "unlink", "rmdir", "rename",
+    "replace", "mkdir", "rmtree", "move", "copy", "copy2", "copytree",
+}
+BLOCKED_DUNDER_ATTRIBUTES = {"__class__", "__globals__", "__builtins__", "__subclasses__"}
 
 
-def check_code_safety(code: str) -> tuple[bool, list[str]]:
+def _permission_for_module(root: str) -> str | None:
+    for permission, modules in PERMISSION_MODULES.items():
+        if root in modules:
+            return permission
+    return None
+
+
+class _SafetyVisitor(ast.NodeVisitor):
+    def __init__(self, permissions: frozenset[str]) -> None:
+        self.permissions = permissions
+        self.issues: list[str] = []
+
+    def _check_module(self, module: str) -> None:
+        root = module.split(".", 1)[0]
+        if root in BLOCKED_MODULES:
+            self.issues.append(f"禁止导入模块: {module}")
+            return
+        if module.startswith("white_salary.") and module != "white_salary.core.plugins.base":
+            self.issues.append(f"禁止访问应用内部模块: {module}")
+            return
+        required = _permission_for_module(root)
+        if required and required not in self.permissions:
+            self.issues.append(f"导入 {module} 需要声明权限: {required}")
+
+    def visit_Import(self, node: ast.Import) -> None:
+        for alias in node.names:
+            self._check_module(alias.name)
+        self.generic_visit(node)
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+        if node.level == 0 and node.module:
+            self._check_module(node.module)
+        self.generic_visit(node)
+
+    def visit_Attribute(self, node: ast.Attribute) -> None:
+        if node.attr in BLOCKED_DUNDER_ATTRIBUTES:
+            self.issues.append(f"禁止访问属性: {node.attr}")
+        self.generic_visit(node)
+
+    def visit_Call(self, node: ast.Call) -> None:
+        name = ""
+        if isinstance(node.func, ast.Name):
+            name = node.func.id
+        elif isinstance(node.func, ast.Attribute):
+            name = node.func.attr
+        if name in ALWAYS_BLOCKED_CALLS:
+            self.issues.append(f"禁止的动态执行: {name}()")
+        elif name in FILESYSTEM_CALLS and "filesystem" not in self.permissions:
+            self.issues.append(f"调用 {name}() 需要声明权限: filesystem")
+        elif name in {"system", "popen", "spawn", "fork"}:
+            self.issues.append(f"禁止的进程操作: {name}()")
+        self.generic_visit(node)
+
+
+def check_code_safety(
+    code: str,
+    permissions: Iterable[str] | None = None,
+) -> tuple[bool, list[str]]:
     """
     检查插件代码是否安全。
 
@@ -58,19 +114,14 @@ def check_code_safety(code: str) -> tuple[bool, list[str]]:
     Returns:
         (is_safe, issues) — 是否安全，问题列表
     """
-    issues = []
+    try:
+        tree = ast.parse(code)
+    except SyntaxError as exc:
+        return False, [f"Python语法错误: {exc.msg}（第{exc.lineno}行）"]
 
-    # 检查导入
-    import_pattern = re.compile(r'(?:from|import)\s+([\w.]+)')
-    for match in import_pattern.finditer(code):
-        module = match.group(1).split('.')[0]
-        if module in BLOCKED_MODULES:
-            issues.append(f"禁止导入模块: {module}")
-
-    # 检查危险模式
-    for pattern, desc in BLOCKED_PATTERNS:
-        if re.search(pattern, code):
-            issues.append(f"禁止的操作: {desc}")
+    visitor = _SafetyVisitor(frozenset(str(p).strip().lower() for p in permissions or ()))
+    visitor.visit(tree)
+    issues = list(dict.fromkeys(visitor.issues))
 
     is_safe = len(issues) == 0
     if not is_safe:
@@ -79,11 +130,40 @@ def check_code_safety(code: str) -> tuple[bool, list[str]]:
     return is_safe, issues
 
 
-def check_file_safety(filepath: str) -> tuple[bool, list[str]]:
+def check_file_safety(
+    filepath: str,
+    permissions: Iterable[str] | None = None,
+) -> tuple[bool, list[str]]:
     """检查插件文件是否安全。"""
     try:
         with open(filepath, encoding="utf-8") as f:
             code = f.read()
-        return check_code_safety(code)
+        return check_code_safety(code, permissions=permissions)
     except Exception as e:
         return False, [f"无法读取文件: {e}"]
+
+
+def check_plugin_tree_safety(
+    plugin_path: str | Path,
+    permissions: Iterable[str] | None = None,
+) -> tuple[bool, list[str]]:
+    """Scan every Python source file in a plugin package.
+
+    Scanning only ``plugin.py`` lets a harmless-looking relative import hide
+    dangerous code in ``helper.py``. This function closes that gap.
+    """
+
+    root = Path(plugin_path)
+    files = [root] if root.is_file() else sorted(root.rglob("*.py"))
+    issues: list[str] = []
+    for file in files:
+        if "__pycache__" in file.parts:
+            continue
+        safe, file_issues = check_file_safety(str(file), permissions=permissions)
+        if not safe:
+            try:
+                label = file.relative_to(root).as_posix() if root.is_dir() else file.name
+            except ValueError:
+                label = file.name
+            issues.extend(f"{label}: {issue}" for issue in file_issues)
+    return not issues, issues

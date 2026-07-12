@@ -9,6 +9,7 @@
 
 import asyncio
 
+from white_salary.core.llm_enhancer import LLMEnhancer, IntentType
 from white_salary.core.message.processing import (
     MessageRouter,
     TimePerception,
@@ -40,6 +41,21 @@ class TestMessageRouter:
     def test_tool_hint(self) -> None:
         assert "web_search" in MessageRouter().get_tool_hint("搜一下天气")
         assert MessageRouter().get_tool_hint("今天吃什么好呢") == ""
+
+
+class TestLLMEnhancer:
+    def test_action_requests_are_not_plain_chat(self) -> None:
+        enhancer = LLMEnhancer()
+
+        assert enhancer.analyze("白，发个表情包").intent == IntentType.REQUEST
+        assert enhancer.analyze("发语音").intent == IntentType.REQUEST
+        assert enhancer.analyze("截屏看一下").intent == IntentType.REQUEST
+
+    def test_request_hint_does_not_force_two_word_reply(self) -> None:
+        hint = LLMEnhancer().analyze("白，发个表情包").style_hint
+
+        assert "不要只回一两个字" in hint
+        assert "不要啰嗦" not in hint
 
 
 class TestTimePerception:

@@ -14,20 +14,38 @@ echo ============================================================
 echo.
 
 echo [1/6] Checking Python...
-where python >nul 2>&1
-if errorlevel 1 (
-    echo   [ERROR] Python not found. Install Python 3.10+ and enable PATH.
+set "PYTHON_EXE="
+set "PYTHON_SOURCE="
+
+rem Prefer an explicit override, then versioned launchers, then uv-managed
+rem interpreters.  A plain `python` is deliberately last because Windows may
+rem point it at the Store shim or an unsupported global Python even when uv has
+rem already installed a compatible interpreter.
+if defined WS_PYTHON call :try_python "%WS_PYTHON%" "" "WS_PYTHON override"
+call :try_python "py" "-3.12" "Windows py launcher (3.12)"
+call :try_python "py" "-3.11" "Windows py launcher (3.11)"
+call :try_python "py" "-3.10" "Windows py launcher (3.10)"
+call :try_python "python3.12" "" "python3.12 command"
+call :try_python "python3.11" "" "python3.11 command"
+call :try_python "python3.10" "" "python3.10 command"
+where uv >nul 2>&1
+if not errorlevel 1 (
+    call :try_uv_python 3.12
+    call :try_uv_python 3.11
+    call :try_uv_python 3.10
+)
+call :try_python "python" "" "PATH python"
+
+if not defined PYTHON_EXE (
+    echo   [ERROR] No compatible Python was found.
+    echo           White Salary requires Python 3.10-3.12.
+    echo           The installer checked py, python3.x, uv-managed Python, and python.
+    echo           Install 3.11 or 3.12, or set WS_PYTHON to its python.exe path.
     echo           https://www.python.org/downloads/
     pause
     exit /b 1
 )
-python -c "import sys; raise SystemExit(0 if (3, 10) <= sys.version_info < (3, 13) else 1)" >nul 2>&1
-if errorlevel 1 (
-    echo   [ERROR] Python 3.10-3.12 is required. Python 3.11+ is recommended.
-    pause
-    exit /b 1
-)
-for /f "tokens=*" %%v in ('python --version') do echo   [OK] %%v
+for /f "tokens=*" %%v in ('"%PYTHON_EXE%" --version 2^>^&1') do echo   [OK] %%v ^(%PYTHON_SOURCE%^)
 echo.
 
 echo [2/6] Checking Node.js...
@@ -52,12 +70,19 @@ if exist "%~dp0.venv" (
     if not exist "%PROJECT_PYTHON%" (
         echo   [WARN] Existing .venv is not a Windows virtualenv. Recreating it.
         rmdir /s /q "%~dp0.venv"
+    ) else (
+        "%PROJECT_PYTHON%" -c "import sys; raise SystemExit(0 if (3, 10) <= sys.version_info < (3, 13) else 1)" >nul 2>&1
+        if errorlevel 1 (
+            echo   [WARN] Existing .venv uses an unsupported Python. Recreating it.
+            rmdir /s /q "%~dp0.venv"
+        )
     )
 )
 if not exist "%PROJECT_PYTHON%" (
-    python -m venv "%~dp0.venv"
+    "%PYTHON_EXE%" -m venv "%~dp0.venv"
     if errorlevel 1 (
-        echo   [ERROR] Failed to create .venv. Check your Python installation.
+        echo   [ERROR] Failed to create .venv with "%PYTHON_EXE%".
+        echo           If this is an embeddable Python, install a standard Python build.
         pause
         exit /b 1
     )
@@ -131,4 +156,31 @@ if errorlevel 1 (
     pause
     exit /b 1
 )
+exit /b 0
+
+:try_python
+if defined PYTHON_EXE exit /b 0
+set "WS_PY_PROBE=%TEMP%\white_salary_python_%RANDOM%_%RANDOM%.txt"
+"%~1" %~2 -c "import sys; assert (3, 10) <= sys.version_info < (3, 13); print(sys.executable)" >"%WS_PY_PROBE%" 2>nul
+if errorlevel 1 (
+    del /q "%WS_PY_PROBE%" >nul 2>&1
+    exit /b 0
+)
+set /p "PYTHON_EXE="<"%WS_PY_PROBE%"
+del /q "%WS_PY_PROBE%" >nul 2>&1
+if defined PYTHON_EXE set "PYTHON_SOURCE=%~3"
+exit /b 0
+
+:try_uv_python
+if defined PYTHON_EXE exit /b 0
+set "WS_UV_PROBE=%TEMP%\white_salary_uv_python_%RANDOM%_%RANDOM%.txt"
+call uv python find %~1 >"%WS_UV_PROBE%" 2>nul
+if errorlevel 1 (
+    del /q "%WS_UV_PROBE%" >nul 2>&1
+    exit /b 0
+)
+set "WS_UV_PYTHON="
+set /p "WS_UV_PYTHON="<"%WS_UV_PROBE%"
+del /q "%WS_UV_PROBE%" >nul 2>&1
+if defined WS_UV_PYTHON call :try_python "%WS_UV_PYTHON%" "" "uv-managed Python %~1"
 exit /b 0

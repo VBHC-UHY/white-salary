@@ -7,7 +7,9 @@
 所有实例都用 tmp_path 作数据目录，互不干扰、也不污染仓库。
 """
 
+import json
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 from white_salary.core.affinity.manager import AffinityManager, AffinityLevel
 
@@ -91,6 +93,18 @@ class TestFamilyImmunity:
         m.set_family(True)
         assert m.process_message("你这个傻逼") == []
 
+    def test_leaving_family_restores_previous_points(self, tmp_path) -> None:
+        m = _mgr(tmp_path)
+        m.set_points(42)
+
+        m.set_family(True)
+        m.set_family(False)
+
+        stats = m.get_stats()
+        assert stats["is_family"] is False
+        assert stats["points"] == 42.0
+        assert stats["level_value"] == AffinityLevel.FRIEND.value
+
 
 class TestKeywordDetection:
     """消息内容自动检测好感度变化。"""
@@ -107,12 +121,37 @@ class TestKeywordDetection:
         assert "insult" in triggered
         assert m.get_stats()["points"] < 0
 
+    def test_same_platform_event_is_applied_only_once(self, tmp_path) -> None:
+        m = _mgr(tmp_path)
+
+        assert m.process_event("你真聪明", ["qq:1001"])
+        first = m.get_stats()
+        assert not m.process_event("你真聪明", ["qq:1001"])
+        second = m.get_stats()
+
+        assert second["points"] == first["points"]
+        assert second["total_interactions"] == first["total_interactions"]
+
+    def test_merged_event_ids_are_all_remembered(self, tmp_path) -> None:
+        m = _mgr(tmp_path)
+
+        assert m.process_event("你好\n你真聪明", ["qq:1", "qq:2"])
+        assert not m.process_event("你真聪明", ["qq:2"])
+
     def test_whitelist_blocks_false_positive(self, tmp_path) -> None:
         """白名单短语命中时，跳过负面检测（"垃圾桶"含负面词"垃圾"但不该扣分）。"""
         m = _mgr(tmp_path)
         triggered = m.process_message("帮我把垃圾桶拿过来")
         assert "insult" not in triggered
         assert m.get_stats()["points"] == 0.0
+
+    def test_whitelist_only_masks_the_matching_phrase(self, tmp_path) -> None:
+        m = _mgr(tmp_path)
+
+        triggered = m.process_message("垃圾桶放这边，但你真是垃圾")
+
+        assert "insult" in triggered
+        assert m.get_stats()["points"] < 0
 
 
 class TestForget:
@@ -161,6 +200,27 @@ class TestMultiUser:
             assert AffinityManager.get_for_user("u_alpha", data_dir=str(tmp_path)) is alpha
         finally:
             AffinityManager._multi_user_cache.clear()
+
+    def test_same_user_in_different_data_dirs_is_isolated(self, tmp_path) -> None:
+        AffinityManager._multi_user_cache.clear()
+        first = AffinityManager.get_for_user("same", data_dir=str(tmp_path / "one"))
+        second = AffinityManager.get_for_user("same", data_dir=str(tmp_path / "two"))
+
+        first.set_points(25)
+
+        assert first is not second
+        assert second.get_stats()["points"] == 0.0
+
+    def test_concurrent_updates_are_not_lost_or_corrupted(self, tmp_path) -> None:
+        AffinityManager._multi_user_cache.clear()
+        manager = AffinityManager.get_for_user("parallel", data_dir=str(tmp_path))
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            list(pool.map(lambda _: manager.add_points(-1, "并发测试"), range(200)))
+
+        assert manager.get_stats()["points"] == -200.0
+        stored = json.loads(manager._data_path.read_text(encoding="utf-8"))
+        assert stored["points"] == -200.0
 
 
 class TestContextHint:

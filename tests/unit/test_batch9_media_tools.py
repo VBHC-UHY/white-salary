@@ -28,6 +28,8 @@ from white_salary.adapters.tools.registry import (
     ToolRegistry,
     get_tool_timeout,
 )
+from white_salary.adapters.tools.errors import ToolOutcomeUnknown
+from white_salary.core.interfaces.types import AudioData
 
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent
@@ -259,6 +261,173 @@ class TestQQSendFile:
 
         result = await qq_api_mod.qq_send_file(target="小明", file_path=str(f))
         assert "纯数字" in result
+
+
+class TestQQSendVoiceReceipt:
+    """语音发送只有拿到真实 message_id 才能报告成功。"""
+
+    @staticmethod
+    def _patch_tts(monkeypatch) -> None:
+        from white_salary.adapters.tts.gpt_sovits_adapter import GPTSoVITSAdapter
+
+        async def synthesize(self, text: str):
+            return AudioData(samples=b"RIFFfake", sample_rate=16000, dtype="int16")
+
+        monkeypatch.setattr(GPTSoVITSAdapter, "synthesize", synthesize)
+        monkeypatch.setattr(qq_api_mod, "_schedule_temp_cleanup", lambda path: None)
+
+    async def test_success_requires_message_id(self, tmp_path: Path, monkeypatch) -> None:
+        self._patch_tts(monkeypatch)
+        monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
+        adapter = FakeQQAdapter(api_result={"message_id": 321})
+        monkeypatch.setattr(qq_api_mod, "_qq_adapter", adapter)
+
+        result = await qq_api_mod.qq_send_voice(user_id="10086", text="你好")
+
+        assert result == "语音已发送"
+        assert adapter.calls[0][0] == "send_private_msg"
+
+    async def test_missing_receipt_is_unknown_not_success(
+        self,
+        tmp_path: Path,
+        monkeypatch,
+    ) -> None:
+        self._patch_tts(monkeypatch)
+        monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
+        adapter = FakeQQAdapter(api_result=None)
+        monkeypatch.setattr(qq_api_mod, "_qq_adapter", adapter)
+
+        with pytest.raises(ToolOutcomeUnknown, match="不要自动重发"):
+            await qq_api_mod.qq_send_voice(user_id="10086", text="你好")
+
+
+class TestQQSendExistingSticker:
+    """“发已有表情包”与“AI生成新图”必须是两条独立工具链。"""
+
+    class FakeStickerManager:
+        def __init__(self, path: Path | None) -> None:
+            self.path = path
+
+        def get_next(self):
+            return "1" if self.path else None
+
+        def get_path(self, sticker_id):
+            return self.path if sticker_id == "1" else None
+
+    async def test_group_send_uses_existing_file_and_real_receipt(
+        self,
+        tmp_path: Path,
+        monkeypatch,
+    ) -> None:
+        sticker = tmp_path / "sticker.png"
+        sticker.write_bytes(b"png")
+        adapter = FakeQQAdapter(api_result={"message_id": 456})
+        monkeypatch.setattr(qq_api_mod, "_qq_adapter", adapter)
+        monkeypatch.setattr(
+            qq_api_mod,
+            "_sticker_manager",
+            self.FakeStickerManager(sticker),
+        )
+        qq_api_mod.set_msg_context(group_id="7788", user_id="10086", is_group=True)
+
+        result = await qq_api_mod.qq_send_sticker()
+
+        assert result == "表情包已发送"
+        action, params = adapter.calls[0]
+        assert action == "send_group_msg"
+        assert params["group_id"] == 7788
+        assert params["message"][0]["type"] == "image"
+        assert params["message"][0]["data"]["file"] == sticker.resolve().as_uri()
+
+    async def test_missing_receipt_is_unknown_not_duplicate_retry(
+        self,
+        tmp_path: Path,
+        monkeypatch,
+    ) -> None:
+        sticker = tmp_path / "sticker.png"
+        sticker.write_bytes(b"png")
+        monkeypatch.setattr(qq_api_mod, "_qq_adapter", FakeQQAdapter(api_result=None))
+        monkeypatch.setattr(
+            qq_api_mod,
+            "_sticker_manager",
+            self.FakeStickerManager(sticker),
+        )
+
+        with pytest.raises(ToolOutcomeUnknown, match="不要自动重发"):
+            await qq_api_mod.qq_send_sticker(user_id="10086")
+
+    def test_tool_descriptions_keep_send_and_generate_separate(self) -> None:
+        registry = ToolRegistry()
+        send_tool = registry.get_tool("qq_send_sticker")
+        generate_tool = registry.get_tool("generate_sticker")
+
+        assert send_tool is not None and generate_tool is not None
+        assert "不生成图片" in send_tool.description
+        assert "全新的" in generate_tool.description
+        assert "qq_send_sticker" in generate_tool.description
+
+
+class TestQQSendImageReceipt:
+    """图片发送和语音/表情包一样，必须拿到真实QQ消息回执。"""
+
+    async def test_local_image_is_normalized_and_confirmed(
+        self,
+        tmp_path: Path,
+        monkeypatch,
+    ) -> None:
+        image = tmp_path / "generated.png"
+        image.write_bytes(b"png")
+        adapter = FakeQQAdapter(api_result={"message_id": 789})
+        monkeypatch.setattr(qq_api_mod, "_qq_adapter", adapter)
+        qq_api_mod.set_msg_context(group_id="", user_id="10086", is_group=False)
+
+        result = await qq_api_mod.qq_send_image(image_url=str(image))
+
+        assert result == "图片已发送"
+        action, params = adapter.calls[0]
+        assert action == "send_private_msg"
+        assert params["message"][0]["data"]["file"] == image.resolve().as_uri()
+
+    async def test_missing_receipt_is_unknown(self, monkeypatch) -> None:
+        monkeypatch.setattr(qq_api_mod, "_qq_adapter", FakeQQAdapter(api_result=None))
+
+        with pytest.raises(ToolOutcomeUnknown, match="不要自动重发"):
+            await qq_api_mod.qq_send_image(
+                user_id="10086",
+                image_url="https://example.test/image.png",
+            )
+
+
+class TestGeneratedImageQQDelivery:
+    async def test_qq_context_auto_sends_generated_image(
+        self,
+        tmp_path: Path,
+        monkeypatch,
+    ) -> None:
+        image = tmp_path / "generated.png"
+        image.write_bytes(b"png")
+
+        async def fake_generate(*args, **kwargs):
+            return str(image)
+
+        monkeypatch.setattr(
+            "white_salary.adapters.tools.image_gen.generate_image",
+            fake_generate,
+        )
+        adapter = FakeQQAdapter(api_result={"message_id": 800})
+        monkeypatch.setattr(qq_api_mod, "_qq_adapter", adapter)
+        qq_api_mod.set_msg_context(group_id="216", user_id="10086", is_group=True)
+
+        result = await media_mod.generate_image(prompt="月光下的白", send_qq="auto")
+
+        assert "已生成并发送到QQ" in result
+        assert adapter.calls[0][0] == "send_group_msg"
+        assert adapter.calls[0][1]["group_id"] == 216
+
+    def test_generation_tools_have_fallback_budget(self) -> None:
+        assert get_tool_timeout("generate_image") >= 360
+        assert get_tool_timeout("draw") >= 360
+        assert get_tool_timeout("generate_sticker") >= 360
 
 
 # ================================================================

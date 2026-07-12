@@ -9,6 +9,7 @@ white_salary/core/plugins/context.py
   - 所有返回值都是安全的副本
 """
 
+from contextvars import ContextVar, Token
 from typing import Any, Optional
 
 from loguru import logger
@@ -27,23 +28,30 @@ class PluginContext:
     """
 
     def __init__(self) -> None:
-        self._message_context: dict[str, Any] = {}
+        self._message_context: ContextVar[Optional[dict[str, Any]]] = ContextVar(
+            "white_salary_plugin_message_context",
+            default=None,
+        )
 
-    def set_message_context(self, metadata: Optional[dict[str, Any]]) -> None:
+    def set_message_context(self, metadata: Optional[dict[str, Any]]) -> Token:
         """设置当前消息的只读上下文，由 PluginManager 在调用钩子前注入。"""
-        self._message_context = dict(metadata or {})
+        return self._message_context.set(dict(metadata or {}))
+
+    def reset_message_context(self, token: Token) -> None:
+        """恢复调用前的上下文，支持嵌套调用且不会影响其他协程。"""
+        self._message_context.reset(token)
 
     def clear_message_context(self) -> None:
-        """清空当前消息上下文，避免跨消息串台。"""
-        self._message_context = {}
+        """清空当前协程的消息上下文，保留旧插件管理代码兼容性。"""
+        self._message_context.set(None)
 
     def get_message_context(self) -> dict[str, Any]:
         """获取当前消息上下文副本，如 platform/group_id/is_group 等。"""
-        return dict(self._message_context)
+        return dict(self._message_context.get() or {})
 
     def get_message_context_value(self, key: str, default: Any = None) -> Any:
         """读取单个消息上下文字段。"""
-        return self._message_context.get(key, default)
+        return (self._message_context.get() or {}).get(key, default)
 
     def get_bot_name(self) -> str:
         """获取bot名字。"""

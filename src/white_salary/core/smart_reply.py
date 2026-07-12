@@ -24,6 +24,8 @@ from typing import Optional
 
 from loguru import logger
 
+from white_salary.core.runtime.engagement import EngagementLeaseBook
+
 
 class ReplyDecision(Enum):
     REPLY = "reply"
@@ -87,12 +89,25 @@ def contains_wake_word(text: str, wake_words: Optional[list[str] | tuple[str, ..
     return False
 
 
+def normalize_group_ids(group_ids: Optional[list[str] | tuple[str, ...]]) -> list[str]:
+    """Normalize QQ group IDs for runtime/config comparisons."""
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for gid in group_ids or []:
+        text = str(gid or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        normalized.append(text)
+    return normalized
+
+
 class SmartReplyDecider:
     """
     智能回复决策器 — 支持对话延续。
 
     使用方式:
-        decider = SmartReplyDecider(bot_self_id="2997735486", bot_name="白")
+        decider = SmartReplyDecider(bot_self_id="123456789", bot_name="白")
         result = decider.decide(msg)
         if result.decision == ReplyDecision.REPLY:
             # 回复
@@ -110,11 +125,15 @@ class SmartReplyDecider:
         bot_name: str = "白",
         owner_ids: Optional[list[str]] = None,
         wake_words: Optional[list[str]] = None,
+        unblocked_group_ids: Optional[list[str]] = None,
+        engagement_leases: EngagementLeaseBook | None = None,
     ) -> None:
         self._bot_id = bot_self_id
         self._bot_name = bot_name
         self._owner_ids = set(owner_ids or [])
         self._wake_words = normalize_wake_words(wake_words, bot_name=bot_name)
+        self._unblocked_group_ids = set(normalize_group_ids(unblocked_group_ids))
+        self._engagement_leases = engagement_leases
 
         # 群级别状态
         self._group_msg_times: dict[str, list[float]] = {}
@@ -194,14 +213,18 @@ class SmartReplyDecider:
 
         # 检查群活跃状态
         group_last = self._group_last_reply.get(gid, 0)
-        is_group_active = (now - group_last) < self.ACTIVE_WINDOW
-
-        if not is_group_active:
-            # 群不活跃，需要唤醒词
-            return DecisionResult(ReplyDecision.IGNORE, 0.0, "群不活跃，需唤醒")
+        is_group_active = (
+            self._engagement_leases.is_candidate(self._conversation_key(gid), uid)
+            if self._engagement_leases is not None
+            else (now - group_last) < self.ACTIVE_WINDOW
+        )
+        is_manual_unblocked = gid in self._unblocked_group_ids
 
         # 连续没人理 → 闭嘴（优先于频率限制检查）
-        if self._ignored_count.get(gid, 0) >= self.MAX_IGNORED_REPLIES:
+        if (
+            self._engagement_leases is None
+            and self._ignored_count.get(gid, 0) >= self.MAX_IGNORED_REPLIES
+        ):
             return DecisionResult(ReplyDecision.IGNORE, 0.0, "连续没人理，闭嘴")
 
         # 频率限制
@@ -214,6 +237,8 @@ class SmartReplyDecider:
 
         score = 0.0
         reasons = []
+        if not is_group_active:
+            reasons.append("常规群消息，需语义判断")
 
         # 白刚回了这个人（30秒内），这个人接着说话 → 大概率是接着聊
         user_last_replied = self._bot_replied_to.get(gid, {}).get(uid, 0)
@@ -245,6 +270,21 @@ class SmartReplyDecider:
             score += 10.0
             reasons.append("媒体消息")
 
+        if is_manual_unblocked:
+            score += 35.0
+            reasons.append("本群手动不屏蔽")
+
+        if is_group_active:
+            score += 30.0
+            reasons.append("当前用户的活动窗口有效")
+
+        if (
+            self._engagement_leases is not None
+            and not is_group_active
+            and not is_manual_unblocked
+        ):
+            return DecisionResult(ReplyDecision.OBSERVE, score, "当前用户没有活动窗口")
+
         # 决策：活跃窗口内不再只靠关键词/分数硬回，返回 SEMANTIC_CHECK 让上层用
         # 最近上下文判断“是不是还在和白说话”。无检测模型时，上层可用 score 兜底。
         score = max(0, min(100, score))
@@ -254,8 +294,14 @@ class SmartReplyDecider:
         return DecisionResult(ReplyDecision.SEMANTIC_CHECK, score, reason)
 
     def record_reply(self, group_id: str, user_id: str = "") -> None:
-        """白回复了某个用户后调用。"""
+        """NapCat确认回复送达，或副作用工具确认完成后调用。"""
         now = time.time()
+
+        if self._engagement_leases is not None and user_id:
+            self._engagement_leases.confirm_delivery(
+                self._conversation_key(group_id),
+                user_id,
+            )
 
         # 刷新群活跃状态
         self._group_last_reply[group_id] = now
@@ -272,7 +318,9 @@ class SmartReplyDecider:
 
             # "没人理"计数：只在新一轮时+1（不是每条消息+1）
             prev_user = self._last_replied_user.get(group_id)
-            if not prev_user or prev_user == user_id:
+            if self._engagement_leases is not None:
+                self._ignored_count[group_id] = 0
+            elif not prev_user or prev_user == user_id:
                 # 连续回同一个人（或第一次回），等对方回应
                 self._ignored_count[group_id] = self._ignored_count.get(group_id, 0) + 1
             else:
@@ -293,9 +341,57 @@ class SmartReplyDecider:
             # 白回的那个人回应了 → 重置计数
             self._ignored_count[group_id] = 0
 
+    def record_relevant_followup(self, group_id: str, user_id: str) -> None:
+        """Renew only the addressed user's lease after semantic confirmation."""
+        if self._engagement_leases is not None:
+            self._engagement_leases.touch_relevant(
+                self._conversation_key(group_id),
+                user_id,
+            )
+
+    def record_unrelated_message(self, group_id: str, user_id: str) -> None:
+        """Cool only the unrelated user's lease, never the whole group."""
+        if self._engagement_leases is not None:
+            self._engagement_leases.mark_unrelated(
+                self._conversation_key(group_id),
+                user_id,
+            )
+
     def _on_user_triggered(self, group_id: str, user_id: str) -> None:
         """用户通过唤醒词/@触发了白。"""
         now = time.time()
         self._group_last_reply[group_id] = now  # 标记群即将活跃
         self._active_users.setdefault(group_id, {})[user_id] = now
         self._ignored_count[group_id] = 0  # 重置
+        if self._engagement_leases is not None:
+            self._engagement_leases.trigger(
+                self._conversation_key(group_id),
+                user_id,
+                "explicit_wake",
+            )
+
+    @staticmethod
+    def _conversation_key(group_id: str) -> str:
+        return f"qq:group:{str(group_id or '').strip()}"
+
+    def set_unblocked_groups(self, group_ids: Optional[list[str] | tuple[str, ...]]) -> None:
+        """Replace the manual per-group inactive-gate bypass list."""
+        self._unblocked_group_ids = set(normalize_group_ids(group_ids))
+
+    def set_group_unblocked(self, group_id: str, enabled: bool = True) -> None:
+        """Enable/disable manual inactive-gate bypass for a single group."""
+        gid = str(group_id or "").strip()
+        if not gid:
+            return
+        if enabled:
+            self._unblocked_group_ids.add(gid)
+        else:
+            self._unblocked_group_ids.discard(gid)
+
+    def is_group_unblocked(self, group_id: str) -> bool:
+        """Whether a group bypasses the inactive gate and goes to semantic check."""
+        return str(group_id or "").strip() in self._unblocked_group_ids
+
+    def list_unblocked_groups(self) -> list[str]:
+        """Return configured manual unblocked groups."""
+        return sorted(self._unblocked_group_ids)

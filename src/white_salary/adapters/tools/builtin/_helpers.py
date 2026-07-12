@@ -24,14 +24,33 @@ def P(**props):
     return {"type": "object", "properties": clean, "required": required}
 
 
-def tool(name, description, params=None):
-    """装饰器：标记一个async函数为工具。"""
+def tool(
+    name,
+    description,
+    params=None,
+    *,
+    platforms=(),
+    permission="",
+    service="",
+    side_effect=None,
+):
+    """Decorate an async function with tool metadata.
+
+    Older tools can omit the metadata. The registry applies a conservative
+    built-in policy while modules are migrated to explicit declarations.
+    """
     def decorator(func):
-        func._tool_def = {
+        definition = {
             "name": name,
             "description": description,
             "parameters": params or NONE_PARAMS,
             "handler": func,
+            "platforms": tuple(platforms),
+            "requires_permission": permission,
+            "requires_service": service,
         }
+        if side_effect is not None:
+            definition["side_effect"] = bool(side_effect)
+        func._tool_def = definition
         return func
     return decorator

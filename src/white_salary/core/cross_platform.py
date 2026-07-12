@@ -1,73 +1,184 @@
-"""
-white_salary/core/cross_platform.py
+"""Durable QQ/desktop bridge backed by the Agent Runtime outbox."""
 
-跨平台消息桥 — QQ和桌面端互通的消息队列。
+from __future__ import annotations
 
-场景：
-  - 用户在QQ说"在电脑上跟我说一声" → 消息推到桌面端WebSocket
-  - 用户在桌面端说"帮我在QQ给XX发消息" → 通过QQ API工具发送（已有）
-
-实现：
-  - 共享的消息队列（内存级别，不需要持久化）
-  - WebSocket handler定期检查队列
-  - QQ handler往队列里放消息
-"""
-
-import asyncio
-from collections import deque
-from typing import Optional
+from pathlib import Path
+from typing import Any
 
 from loguru import logger
 
+from white_salary.core.runtime.models import ChannelAddress, DeliveryRecord
+from white_salary.core.runtime.store import RuntimeStore
+
 
 class CrossPlatformBridge:
-    """跨平台消息桥（单例）。"""
+    """Process-wide bridge with backwards-compatible push/pop methods."""
 
+    DESKTOP_PLATFORM = "desktop_bridge"
+    QQ_PLATFORM = "qq_bridge"
     _instance = None
 
     def __new__(cls):
         if cls._instance is None:
-            cls._instance = super().__new__(cls)
-            cls._instance._desktop_queue = deque(maxlen=50)
-            cls._instance._qq_queue = deque(maxlen=50)
+            instance = super().__new__(cls)
+            instance._store = RuntimeStore(
+                Path.cwd() / "data" / "runtime" / "agent_runtime.db"
+            )
+            cls._instance = instance
         return cls._instance
 
-    def push_to_desktop(self, message: str, from_user: str = "",
-                        source: str = "qq") -> None:
-        """推消息到桌面端（下次WebSocket轮询时发出）。"""
-        self._desktop_queue.append({
-            "message": message,
-            "from_user": from_user,
-            "source": source,
-        })
-        logger.debug(f"[Bridge] → 桌面端: {message[:30]}")
+    @classmethod
+    def configure(cls, db_path: str | Path) -> "CrossPlatformBridge":
+        bridge = cls()
+        bridge._store = RuntimeStore(db_path)
+        return bridge
 
-    def pop_desktop_messages(self) -> list[dict]:
-        """取出所有待发到桌面端的消息（WebSocket handler调用）。"""
-        messages = list(self._desktop_queue)
-        self._desktop_queue.clear()
+    @property
+    def store(self) -> RuntimeStore:
+        return self._store
+
+    def push_to_desktop(
+        self,
+        message: str,
+        from_user: str = "",
+        source: str = "qq",
+    ) -> str:
+        delivery = self._store.enqueue_delivery(
+            ChannelAddress(platform=self.DESKTOP_PLATFORM, address="primary"),
+            {
+                "message": str(message),
+                "from_user": str(from_user),
+                "source": str(source),
+            },
+            conversation_key="bridge:desktop:primary",
+            replay_safe=False,
+        )
+        logger.debug(f"[Bridge] queued -> desktop: {str(message)[:30]}")
+        return delivery.id
+
+    def claim_desktop_messages(self, limit: int = 50) -> list[dict[str, Any]]:
+        records = self._store.claim_due_deliveries(
+            platform=self.DESKTOP_PLATFORM,
+            limit=limit,
+            lease_seconds=30.0,
+        )
+        return [self._to_message(record) for record in records]
+
+    def pop_desktop_messages(self) -> list[dict[str, Any]]:
+        """Legacy destructive pop; new consumers should claim and then ack."""
+        messages = self.claim_desktop_messages()
+        for message in messages:
+            self.ack_message(message, receipt={"mode": "legacy_pop"})
         return messages
 
-    def push_to_qq(self, message: str, target_id: str = "",
-                   is_group: bool = False) -> None:
-        """推消息到QQ端。"""
-        self._qq_queue.append({
-            "message": message,
-            "target_id": target_id,
-            "is_group": is_group,
-        })
-        logger.debug(f"[Bridge] → QQ: {message[:30]}")
+    def push_to_qq(
+        self,
+        message: str,
+        target_id: str = "",
+        is_group: bool = False,
+    ) -> str:
+        target_id = str(target_id or "").strip()
+        delivery = self._store.enqueue_delivery(
+            ChannelAddress(
+                platform=self.QQ_PLATFORM,
+                address=target_id,
+                is_group=bool(is_group),
+            ),
+            {
+                "message": str(message),
+                "target_id": target_id,
+                "is_group": bool(is_group),
+            },
+            conversation_key=(
+                f"bridge:qq:group:{target_id}"
+                if is_group
+                else f"bridge:qq:private:{target_id or 'default'}"
+            ),
+            replay_safe=False,
+        )
+        logger.debug(f"[Bridge] queued -> QQ: {str(message)[:30]}")
+        return delivery.id
 
-    def pop_qq_messages(self) -> list[dict]:
-        """取出所有待发到QQ的消息。"""
-        messages = list(self._qq_queue)
-        self._qq_queue.clear()
+    def claim_qq_messages(self, limit: int = 50) -> list[dict[str, Any]]:
+        records = self._store.claim_due_deliveries(
+            platform=self.QQ_PLATFORM,
+            limit=limit,
+            lease_seconds=30.0,
+        )
+        return [self._to_message(record) for record in records]
+
+    def pop_qq_messages(self) -> list[dict[str, Any]]:
+        """Legacy destructive pop; new consumers should claim and then ack."""
+        messages = self.claim_qq_messages()
+        for message in messages:
+            self.ack_message(message, receipt={"mode": "legacy_pop"})
         return messages
+
+    def ack_message(
+        self,
+        message_or_id: dict[str, Any] | str,
+        *,
+        receipt: dict[str, Any] | None = None,
+    ) -> None:
+        delivery_id = self._delivery_id(message_or_id)
+        if delivery_id:
+            self._store.mark_delivery_delivered(
+                delivery_id,
+                receipt or {"accepted": True},
+                claim_token=self._claim_token(message_or_id),
+            )
+
+    def retry_message(self, message_or_id: dict[str, Any] | str, error: str) -> None:
+        delivery_id = self._delivery_id(message_or_id)
+        if delivery_id:
+            self._store.mark_delivery_failed(
+                delivery_id,
+                error,
+                claim_token=self._claim_token(message_or_id),
+            )
+
+    def mark_message_unknown(self, message_or_id: dict[str, Any] | str, error: str) -> None:
+        delivery_id = self._delivery_id(message_or_id)
+        if delivery_id:
+            self._store.mark_delivery_unknown(
+                delivery_id,
+                error,
+                claim_token=self._claim_token(message_or_id),
+            )
+
+    def reject_message(self, message_or_id: dict[str, Any] | str, error: str) -> None:
+        delivery_id = self._delivery_id(message_or_id)
+        if delivery_id:
+            self._store.mark_delivery_permanently_failed(
+                delivery_id,
+                error,
+                claim_token=self._claim_token(message_or_id),
+            )
 
     @property
     def has_desktop_messages(self) -> bool:
-        return len(self._desktop_queue) > 0
+        return self._store.has_pending_deliveries(self.DESKTOP_PLATFORM)
 
     @property
     def has_qq_messages(self) -> bool:
-        return len(self._qq_queue) > 0
+        return self._store.has_pending_deliveries(self.QQ_PLATFORM)
+
+    @staticmethod
+    def _to_message(record: DeliveryRecord) -> dict[str, Any]:
+        message = dict(record.payload)
+        message["_delivery_id"] = record.id
+        message["_delivery_attempt"] = record.attempts
+        message["_delivery_claim_token"] = record.claim_token
+        return message
+
+    @staticmethod
+    def _delivery_id(message_or_id: dict[str, Any] | str) -> str:
+        if isinstance(message_or_id, dict):
+            return str(message_or_id.get("_delivery_id", ""))
+        return str(message_or_id or "")
+
+    @staticmethod
+    def _claim_token(message_or_id: dict[str, Any] | str) -> str:
+        if isinstance(message_or_id, dict):
+            return str(message_or_id.get("_delivery_claim_token", ""))
+        return ""

@@ -95,6 +95,26 @@ class _ContextEchoPlugin(Plugin):
         return f"{ctx.get('platform')}:{ctx.get('group_id')}"
 
 
+class _ConcurrentContextPlugin(Plugin):
+    """Force two hooks to overlap so shared message metadata would leak."""
+
+    meta = PluginMeta(name="concurrent_context", priority=PluginPriority.NORMAL)
+
+    def __init__(self) -> None:
+        self._arrived = 0
+        self._both_arrived = asyncio.Event()
+
+    async def on_message(self, text: str, user_id: str = "") -> Optional[str]:
+        self._arrived += 1
+        if self._arrived == 2:
+            self._both_arrived.set()
+        await self._both_arrived.wait()
+        if user_id == "u1":
+            await asyncio.sleep(0.02)
+        ctx = self.context.get_message_context()
+        return f"{user_id}:{ctx.get('platform')}:{ctx.get('group_id')}"
+
+
 class _ObserverOnlyPlugin(Plugin):
     """只观察消息，不抢答、不改写、不提供工具。"""
 
@@ -203,6 +223,28 @@ async def test_process_message_exposes_current_message_context() -> None:
     )
 
     assert result == "qq:g1"
+    assert plugin.context.get_message_context() == {}
+
+
+async def test_process_message_context_is_isolated_between_concurrent_calls() -> None:
+    plugin = _ConcurrentContextPlugin()
+    pm = _make_manager_with(plugin)
+
+    first, second = await asyncio.gather(
+        pm.process_message(
+            "first",
+            user_id="u1",
+            metadata={"platform": "qq", "group_id": "g1"},
+        ),
+        pm.process_message(
+            "second",
+            user_id="u2",
+            metadata={"platform": "desktop", "group_id": "g2"},
+        ),
+    )
+
+    assert first == "u1:qq:g1"
+    assert second == "u2:desktop:g2"
     assert plugin.context.get_message_context() == {}
 
 
