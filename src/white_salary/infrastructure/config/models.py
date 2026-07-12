@@ -26,7 +26,7 @@ class SystemConfig(BaseModel):
     控制项目名称、版本、调试模式等全局设置。
     """
     name: str = Field(default="White Salary", description="项目名称")
-    version: str = Field(default="0.1.7", description="版本号")
+    version: str = Field(default="0.1.8", description="版本号")
     debug: bool = Field(default=False, description="是否开启调试模式")
     log_level: str = Field(default="INFO", description="日志级别: DEBUG/INFO/WARNING/ERROR")
 
@@ -39,6 +39,10 @@ class ServerConfig(BaseModel):
     """
     host: str = Field(default="localhost", description="监听地址")
     port: int = Field(default=12400, ge=1, le=65535, description="端口号（1-65535）")
+    management_token: str = Field(
+        default="",
+        description="远程访问设置接口的令牌；localhost访问不需要",
+    )
     cors_enabled: bool = Field(default=True, description="是否允许跨域请求")
     cors_origins: list[str] = Field(
         default=["http://localhost:3000", "http://localhost:5173"],
@@ -221,6 +225,13 @@ class QQConfig(BaseModel):
         description=(
             "QQ端唤醒词列表；只影响QQ群聊回复判断，不影响桌面端。"
             "匹配时会自动允许前后空格和常见标点。"
+        ),
+    )
+    unblocked_group_ids: list[str] = Field(
+        default_factory=list,
+        description=(
+            "手动不屏蔽的QQ群号列表；这些群会提高语义续聊候选分，"
+            "但仍会进入语义判断，不影响桌面端。"
         ),
     )
     token: str = Field(default="", description="NapCat鉴权token")

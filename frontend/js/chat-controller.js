@@ -58,6 +58,10 @@ class ChatController {
         this._mediaRecorder = null;
         this._audioChunks = [];
         this._isRecording = false;
+        this._recordingRequested = false;
+        this._voiceRequestSeq = 0;
+        this._activeVoiceRequestId = null;
+        this._pendingVoiceRequests = new Set();
 
         // Voice message merging (accumulate multiple speech segments)
         this._voiceBuffer = [];          // Accumulated transcription texts
@@ -111,10 +115,19 @@ class ChatController {
 
         // Mic button: press and hold to record
         if (this.micBtn) {
-            this.micBtn.addEventListener('mousedown', () => this._startRecording());
-            this.micBtn.addEventListener('mouseup', () => this._stopRecording());
-            this.micBtn.addEventListener('mouseleave', () => {
-                if (this._isRecording) this._stopRecording();
+            this.micBtn.addEventListener('pointerdown', (event) => {
+                if (event.button !== undefined && event.button !== 0) return;
+                event.preventDefault();
+                try { this.micBtn.setPointerCapture(event.pointerId); } catch (e) { /* ignore */ }
+                this._startRecording();
+            });
+            this.micBtn.addEventListener('pointerup', (event) => {
+                event.preventDefault();
+                this._stopRecording();
+            });
+            this.micBtn.addEventListener('pointercancel', () => this._stopRecording());
+            this.micBtn.addEventListener('lostpointercapture', () => {
+                if (this._recordingRequested || this._isRecording) this._stopRecording();
             });
         }
 
@@ -261,6 +274,10 @@ class ChatController {
                 this._handleSentenceAudio(data.content, data.format || 'wav', data.index);
                 break;
 
+            case 'sentence_audio_skipped':
+                this._handleSentenceAudioSkipped(data.index, data.reason || 'unavailable');
+                break;
+
             case 'done':
                 // Full reply complete — always trust backend's text over local reconstruction
                 const finalText = data.content || this._fullReply;
@@ -275,7 +292,15 @@ class ChatController {
             // websocket_handler.py 确认从不发送该类型（协议漂移死代码）。
             case 'transcription':
                 // Voice input recognized text — buffer it, wait for more
-                this._handleTranscription(data.content);
+                this._handleTranscription(
+                    data.content,
+                    data.mode || 'continuous',
+                    data.request_id || null,
+                );
+                break;
+
+            case 'voice_status':
+                this._handleVoiceStatus(data.state || 'idle', data.request_id || null);
                 break;
 
             case 'emotion':
@@ -352,13 +377,14 @@ class ChatController {
     _handleSentence(text, index) {
         // Store sentence text, do NOT show subtitle yet (wait for audio sync)
         if (!this._sentences[index]) {
-            this._sentences[index] = { text, audio: null, played: false };
+            this._sentences[index] = { text, audio: null, audioSkipped: false, played: false };
         } else {
             this._sentences[index].text = text;
         }
 
         this._fullReply += text;
         console.log(`[Chat] Sentence ${index}: ${text.substring(0, 30)}...`);
+        this._tryPlayNext();
     }
 
     _handleSentenceAudio(base64Audio, format, index) {
@@ -375,9 +401,10 @@ class ChatController {
 
         // Store audio for this sentence
         if (!this._sentences[index]) {
-            this._sentences[index] = { text: '', audio: audioUrl, played: false };
+            this._sentences[index] = { text: '', audio: audioUrl, audioSkipped: false, played: false };
         } else {
             this._sentences[index].audio = audioUrl;
+            this._sentences[index].audioSkipped = false;
         }
 
         console.log(`[Chat] Audio ${index}: ${(bytes.length / 1024).toFixed(1)}KB`);
@@ -386,12 +413,33 @@ class ChatController {
         this._tryPlayNext();
     }
 
+    _handleSentenceAudioSkipped(index, reason) {
+        if (!this._sentences[index]) {
+            this._sentences[index] = {
+                text: '', audio: null, audioSkipped: true, played: false,
+            };
+        } else {
+            this._sentences[index].audioSkipped = true;
+        }
+        console.log(`[Chat] Audio ${index} skipped: ${reason}`);
+        this._tryPlayNext();
+    }
+
     _tryPlayNext() {
         // Already playing something, wait
         if (this._isPlaying) return;
 
-        // Check if next sentence has audio ready
-        const entry = this._sentences[this._nextPlayIndex];
+        // Explicitly skipped audio is a terminal state too. Advance the index
+        // so one failed TTS sentence cannot block every later sentence.
+        let entry = this._sentences[this._nextPlayIndex];
+        while (entry && entry.audioSkipped && !entry.played) {
+            if (!entry.text) return;
+            entry.played = true;
+            this._updateSubtitle(entry.text);
+            this._updateBubble(entry.text);
+            this._nextPlayIndex++;
+            entry = this._sentences[this._nextPlayIndex];
+        }
         if (!entry || !entry.audio || entry.played) return;
 
         // Play this sentence
@@ -681,7 +729,16 @@ class ChatController {
     // Voice Message Buffering & Merging
     // ================================================================
 
-    _handleTranscription(text) {
+    _handleTranscription(text, mode = 'continuous', requestId = null) {
+        if (
+            requestId
+            && this._activeVoiceRequestId
+            && requestId !== this._activeVoiceRequestId
+            && mode === 'push_to_talk'
+        ) {
+            console.debug(`[Voice] Ignoring stale push-to-talk result: ${requestId}`);
+            return;
+        }
         if (!text || !text.trim()) return;
 
         // Add to buffer
@@ -692,7 +749,19 @@ class ChatController {
         const accumulated = this._voiceBuffer.join(' ');
         this._updateSubtitle('🎤 ' + accumulated);
 
-        // Reset merge timer — wait 5 seconds for more speech
+        if (mode === 'push_to_talk') {
+            this._flushVoiceBuffer();
+            return;
+        }
+
+        this._scheduleVoiceBufferFlush();
+    }
+
+    _scheduleVoiceBufferFlush() {
+        if (this._voiceBuffer.length === 0 || this._pendingVoiceRequests.size > 0) return;
+
+        // Wait for a natural pause only after every queued ASR request has
+        // completed; otherwise a slow recognition call could lose later audio.
         if (this._voiceMergeTimer) {
             clearTimeout(this._voiceMergeTimer);
         }
@@ -1001,7 +1070,7 @@ class ChatController {
             const srcRate = this._listenAudioCtx ? this._listenAudioCtx.sampleRate : 48000;
             const blob = this._encodePcmChunksToWav(chunks, srcRate);
             if (blob && blob.size > 44) {
-                this._sendVoice(blob);
+                this._sendVoice(blob, 'continuous');
             }
         } catch (err) {
             console.error('[Listen] WAV encode failed:', err);
@@ -1103,16 +1172,19 @@ class ChatController {
     // ================================================================
 
     async _startRecording() {
-        if (this._isRecording) return;
+        if (this._isRecording || this._recordingRequested) return;
+        this._recordingRequested = true;
 
         let stream = null;
         let mimeType = '';
         try {
             if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                this._recordingRequested = false;
                 this._showSystemNotice('[语音] 当前环境不支持麦克风录音');
                 return;
             }
             if (!window.MediaRecorder) {
+                this._recordingRequested = false;
                 this._showSystemNotice('[语音] 当前环境不支持 MediaRecorder 录音');
                 return;
             }
@@ -1120,6 +1192,11 @@ class ChatController {
             stream = await navigator.mediaDevices.getUserMedia({
                 audio: { sampleRate: 16000, channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true }
             });
+
+            if (!this._recordingRequested) {
+                stream.getTracks().forEach(t => t.stop());
+                return;
+            }
 
             this._audioChunks = [];
             if (typeof MediaRecorder.isTypeSupported === 'function' && MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
@@ -1137,6 +1214,7 @@ class ChatController {
             this._mediaRecorder.onstop = async () => {
                 // Stop all tracks
                 stream.getTracks().forEach(t => t.stop());
+                this._mediaRecorder = null;
 
                 const totalSize = this._audioChunks.reduce((sum, chunk) => sum + chunk.size, 0);
                 if (this._audioChunks.length === 0 || totalSize < 256) {
@@ -1146,7 +1224,7 @@ class ChatController {
 
                 // Convert to wav and send
                 const blob = new Blob(this._audioChunks, { type: mimeType || 'audio/webm' });
-                await this._sendVoice(blob);
+                await this._sendVoice(blob, 'push_to_talk');
             };
 
             this._mediaRecorder.start(100); // Collect data every 100ms
@@ -1174,6 +1252,7 @@ class ChatController {
                 try { stream.getTracks().forEach(t => t.stop()); } catch (e) { /* ignore */ }
             }
             this._isRecording = false;
+            this._recordingRequested = false;
             this._mediaRecorder = null;
             if (this.micBtn) this.micBtn.classList.remove('recording');
             this._showSystemNotice(`[语音] 麦克风打开失败：${this._describeAudioInputError(err)}`);
@@ -1181,6 +1260,7 @@ class ChatController {
     }
 
     _stopRecording() {
+        this._recordingRequested = false;
         if (!this._isRecording || !this._mediaRecorder) return;
 
         if (this._mediaRecorder.state !== 'inactive') {
@@ -1192,12 +1272,13 @@ class ChatController {
         console.log('[Voice] Recording stopped');
     }
 
-    async _sendVoice(blob) {
+    async _sendVoice(blob, mode = 'push_to_talk') {
         if (!this.isConnected || !this.ws) {
             this._showSystemNotice('[语音] 后端未连接，语音没有发送');
             return;
         }
 
+        let requestId = null;
         try {
             // 2026-07-02 审计修复（批3）：原实现 btoa(String.fromCharCode(...bytes))
             // 用 spread 把每个字节当函数实参传入，长语音（持续监听2秒静默才收尾，
@@ -1219,16 +1300,56 @@ class ChatController {
             this._fullReply = '';
             this._replyDone = false;
 
+            requestId = `voice-${Date.now()}-${++this._voiceRequestSeq}`;
+            this._activeVoiceRequestId = requestId;
+            this._pendingVoiceRequests.add(requestId);
             this.ws.send(JSON.stringify({
                 type: 'voice',
                 content: base64,
+                mode,
+                request_id: requestId,
             }));
 
             console.log(`[Voice] Sent ${(blob.size / 1024).toFixed(1)}KB audio`);
         } catch (err) {
             // 失败不再只 console.error：只发聊天系统消息，不碰说话字幕。
             console.error('[Voice] Send failed:', err);
+            if (requestId) {
+                this._pendingVoiceRequests.delete(requestId);
+                if (this._activeVoiceRequestId === requestId) {
+                    this._activeVoiceRequestId = null;
+                }
+            }
+            this._handleVoiceStatus('error', requestId);
             this._showSystemNotice('[语音] 发送失败，请重试');
+        }
+    }
+
+    _handleVoiceStatus(state, requestId = null) {
+        const isBusyState = state === 'queued' || state === 'processing';
+        if (requestId) {
+            if (isBusyState) {
+                this._pendingVoiceRequests.add(requestId);
+                if (this._voiceMergeTimer) {
+                    clearTimeout(this._voiceMergeTimer);
+                    this._voiceMergeTimer = null;
+                }
+            } else {
+                this._pendingVoiceRequests.delete(requestId);
+            }
+        }
+        const isBusy = isBusyState || this._pendingVoiceRequests.size > 0;
+        if (this.micBtn) {
+            this.micBtn.classList.toggle('processing', isBusy);
+            this.micBtn.title = isBusy ? '正在识别' : '按住说话';
+        }
+        if (!isBusyState) {
+            if (!requestId || requestId === this._activeVoiceRequestId) {
+                this._activeVoiceRequestId = null;
+            }
+        }
+        if (!isBusy) {
+            this._scheduleVoiceBufferFlush();
         }
     }
 

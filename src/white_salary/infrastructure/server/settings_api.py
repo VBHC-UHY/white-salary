@@ -18,12 +18,15 @@ but accepted in full when writing.
 # 2026-07-02 审计修复（批2）：补 import json——github_read_file/github_write_file 直接调用
 # json.loads 但模块从未导入，此前一调用必抛 NameError（被 except 吞掉表现为"GitHub访问失败"）
 import json
+import hmac
+import ipaddress
+import os
 import socket
 from pathlib import Path
 from typing import Any
 
 import yaml
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from loguru import logger
 from pydantic import BaseModel
 
@@ -239,7 +242,46 @@ def create_settings_router(
     Returns:
         FastAPI APIRouter with settings endpoints
     """
-    router = APIRouter(prefix="/api/settings", tags=["settings"])
+    async def _require_management_access(request: Request) -> None:
+        """Allow local control-panel traffic; require a token for remote hosts."""
+
+        host = request.client.host if request.client else ""
+        try:
+            if ipaddress.ip_address(host).is_loopback:
+                return
+        except ValueError:
+            if host.lower() == "localhost":
+                return
+
+        token = os.getenv("WHITE_SALARY_MANAGEMENT_TOKEN", "").strip()
+        if not token:
+            for path in (project_root / "conf.yaml", project_root / "conf.default.yaml"):
+                if not path.exists():
+                    continue
+                try:
+                    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+                    configured = (data.get("server") or {}).get("management_token", "")
+                    if configured:
+                        token = str(configured).strip()
+                        break
+                except Exception:
+                    continue
+
+        supplied = request.headers.get("X-White-Salary-Token", "").strip()
+        auth = request.headers.get("Authorization", "")
+        if not supplied and auth.lower().startswith("bearer "):
+            supplied = auth[7:].strip()
+        if not token or not supplied or not hmac.compare_digest(token, supplied):
+            raise HTTPException(
+                status_code=403,
+                detail="远程设置接口已锁定；请配置并提供 management_token",
+            )
+
+    router = APIRouter(
+        prefix="/api/settings",
+        tags=["settings"],
+        dependencies=[Depends(_require_management_access)],
+    )
 
     # 2026-07-03 审计修复（批5）：运行实例容器（None 安全）
     _runtime: dict[str, Any] = runtime or {}
@@ -391,7 +433,27 @@ def create_settings_router(
                     existing = yaml.safe_load(f) or {}
             _deep_merge(existing, cleaned)  # _deep_merge 是原地修改语义：把 cleaned 合并进 existing
             _save_config(existing)
+
+            runtime_sync_notes: list[str] = []
+            cleaned_qq = cleaned.get("qq") if isinstance(cleaned.get("qq"), dict) else {}
+            if "unblocked_group_ids" in cleaned_qq:
+                decider = _get_runtime("qq_smart_reply_decider")
+                if decider is not None and hasattr(decider, "set_unblocked_groups"):
+                    try:
+                        qq_section = existing.get("qq") if isinstance(existing.get("qq"), dict) else {}
+                        decider.set_unblocked_groups(
+                            [str(gid) for gid in (qq_section.get("unblocked_group_ids") or [])]
+                        )
+                        runtime_sync_notes.append("QQ不屏蔽群列表已即时同步")
+                    except Exception as sync_err:
+                        logger.warning(f"[Settings] QQ不屏蔽群列表运行时同步失败: {sync_err}")
+
             logger.info("Settings saved to conf.yaml (deep-merged)")
+            if runtime_sync_notes:
+                return {
+                    "status": "ok",
+                    "message": "设置已保存，" + "；".join(runtime_sync_notes) + "，其余配置重启后生效",
+                }
             return {"status": "ok", "message": "设置已保存，重启后生效"}
         except Exception as e:
             logger.error(f"Failed to save settings: {e}")
@@ -670,7 +732,10 @@ def create_settings_router(
 
         # 好感度
         try:
-            aff = AffinityManager(data_dir=affinity_dir)
+            aff = AffinityManager.get_for_user(
+                _resolve_master_user_id(),
+                data_dir=affinity_dir,
+            )
             result["affinity"] = aff.get_stats()
         except Exception:
             result["affinity"] = {}
@@ -755,7 +820,10 @@ def create_settings_router(
     async def set_affinity_family(body: dict) -> dict:
         """设置/取消家人状态。"""
         from white_salary.core.affinity.manager import AffinityManager
-        aff = AffinityManager(data_dir=str(project_root / "data" / "affinity"))
+        aff = AffinityManager.get_for_user(
+            _resolve_master_user_id(),
+            data_dir=str(project_root / "data" / "affinity"),
+        )
         aff.set_family(body.get("is_family", False))
         return {"status": "ok", "is_family": body.get("is_family")}
 
@@ -763,7 +831,10 @@ def create_settings_router(
     async def set_affinity_points(body: dict) -> dict:
         """手动设置好感度积分。"""
         from white_salary.core.affinity.manager import AffinityManager
-        aff = AffinityManager(data_dir=str(project_root / "data" / "affinity"))
+        aff = AffinityManager.get_for_user(
+            _resolve_master_user_id(),
+            data_dir=str(project_root / "data" / "affinity"),
+        )
         pts = float(body.get("points", 0))
         aff.set_points(pts)
         return {"status": "ok", "points": pts}
@@ -1100,6 +1171,7 @@ def create_settings_router(
     async def clear_qq_context() -> dict:
         """清空QQ对话上下文。"""
         ctx_path = project_root / "data" / "qq" / "contexts.json"
+        legacy_short_term_path = project_root / "data" / "chat_history" / "qq_current.json"
         try:
             # 2026-07-03 审计修复（批5）：清空QQ上下文真生效（见 settings-align.json：
             # 原实现只把 contexts.json 写成 {}，运行中 QQContextManager._contexts
@@ -1138,8 +1210,24 @@ def create_settings_router(
             if ctx_path.exists():
                 ctx_path.write_text("{}", encoding="utf-8")
 
+            session_pool = _runtime_registry.get("qq_agent_sessions")
+            cleared_session_files = 0
+            if session_pool is not None and hasattr(session_pool, "clear_all"):
+                try:
+                    cleared_session_files = int(session_pool.clear_all())
+                except Exception as e:
+                    logger.warning(f"[Settings] 清空QQ会话短期记忆池失败: {e}")
+            if legacy_short_term_path.exists():
+                legacy_short_term_path.write_text("[]", encoding="utf-8")
+
             if cleared_runtime:
-                return {"status": "ok", "message": "QQ对话上下文已清空（运行实例+文件）"}
+                return {
+                    "status": "ok",
+                    "message": (
+                        "QQ运行实例与磁盘上下文已清空"
+                        f"（群上下文+{cleared_session_files}个会话短期记忆）"
+                    ),
+                }
             # 2026-07-03 面板升级（批6）：区分"未注入"与"清运行实例失败"两种降级
             if ctx_manager is not None:
                 return {
@@ -1369,20 +1457,10 @@ def create_settings_router(
 
     @router.post("/plugins/install-from-market")
     async def install_plugin(body: dict) -> dict:
-        """从市场安装插件。"""
+        """从市场安装插件；安装与执行授权是两个独立动作。"""
         plugin_id = body.get("plugin_id", "")
         market = _get_market()
-        result = await market.install(plugin_id)
-        # 2026-07-03 功能大项（批11）：安装成功后尝试热加载运行中的插件系统，
-        # 实现"装完即生效不用重启"；未注入运行实例时维持"重启生效"提示
-        if isinstance(result, dict) and result.get("success"):
-            hot = await _hot_load_plugin(plugin_id)
-            result["hot_loaded"] = hot
-            if hot:
-                result["message"] = f"{result.get('message', '已安装')}（已即时生效）"
-            else:
-                result["message"] = f"{result.get('message', '已安装')}（重启后端后生效）"
-        return result
+        return await market.install(plugin_id)
 
     @router.post("/plugins/uninstall")
     async def uninstall_plugin(body: dict) -> dict:
@@ -1430,10 +1508,37 @@ def create_settings_router(
     async def toggle_plugin(body: dict) -> dict:
         """启用/禁用插件。"""
         market = _get_market()
-        return market.toggle_plugin(
-            body.get("plugin_id", ""),
-            body.get("enabled", True),
-        )
+        plugin_id = body.get("plugin_id", "")
+        enabled = bool(body.get("enabled", True))
+        result = market.toggle_plugin(plugin_id, enabled)
+        if not result.get("success"):
+            return result
+
+        pm = _get_runtime("plugins")
+        if pm is None:
+            result["requires_restart"] = True
+            result["message"] = "设置已保存，重启后端后生效"
+            return result
+
+        if enabled:
+            hot = await _hot_load_plugin(plugin_id)
+            result["hot_loaded"] = hot
+            if not hot:
+                # A failed safety/load check must not become active on restart.
+                market.toggle_plugin(plugin_id, False)
+                return {
+                    "success": False,
+                    "enabled": False,
+                    "hot_loaded": False,
+                    "message": "插件未通过加载检查，已保持禁用；请查看后端日志",
+                }
+            result["message"] = "插件已启用并即时生效"
+            return result
+
+        hot = await _hot_unload_plugin(plugin_id)
+        result["hot_unloaded"] = hot
+        result["message"] = "插件已禁用" if hot else "插件已禁用（当前未在运行）"
+        return result
 
     @router.get("/plugins/{plugin_id}/code")
     async def get_plugin_code(plugin_id: str) -> dict:
@@ -2201,6 +2306,122 @@ def create_settings_router(
         except Exception as e:
             logger.warning(f"[VoiceClone] 读取 tts_infer.yaml 失败: {e}")
             return {"available": False, "error": f"读取推理配置失败: {e}"}
+
+    def _get_cloud_voice_client():
+        """Build a SiliconFlow voice client from the effective project config."""
+        from white_salary.adapters.tools.cloud_config import resolve_siliconflow_api_key
+        from white_salary.adapters.tts.siliconflow_voice import SiliconFlowVoiceClient
+
+        config = _load_config()
+        tts = config.get("tts") if isinstance(config.get("tts"), dict) else {}
+        api_key = resolve_siliconflow_api_key(
+            config,
+            explicit=str(tts.get("fallback_api_key") or ""),
+        )
+        return SiliconFlowVoiceClient(api_key=api_key)
+
+    def _select_cloud_voice(uri: str, model: str) -> None:
+        """Persist a custom voice URI without flattening default config into conf.yaml."""
+        if not str(uri).startswith("speech:"):
+            raise ValueError("云端音色ID必须以 speech: 开头")
+        existing: dict[str, Any] = {}
+        if conf_path.exists():
+            existing = yaml.safe_load(conf_path.read_text(encoding="utf-8")) or {}
+        tts = existing.setdefault("tts", {})
+        if not isinstance(tts, dict):
+            tts = {}
+            existing["tts"] = tts
+        tts.update({
+            "fallback_provider": "siliconflow",
+            "fallback_model": str(model or "FunAudioLLM/CosyVoice2-0.5B"),
+            "fallback_voice": str(uri),
+        })
+        _save_config(existing)
+
+    @router.get("/voice-clone/cloud")
+    async def get_cloud_voices() -> dict:
+        """List account-owned cloud voices and the voice selected by this project."""
+        try:
+            client = _get_cloud_voice_client()
+            voices = await client.list()
+            config = _load_config()
+            tts = config.get("tts") if isinstance(config.get("tts"), dict) else {}
+            return {
+                "ok": True,
+                "voices": voices,
+                "selected": str(tts.get("fallback_voice") or ""),
+                "model": str(tts.get("fallback_model") or "FunAudioLLM/CosyVoice2-0.5B"),
+            }
+        except Exception as exc:
+            return {"ok": False, "voices": [], "selected": "", "message": str(exc)}
+
+    @router.post("/voice-clone/cloud/upload")
+    async def upload_cloud_voice(body: dict | None = None) -> dict:
+        """Upload a short reference clip, then select the returned custom voice URI."""
+        body = body or {}
+        raw_audio_path = str(body.get("audio_path") or "").strip()
+        candidate = Path(raw_audio_path)
+        if not candidate.is_absolute():
+            candidate = project_root / candidate
+        candidate = candidate.resolve(strict=False)
+        try:
+            candidate.relative_to(project_root.resolve(strict=False))
+        except ValueError:
+            return {
+                "ok": False,
+                "message": "云端上传只读取项目目录内的参考音频；请先点选择音频上传到临时目录",
+            }
+
+        try:
+            client = _get_cloud_voice_client()
+            model = str(body.get("model") or "FunAudioLLM/CosyVoice2-0.5B")
+            result = await client.upload(
+                audio_path=candidate,
+                text=str(body.get("text") or ""),
+                custom_name=str(body.get("custom_name") or "white_salary"),
+                model=model,
+            )
+            _select_cloud_voice(str(result["uri"]), model)
+            return {
+                "ok": True,
+                **result,
+                "message": "云端音色已创建并设为本地TTS不可用时的兜底音色，重启后端生效",
+            }
+        except Exception as exc:
+            logger.warning(f"[VoiceClone] 云端音色上传失败: {exc}")
+            return {"ok": False, "message": str(exc)}
+
+    @router.post("/voice-clone/cloud/use")
+    async def use_cloud_voice(body: dict | None = None) -> dict:
+        """Select an existing account-owned cloud voice for fallback synthesis."""
+        body = body or {}
+        try:
+            uri = str(body.get("uri") or "").strip()
+            model = str(body.get("model") or "FunAudioLLM/CosyVoice2-0.5B")
+            _select_cloud_voice(uri, model)
+            return {"ok": True, "selected": uri, "message": "云端兜底音色已保存，重启后端生效"}
+        except Exception as exc:
+            return {"ok": False, "message": str(exc)}
+
+    @router.post("/voice-clone/cloud/delete")
+    async def delete_cloud_voice(body: dict | None = None) -> dict:
+        """Delete an account-owned cloud voice, resetting the fallback if it was selected."""
+        body = body or {}
+        uri = str(body.get("uri") or "").strip()
+        try:
+            client = _get_cloud_voice_client()
+            await client.delete(uri)
+            config = _load_config()
+            tts = config.get("tts") if isinstance(config.get("tts"), dict) else {}
+            if str(tts.get("fallback_voice") or "") == uri:
+                existing = yaml.safe_load(conf_path.read_text(encoding="utf-8")) or {} if conf_path.exists() else {}
+                raw_tts = existing.setdefault("tts", {})
+                if isinstance(raw_tts, dict):
+                    raw_tts["fallback_voice"] = "FunAudioLLM/CosyVoice2-0.5B:anna"
+                _save_config(existing)
+            return {"ok": True, "message": "云端音色已删除"}
+        except Exception as exc:
+            return {"ok": False, "message": str(exc)}
 
     # ================================================================
     # 2026-07-03 功能大项（批11二波）：声音一键训练

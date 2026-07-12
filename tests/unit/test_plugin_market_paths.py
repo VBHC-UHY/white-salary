@@ -123,6 +123,83 @@ def test_uninstall_supports_community_and_protects_builtin_paths(tmp_path: Path)
     assert builtin_dir.exists()
 
 
+def test_market_rejects_traversal_ids_without_touching_outside_files(tmp_path: Path) -> None:
+    plugins_dir = tmp_path / "plugins"
+    plugins_dir.mkdir()
+    victim = tmp_path / "victim.py"
+    victim.write_text("keep", encoding="utf-8")
+    market = PluginMarket(plugins_dir=str(plugins_dir), cache_dir=str(tmp_path / "cache"))
+
+    result = market.uninstall("../victim")
+
+    assert result["success"] is False
+    assert victim.read_text(encoding="utf-8") == "keep"
+    assert market.get_plugin_code("..\\victim")["success"] is False
+
+
+@pytest.mark.asyncio
+async def test_market_install_is_atomic_and_disabled_by_default(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plugin_code = (
+        "from white_salary.core.plugins.base import Plugin, PluginMeta\n"
+        "class RemotePlugin(Plugin):\n"
+        "    meta = PluginMeta(name='remote_demo')\n"
+    )
+
+    class _Response:
+        def __init__(self, *, status: int = 200, text: str = "", data=None) -> None:
+            self.status = status
+            self._text = text
+            self._data = data
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def text(self):
+            return self._text
+
+        async def json(self):
+            return self._data
+
+        async def read(self):
+            return self._text.encode("utf-8")
+
+    class _Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        def get(self, url: str, **kwargs):
+            if url.endswith("/plugin.py"):
+                return _Response(text=plugin_code)
+            if url.endswith("/config.json"):
+                return _Response(data={"id": "remote_demo", "roles": ["tool_provider"]})
+            return _Response(status=404)
+
+    monkeypatch.setattr("white_salary.core.plugins.market.aiohttp.ClientSession", _Session)
+    market = PluginMarket(
+        plugins_dir=str(tmp_path / "plugins"),
+        cache_dir=str(tmp_path / "cache"),
+    )
+
+    result = await market.install("remote_demo")
+
+    plugin_dir = tmp_path / "plugins" / "community" / "remote_demo"
+    config = json.loads((plugin_dir / "config.json").read_text(encoding="utf-8"))
+    assert result["success"] is True
+    assert result["enabled"] is False
+    assert config["enabled"] is False
+    assert config["trust_level"] == "community"
+    assert not list((tmp_path / "plugins" / "community").glob(".install-*"))
+
+
 @pytest.mark.asyncio
 async def test_sync_to_github_uploads_declared_assets(
     tmp_path: Path,

@@ -166,6 +166,12 @@ def main() -> None:
     from white_salary.infrastructure.config import load_config
 
     project_root = Path(__file__).parent
+    from white_salary.core.cross_platform import CrossPlatformBridge
+    from white_salary.core.runtime import RuntimeStore
+
+    runtime_db_path = project_root / "data" / "runtime" / "agent_runtime.db"
+    CrossPlatformBridge.configure(runtime_db_path)
+    runtime_store = RuntimeStore(runtime_db_path)
     config = load_config(project_root=project_root)
 
     # 命令行参数覆盖配置文件
@@ -320,6 +326,7 @@ def main() -> None:
     # 运行实例注册表（键 'plugins'）——两个消息处理器（qq_handler/websocket_handler）
     # 与设置面板的"重载插件/装完即生效"端点都经此取用运行中的同一实例。
     from white_salary.infrastructure.server.settings_api import register_runtime_instance
+    register_runtime_instance("runtime_store", runtime_store)
     try:
         from white_salary.core.plugins.manager import PluginManager
         plugin_manager = PluginManager(plugins_dir="plugins")
@@ -471,6 +478,7 @@ def main() -> None:
     # 用 getter 延迟解析 settings_api 的模块级注册表（注册逻辑见下方 QQ 启动段）。
     runtime_instances: dict = {
         "desktop_agent": agent,
+        "runtime_store": runtime_store,
         "user_learning": user_learning,
         "memory_manager": memory_manager,
         "qq_context_manager_getter": lambda: get_runtime_instance("qq_context_manager"),
@@ -529,6 +537,7 @@ def main() -> None:
         await handle_chat_websocket(
             websocket, agent, tts=tts_adapter, asr=asr_adapter,
             vision=vision_adapter, user_learning=user_learning,
+            runtime_store=runtime_store,
         )
 
     # 2026-07-02 审计修复（批1）：LLM 通道启动自检。
@@ -615,6 +624,13 @@ def main() -> None:
             # 2026-07-03 面板升级（批6）：内容过滤开关接活（与桌面端同一开关）
             content_filter_enabled=config.features.content_filter,
         )
+        from white_salary.core.agent.session_pool import ChatAgentSessionPool
+        qq_agent_sessions = ChatAgentSessionPool(
+            qq_agent,
+            project_root / "data" / "chat_history" / "qq_sessions",
+            max_turns=config.memory.short_term_max_turns,
+        )
+        register_runtime_instance("qq_agent_sessions", qq_agent_sessions)
         _qq_llm_name = "postprocess" if postprocess_llm else ("background" if background_llm else "main")
         logger.info(f"QQ: 使用独立LLM通道 ({_qq_llm_name})")
 
@@ -632,7 +648,11 @@ def main() -> None:
                 asr_adapter=asr_adapter,
                 vision_adapter=vision_adapter,
                 wake_words=qq_conf.wake_words,
+                unblocked_group_ids=qq_conf.unblocked_group_ids,
                 continuation_llm=detect_llm,
+                project_root=project_root,
+                agent_sessions=qq_agent_sessions,
+                runtime_store=runtime_store,
                 # 2026-07-03 面板升级（批6）：功能开关下发（topic_tracker/rest_system
                 # 在 qq_handler 内消费；user_learning=false 时上面传入的已是 None）
                 features=config.features,

@@ -273,6 +273,10 @@ class QQAdapter:
         # 群消息记录回调：所有群消息都调（不管回不回复），用于记录上下文
         # def recorder(group_id: str, sender_name: str, text: str) -> None
         self.on_group_record: Optional[Callable] = None
+        # 回复获得NapCat message_id后通知上层；生成成功但发送失败不算已回复。
+        self.on_reply_delivered: Optional[Callable] = None
+        # 回复未取得message_id时通知上层；用于把任务标成待核对而非假成功。
+        self.on_reply_failed: Optional[Callable] = None
 
         # API响应等待（echo → Future，用于拿message_id）
         self._pending_api: dict[str, asyncio.Future] = {}
@@ -487,6 +491,7 @@ class QQAdapter:
                 if reply:
                     await self.send_reply(msg, reply)
             except Exception as e:
+                await self._notify_reply_failed(msg, str(e))
                 logger.error(f"[QQ] 消息处理失败: {e}")
 
     # ================================================================
@@ -882,6 +887,11 @@ class QQAdapter:
                 msg_id = await self.send_private_message(original.user_id, text)
             if msg_id:
                 await self._auto_recall(msg_id, text, original)
+            else:
+                await self._notify_reply_failed(
+                    original,
+                    "NapCat returned no message_id for abnormal reply",
+                )
             return msg_id or 0
 
         # 引用原消息
@@ -938,7 +948,36 @@ class QQAdapter:
             if i < len(segments) - 1:
                 await asyncio.sleep(random.uniform(0.8, 1.5))
 
+        if first_msg_id:
+            await self._notify_reply_delivered(original, first_msg_id)
+        else:
+            await self._notify_reply_failed(
+                original,
+                "NapCat returned no message_id; delivery outcome is ambiguous",
+            )
         return first_msg_id
+
+    async def _notify_reply_delivered(self, original: QQMessage, message_id: int) -> None:
+        callback = self.on_reply_delivered
+        if callback is None:
+            return
+        try:
+            result = callback(original, message_id)
+            if asyncio.iscoroutine(result):
+                await result
+        except Exception as e:
+            logger.warning(f"[QQ] 回复送达回调失败（消息已成功发送）: {e}")
+
+    async def _notify_reply_failed(self, original: QQMessage, error: str) -> None:
+        callback = self.on_reply_failed
+        if callback is None:
+            return
+        try:
+            result = callback(original, error)
+            if asyncio.iscoroutine(result):
+                await result
+        except Exception as exc:
+            logger.warning(f"[QQ] 回复失败回调异常: {exc}")
 
     @staticmethod
     def _split_message(text: str) -> list[str]:

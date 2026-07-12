@@ -5,7 +5,26 @@
  * and service status monitoring.
  */
 
-const API_BASE = new URLSearchParams(window.location.search).get('api') || 'http://localhost:12400';
+const _settingsParams = new URLSearchParams(window.location.search);
+const API_BASE = _settingsParams.get('api') || 'http://localhost:12400';
+const _queryManagementToken = _settingsParams.get('token') || '';
+if (_queryManagementToken) {
+    sessionStorage.setItem('white_salary_management_token', _queryManagementToken);
+    _settingsParams.delete('token');
+    const cleanQuery = _settingsParams.toString();
+    history.replaceState(null, '', `${window.location.pathname}${cleanQuery ? `?${cleanQuery}` : ''}${window.location.hash}`);
+}
+const _managementToken = sessionStorage.getItem('white_salary_management_token') || '';
+const _nativeFetch = window.fetch.bind(window);
+window.fetch = (input, init = {}) => {
+    const url = typeof input === 'string' ? input : (input && input.url) || '';
+    if (!_managementToken || !url.startsWith(`${API_BASE}/api/settings`)) {
+        return _nativeFetch(input, init);
+    }
+    const headers = new Headers(init.headers || (input instanceof Request ? input.headers : undefined));
+    headers.set('X-White-Salary-Token', _managementToken);
+    return _nativeFetch(input, {...init, headers});
+};
 let currentSettings = {};
 let _cachedProviders = null;
 
@@ -148,6 +167,7 @@ function populateForm(s) {
     setVal('qq-ws-url', s.qq?.ws_url || 'ws://127.0.0.1:3001');
     setVal('qq-bot-name', s.qq?.bot_name || '白');
     setVal('qq-wake-words', (s.qq?.wake_words || ['白']).join('\n'));
+    setVal('qq-unblocked-group-ids', (s.qq?.unblocked_group_ids || []).join('\n'));
     setVal('qq-token', s.qq?.token || '');
     // 家人QQ号列表
     window._familyQQList = (s.qq?.family_qq || []).map(String);
@@ -339,6 +359,10 @@ async function saveAllSettings() {
             ws_url: getVal('qq-ws-url'),
             bot_name: getVal('qq-bot-name'),
             wake_words: getVal('qq-wake-words')
+                .split(/[\n,，]+/)
+                .map(s => s.trim())
+                .filter(Boolean),
+            unblocked_group_ids: getVal('qq-unblocked-group-ids')
                 .split(/[\n,，]+/)
                 .map(s => s.trim())
                 .filter(Boolean),
@@ -2937,7 +2961,11 @@ document.addEventListener("DOMContentLoaded", function() {
             }
             // 2026-07-03 面板升级（批6）：新增切tab动态加载——声音克隆状态卡、
             // 关于页动态信息、表情动作页映射/表情池（均为批6新端点）
-            if (tab === "voice_clone") { loadVoiceCloneStatus(); refreshVoiceTrainStatus(); }
+            if (tab === "voice_clone") {
+                loadVoiceCloneStatus();
+                refreshCloudVoices();
+                refreshVoiceTrainStatus();
+            }
             if (tab === "about") loadAbout();
             if (tab === "expressions") initExpressionMapping();
         });
@@ -3117,6 +3145,145 @@ async function loadVoiceCloneStatus() {
         `;
     } catch (e) {
         container.innerHTML = '<div class="about-row"><span>状态</span><span style="color:#e74c3c;">无法连接后端</span></div>';
+    }
+}
+
+async function uploadCloudReferenceAudio(input) {
+    const statusEl = document.getElementById('vc-cloud-status');
+    const file = input.files && input.files[0];
+    if (!file) return;
+    if (statusEl) statusEl.textContent = '正在上传参考音频到本机临时目录...';
+    try {
+        const fd = new FormData();
+        fd.append('file', file);
+        const resp = await fetch(`${API_BASE}/api/settings/upload-temp`, {
+            method: 'POST',
+            body: fd,
+        });
+        const data = await resp.json();
+        if (!data.success || !data.path) throw new Error(data.message || '上传失败');
+        const refInput = document.getElementById('vc-ref-audio');
+        const ttsInput = document.getElementById('tts-ref-audio');
+        if (refInput) refInput.value = data.path;
+        if (ttsInput) ttsInput.value = data.path;
+        if (statusEl) statusEl.textContent = '参考音频已放入本机临时目录，可以创建云端音色。';
+    } catch (error) {
+        if (statusEl) statusEl.textContent = `参考音频上传失败：${error.message || error}`;
+    } finally {
+        input.value = '';
+    }
+}
+
+async function refreshCloudVoices() {
+    const select = document.getElementById('vc-cloud-voice-list');
+    const statusEl = document.getElementById('vc-cloud-status');
+    if (!select) return;
+    try {
+        const resp = await fetch(`${API_BASE}/api/settings/voice-clone/cloud`);
+        const data = await resp.json();
+        if (!data.ok) {
+            select.innerHTML = '<option value="">暂无可用云端音色</option>';
+            if (statusEl) statusEl.textContent = data.message || '云端音色不可用';
+            return;
+        }
+        const voices = Array.isArray(data.voices) ? data.voices : [];
+        select.innerHTML = voices.length
+            ? voices.map((voice) => {
+                const uri = String(voice.uri || '');
+                const name = String(voice.customName || uri);
+                const selected = uri === data.selected ? ' selected' : '';
+                return `<option value="${escapeHtml(uri)}" data-model="${escapeHtml(String(voice.model || data.model || ''))}"${selected}>${escapeHtml(name)}</option>`;
+            }).join('')
+            : '<option value="">账户中还没有自定义音色</option>';
+        if (statusEl) {
+            statusEl.textContent = data.selected && String(data.selected).startsWith('speech:')
+                ? '当前已使用自定义云端音色作为本地TTS不可用时的兜底。'
+                : '当前云端兜底使用预置音色。';
+        }
+    } catch (error) {
+        if (statusEl) statusEl.textContent = '读取云端音色失败：无法连接后端';
+    }
+}
+
+async function uploadCloudVoice() {
+    const audioPath = (document.getElementById('vc-ref-audio') || {}).value || '';
+    const text = (document.getElementById('vc-ref-text') || {}).value || '';
+    const customName = (document.getElementById('vc-cloud-name') || {}).value || '';
+    const statusEl = document.getElementById('vc-cloud-status');
+    const button = document.getElementById('vc-cloud-upload-btn');
+    if (!audioPath.trim() || !text.trim() || !customName.trim()) {
+        if (statusEl) statusEl.textContent = '请先填写音色名称、参考音频路径和参考音频文字。';
+        return;
+    }
+    if (!confirm('将这段短参考音频上传到硅基流动并创建云端音色？')) return;
+    if (button) button.disabled = true;
+    if (statusEl) statusEl.textContent = '正在创建云端音色...';
+    try {
+        const resp = await fetch(`${API_BASE}/api/settings/voice-clone/cloud/upload`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                audio_path: audioPath.trim(),
+                text: text.trim(),
+                custom_name: customName.trim(),
+                model: 'FunAudioLLM/CosyVoice2-0.5B',
+            }),
+        });
+        const data = await resp.json();
+        if (!data.ok) throw new Error(data.message || '创建失败');
+        const fallbackVoice = document.getElementById('tts-fallback-voice');
+        if (fallbackVoice) fallbackVoice.value = data.uri || '';
+        if (statusEl) statusEl.textContent = data.message || '云端音色已创建';
+        await refreshCloudVoices();
+    } catch (error) {
+        if (statusEl) statusEl.textContent = `创建云端音色失败：${error.message || error}`;
+    } finally {
+        if (button) button.disabled = false;
+    }
+}
+
+async function useSelectedCloudVoice() {
+    const select = document.getElementById('vc-cloud-voice-list');
+    const statusEl = document.getElementById('vc-cloud-status');
+    const option = select && select.options[select.selectedIndex];
+    const uri = select ? select.value : '';
+    if (!uri) return;
+    try {
+        const resp = await fetch(`${API_BASE}/api/settings/voice-clone/cloud/use`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                uri,
+                model: (option && option.dataset.model) || 'FunAudioLLM/CosyVoice2-0.5B',
+            }),
+        });
+        const data = await resp.json();
+        if (!data.ok) throw new Error(data.message || '保存失败');
+        const fallbackVoice = document.getElementById('tts-fallback-voice');
+        if (fallbackVoice) fallbackVoice.value = uri;
+        if (statusEl) statusEl.textContent = data.message || '云端音色已选择';
+    } catch (error) {
+        if (statusEl) statusEl.textContent = `选择云端音色失败：${error.message || error}`;
+    }
+}
+
+async function deleteSelectedCloudVoice() {
+    const select = document.getElementById('vc-cloud-voice-list');
+    const statusEl = document.getElementById('vc-cloud-status');
+    const uri = select ? select.value : '';
+    if (!uri || !confirm('删除这个云端音色？此操作会影响使用同一音色ID的客户端。')) return;
+    try {
+        const resp = await fetch(`${API_BASE}/api/settings/voice-clone/cloud/delete`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ uri }),
+        });
+        const data = await resp.json();
+        if (!data.ok) throw new Error(data.message || '删除失败');
+        if (statusEl) statusEl.textContent = data.message || '云端音色已删除';
+        await refreshCloudVoices();
+    } catch (error) {
+        if (statusEl) statusEl.textContent = `删除云端音色失败：${error.message || error}`;
     }
 }
 

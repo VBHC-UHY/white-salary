@@ -9,6 +9,7 @@ QQ链路稳定性修复的单元测试（2026-07-02 审计修复（批4））。
 """
 
 import asyncio
+import json
 import time
 from types import SimpleNamespace
 
@@ -16,7 +17,10 @@ from white_salary.adapters.platform.qq_adapter import QQAdapter, QQMessage
 from white_salary.core.interfaces.types import Message, MessageRole
 from white_salary.core.services.qzone_monitor import QzoneMonitor
 from white_salary.infrastructure.server.qq_handler import (
+    QQContextManager,
+    _compose_decision_raw_part,
     _expected_memory_tag,
+    _record_silent_tool_completion,
     _transcribe_qq_voice,
     _undo_generation_pair,
 )
@@ -61,6 +65,54 @@ class TestReconnectBackoff:
         assert QQAdapter._should_log_reconnect(20)
         assert QQAdapter._should_log_reconnect(30)
         assert not QQAdapter._should_log_reconnect(21)
+
+
+class TestReplyDeliveryReceipt:
+    def test_callback_runs_only_after_real_message_id(self) -> None:
+        adapter = QQAdapter()
+        delivered: list[int] = []
+        original = QQMessage({
+            "message_type": "private",
+            "user_id": "10001",
+            "message_id": 5,
+            "raw_message": "hello",
+        })
+
+        async def send_private(user_id: str, text: str, reply_to_user: str = "") -> int:
+            return 42
+
+        async def on_delivered(msg: QQMessage, message_id: int) -> None:
+            delivered.append(message_id)
+
+        adapter.send_private_message = send_private  # type: ignore[method-assign]
+        adapter.on_reply_delivered = on_delivered
+        result = asyncio.run(adapter.send_reply(original, "reply"))
+
+        assert result == 42
+        assert delivered == [42]
+
+    def test_callback_does_not_run_when_send_has_no_receipt(self) -> None:
+        adapter = QQAdapter()
+        delivered: list[int] = []
+        failures: list[str] = []
+        original = QQMessage({
+            "message_type": "private",
+            "user_id": "10001",
+            "raw_message": "hello",
+        })
+
+        async def send_private(user_id: str, text: str, reply_to_user: str = "") -> int:
+            return 0
+
+        adapter.send_private_message = send_private  # type: ignore[method-assign]
+        adapter.on_reply_delivered = lambda msg, message_id: delivered.append(message_id)
+        adapter.on_reply_failed = lambda msg, error: failures.append(error)
+        result = asyncio.run(adapter.send_reply(original, "reply"))
+
+        assert result == 0
+        assert delivered == []
+        assert len(failures) == 1
+        assert "message_id" in failures[0]
 
 
 # ================================================================
@@ -209,6 +261,84 @@ class TestQQVoiceASR:
         assert text == "你好呀"
         assert asr.audio.samples == b"voice-bytes"
         assert asr.audio.dtype == "mp3"
+
+
+class TestQQMessageFlowContext:
+    """QQ消息流程的上下文/富文本护栏。"""
+
+    def test_decision_raw_keeps_cq_and_enriched_image_text(self) -> None:
+        raw = "[CQ:image,url=https://example.com/a.png]看看这个"
+        original = "[图片]看看这个"
+        enriched = "[图片：一只白色猫猫在比心] [图片]看看这个"
+
+        decision_raw = _compose_decision_raw_part(raw, enriched, original)
+
+        assert "[CQ:image," in decision_raw
+        assert "一只白色猫猫在比心" in decision_raw
+
+    def test_context_manager_keeps_long_media_context_and_dedupes(self, tmp_path) -> None:
+        ctx = QQContextManager(data_dir=str(tmp_path))
+        long_text = "[图片：" + ("猫猫" * 180) + "]"
+        key = QQContextManager.group_key("g1")
+
+        ctx.add_message(key, "甲", long_text)
+        ctx.add_message(key, "甲", long_text)
+
+        history = ctx.get_context(key)
+        assert history.count("甲:") == 1
+        assert len(ctx._contexts[key][0]["text"]) == 300
+
+    def test_group_and_private_contexts_with_same_numeric_id_are_isolated(self, tmp_path) -> None:
+        ctx = QQContextManager(data_dir=str(tmp_path))
+        group_key = QQContextManager.group_key("12345")
+        private_key = QQContextManager.private_key("12345")
+
+        ctx.add_message(group_key, "群友", "群里的内容")
+        ctx.add_message(private_key, "好友", "私聊的内容")
+
+        assert "群里的内容" in ctx.get_context(group_key)
+        assert "私聊的内容" not in ctx.get_context(group_key)
+        assert "私聊的内容" in ctx.get_context(private_key)
+        assert "群里的内容" not in ctx.get_context(private_key)
+
+    def test_legacy_bare_context_is_quarantined_not_auto_injected(self, tmp_path) -> None:
+        (tmp_path / "contexts.json").write_text(
+            json.dumps({"12345": [{"sender": "旧记录", "text": "来源不明"}]}),
+            encoding="utf-8",
+        )
+        ctx = QQContextManager(data_dir=str(tmp_path))
+
+        assert "legacy:12345" in ctx._contexts
+        assert ctx.get_context(QQContextManager.group_key("12345")) == ""
+        assert ctx.get_context(QQContextManager.private_key("12345")) == ""
+
+    def test_silent_tool_completion_records_internal_context_and_reply_state(self, tmp_path) -> None:
+        ctx = QQContextManager(data_dir=str(tmp_path))
+        msg = QQMessage({
+            "post_type": "message",
+            "message_type": "group",
+            "user_id": "10001",
+            "group_id": "2163039710",
+            "raw_message": "发语音",
+            "sender": {"nickname": "小白"},
+        })
+        recorded: list[tuple[str, str]] = []
+
+        def _record_reply(m: QQMessage) -> None:
+            recorded.append((m.group_id, m.user_id))
+
+        _record_silent_tool_completion(
+            ctx_manager=ctx,
+            context_id=QQContextManager.group_key("2163039710"),
+            bot_name="白",
+            msg=msg,
+            record_reply=_record_reply,
+        )
+
+        assert recorded == [("2163039710", "10001")]
+        assert "没有额外发送文字" in ctx.get_context(
+            QQContextManager.group_key("2163039710")
+        )
 
 
 # ================================================================

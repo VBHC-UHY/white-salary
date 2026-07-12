@@ -22,6 +22,8 @@ white_salary/core/affinity/manager.py
 """
 
 import json
+import os
+import copy
 import shutil
 import threading
 import time
@@ -212,6 +214,8 @@ class UserAffinity:
     points: float = 0.0
     level: int = 0
     is_family: bool = False
+    pre_family_points: Optional[float] = None
+    family_source: str = ""
     consecutive_days: int = 0
     total_interactions: int = 0
     first_interaction: float = 0.0
@@ -219,6 +223,7 @@ class UserAffinity:
     last_decay_check: float = 0.0
     last_daily_bonus: str = ""
     history: list[dict] = field(default_factory=list)  # 最近20条变化记录
+    processed_event_ids: list[str] = field(default_factory=list)
 
 
 class AffinityManager:
@@ -244,32 +249,41 @@ class AffinityManager:
         # shared=False 时绕过注册表（get_for_user 多用户路径专用，
         # 它会在构造后改写 _data_path，共享会导致所有用户串成同一份档案）
         if not shared:
-            return super().__new__(cls)
+            inst = super().__new__(cls)
+            inst._init_lock = threading.RLock()
+            return inst
         key = str(Path(data_dir).resolve())
         with cls._shared_lock:
             inst = cls._shared_instances.get(key)
             if inst is None:
                 inst = super().__new__(cls)
+                inst._init_lock = threading.RLock()
                 cls._shared_instances[key] = inst
         return inst
 
     def __init__(self, data_dir: str = "data/affinity", shared: bool = True) -> None:
         # 2026-07-03 审计修复（批5）：命中共享实例时跳过重复初始化
         # （标志在初始化末尾才置位，若上次初始化中途抛异常会自动重试）
-        if getattr(self, "_shared_inited", False):
-            return
+        init_lock = getattr(self, "_init_lock", None)
+        if init_lock is None:
+            init_lock = threading.RLock()
+            self._init_lock = init_lock
+        with init_lock:
+            if getattr(self, "_shared_inited", False):
+                return
 
-        self._data_dir = Path(data_dir)
-        self._data_dir.mkdir(parents=True, exist_ok=True)
-        self._data_path = self._data_dir / "affinity.json"
-        self._affinity = self._load()
+            self._mutation_lock = threading.RLock()
+            self._data_dir = Path(data_dir)
+            self._data_dir.mkdir(parents=True, exist_ok=True)
+            self._data_path = self._data_dir / "affinity.json"
+            self._affinity = self._load()
 
-        logger.info(
-            f"[Affinity] 用户关系: {self._get_level_name()} "
-            f"{self._get_emoji()} ({self._affinity.points:.1f}分, "
-            f"连续{self._affinity.consecutive_days}天)"
-        )
-        self._shared_inited: bool = True
+            logger.info(
+                f"[Affinity] 用户关系: {self._get_level_name()} "
+                f"{self._get_emoji()} ({self._affinity.points:.1f}分, "
+                f"连续{self._affinity.consecutive_days}天)"
+            )
+            self._shared_inited = True
 
     # ================================================================
     # 持久化
@@ -319,14 +333,27 @@ class AffinityManager:
         return UserAffinity(first_interaction=time.time())
 
     def _save(self) -> None:
-        with open(self._data_path, "w", encoding="utf-8") as f:
-            json.dump(asdict(self._affinity), f, ensure_ascii=False, indent=2)
+        """Atomically persist one complete profile while holding its mutation lock."""
+
+        with self._mutation_lock:
+            self._data_path.parent.mkdir(parents=True, exist_ok=True)
+            temp_path = self._data_path.with_name(
+                f".{self._data_path.name}.{os.getpid()}.{threading.get_ident()}.tmp"
+            )
+            try:
+                with open(temp_path, "w", encoding="utf-8") as f:
+                    json.dump(asdict(self._affinity), f, ensure_ascii=False, indent=2)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(temp_path, self._data_path)
+            finally:
+                temp_path.unlink(missing_ok=True)
 
     # ================================================================
     # 多用户好感度支持（QQ集成用）
     # ================================================================
 
-    _multi_user_cache: dict[str, "AffinityManager"] = {}
+    _multi_user_cache: dict[tuple[str, str], "AffinityManager"] = {}
 
     @classmethod
     def get_for_user(cls, user_id: str, data_dir: str = "data/affinity") -> "AffinityManager":
@@ -342,18 +369,56 @@ class AffinityManager:
         Returns:
             该用户的AffinityManager实例
         """
-        if user_id not in cls._multi_user_cache:
-            user_dir = str(Path(data_dir) / "users")
-            Path(user_dir).mkdir(parents=True, exist_ok=True)
-            # 2026-07-03 审计修复（批5）：多用户路径必须绕过进程级共享注册表
-            # （shared=False），否则所有用户拿到同一个实例、_data_path 相互改写
-            mgr = cls(data_dir=user_dir, shared=False)
-            # 用用户专属文件
-            mgr._data_path = Path(user_dir) / f"affinity_{user_id}.json"
+        uid = str(user_id or "").strip() or "unknown"
+        root_key = str(Path(data_dir).resolve())
+        cache_key = (root_key, uid)
+        with cls._shared_lock:
+            cached = cls._multi_user_cache.get(cache_key)
+            if cached is not None:
+                return cached
+
+            user_dir = Path(root_key) / "users"
+            user_dir.mkdir(parents=True, exist_ok=True)
+            # 多用户路径必须绕过普通共享注册表；它由带 data_dir 的复合键缓存。
+            mgr = cls(data_dir=str(user_dir), shared=False)
+            mgr._data_path = user_dir / f"affinity_{uid}.json"
+            mgr._mutation_lock = threading.RLock()
             mgr._affinity = mgr._load()
-            mgr._affinity.user_id = user_id
-            cls._multi_user_cache[user_id] = mgr
-        return cls._multi_user_cache[user_id]
+            mgr._affinity.user_id = uid
+            cls._multi_user_cache[cache_key] = mgr
+            return mgr
+
+    @classmethod
+    def sync_configured_family(
+        cls,
+        user_ids: list[str] | tuple[str, ...],
+        data_dir: str = "data/affinity",
+    ) -> None:
+        """Synchronize family entries owned by the ``qq.family_qq`` config."""
+
+        desired = {str(user_id).strip() for user_id in user_ids if str(user_id).strip()}
+        users_dir = Path(data_dir).resolve() / "users"
+        known_ids = set(desired)
+        if users_dir.exists():
+            for path in users_dir.glob("affinity_*.json"):
+                try:
+                    data = json.loads(path.read_text(encoding="utf-8"))
+                    uid = str(data.get("user_id") or "").strip()
+                except (OSError, ValueError, TypeError):
+                    uid = ""
+                if uid:
+                    known_ids.add(uid)
+
+        for uid in known_ids:
+            manager = cls.get_for_user(uid, data_dir=data_dir)
+            with manager._mutation_lock:
+                source = manager._affinity.family_source
+                is_family = manager._affinity.is_family
+            if uid in desired:
+                if not is_family or not source:
+                    manager.set_family(True, source="config")
+            elif is_family and source == "config":
+                manager.set_family(False, source="config")
 
     # ================================================================
     # 积分操作
@@ -368,41 +433,39 @@ class AffinityManager:
 
         Returns: 实际变化量
         """
-        if self._affinity.is_family:
-            return 0.0
+        with self._mutation_lock:
+            if self._affinity.is_family:
+                return 0.0
 
-        old_points = self._affinity.points
-        level = self._get_level()
+            old_points = self._affinity.points
+            level = self._get_level()
 
-        # 正值乘以效率系数
-        if delta > 0:
-            efficiency = LEVEL_EFFICIENCY.get(level, 1.0)
-            actual = round(delta * efficiency, 2)
-        else:
-            actual = delta
+            if delta > 0:
+                efficiency = LEVEL_EFFICIENCY.get(level, 1.0)
+                actual = round(delta * efficiency, 2)
+            else:
+                actual = delta
 
-        self._affinity.points += actual
-        self._affinity.level = self._get_level().value
+            self._affinity.points += actual
+            self._affinity.level = self._get_level().value
+            self._affinity.history.append({
+                "time": time.strftime("%Y-%m-%d %H:%M"),
+                "delta": actual,
+                "reason": reason,
+                "old": round(old_points, 1),
+                "new": round(self._affinity.points, 1),
+            })
+            if len(self._affinity.history) > 20:
+                self._affinity.history = self._affinity.history[-20:]
 
-        # 记录历史（最多保留20条）
-        self._affinity.history.append({
-            "time": time.strftime("%Y-%m-%d %H:%M"),
-            "delta": actual,
-            "reason": reason,
-            "old": round(old_points, 1),
-            "new": round(self._affinity.points, 1),
-        })
-        if len(self._affinity.history) > 20:
-            self._affinity.history = self._affinity.history[-20:]
+            if reason:
+                logger.debug(
+                    f"[Affinity] {reason}: {actual:+.1f}分 "
+                    f"({old_points:.1f} → {self._affinity.points:.1f})"
+                )
 
-        if reason:
-            logger.debug(
-                f"[Affinity] {reason}: {actual:+.1f}分 "
-                f"({old_points:.1f} → {self._affinity.points:.1f})"
-            )
-
-        self._save()
-        return actual
+            self._save()
+            return actual
 
     # ================================================================
     # 互动处理（每次对话自动调用）
@@ -414,54 +477,45 @@ class AffinityManager:
 
         自动执行：衰减检查、基础互动加分、每日奖励、连续天数奖励。
         """
-        if self._affinity.is_family:
-            return
+        with self._mutation_lock:
+            if self._affinity.is_family:
+                return
 
-        now = time.time()
-        today = time.strftime("%Y-%m-%d")
+            now = time.time()
+            today = time.strftime("%Y-%m-%d")
+            self._check_decay()
+            self._check_inactivity()
 
-        # 1. 衰减检查
-        self._check_decay()
+            self._affinity.total_interactions += 1
+            self._affinity.last_interaction = now
+            if self._affinity.first_interaction == 0:
+                self._affinity.first_interaction = now
 
-        # 2. 不活跃检查
-        self._check_inactivity()
+            self.add_points(POSITIVE_ACTIONS["normal_reply"], "互动")
 
-        # 3. 更新互动统计
-        self._affinity.total_interactions += 1
-        self._affinity.last_interaction = now
-        if self._affinity.first_interaction == 0:
-            self._affinity.first_interaction = now
+            if self._affinity.last_daily_bonus != today:
+                if self._affinity.last_daily_bonus:
+                    try:
+                        last_ts = time.mktime(
+                            time.strptime(self._affinity.last_daily_bonus, "%Y-%m-%d")
+                        )
+                        gap_days = (now - last_ts) / 86400
+                        if gap_days > 2:
+                            self._affinity.consecutive_days = 0
+                    except ValueError:
+                        pass
 
-        # 4. 基础互动加分
-        self.add_points(POSITIVE_ACTIONS["normal_reply"], "互动")
+                self._affinity.last_daily_bonus = today
+                self._affinity.consecutive_days += 1
+                self.add_points(POSITIVE_ACTIONS["daily_interaction"], "每日互动")
 
-        # 5. 每日首次互动奖励
-        if self._affinity.last_daily_bonus != today:
-            # 计算间隔天数
-            if self._affinity.last_daily_bonus:
-                try:
-                    last_ts = time.mktime(time.strptime(self._affinity.last_daily_bonus, "%Y-%m-%d"))
-                    gap_days = (now - last_ts) / 86400
-                    if gap_days > 2:
-                        # 超过2天没互动，重置连续天数
-                        self._affinity.consecutive_days = 0
-                except ValueError:
-                    pass
-
-            self._affinity.last_daily_bonus = today
-            self._affinity.consecutive_days += 1
-
-            # 每日奖励
-            self.add_points(POSITIVE_ACTIONS["daily_interaction"], "每日互动")
-
-            # 连续天数里程碑奖励
-            days = self._affinity.consecutive_days
-            if days >= 30 and days % 30 == 0:
-                self.add_points(POSITIVE_ACTIONS["consecutive_30days"], f"连续{days}天")
-            elif days >= 7 and days % 7 == 0:
-                self.add_points(POSITIVE_ACTIONS["consecutive_7days"], f"连续{days}天")
-            elif days >= 3 and days % 3 == 0:
-                self.add_points(POSITIVE_ACTIONS["consecutive_3days"], f"连续{days}天")
+                days = self._affinity.consecutive_days
+                if days >= 30 and days % 30 == 0:
+                    self.add_points(POSITIVE_ACTIONS["consecutive_30days"], f"连续{days}天")
+                elif days >= 7 and days % 7 == 0:
+                    self.add_points(POSITIVE_ACTIONS["consecutive_7days"], f"连续{days}天")
+                elif days >= 3 and days % 3 == 0:
+                    self.add_points(POSITIVE_ACTIONS["consecutive_3days"], f"连续{days}天")
 
     def process_message(self, message: str) -> list[str]:
         """
@@ -473,34 +527,64 @@ class AffinityManager:
         Returns:
             触发的行为列表
         """
-        if self._affinity.is_family:
-            return []
+        with self._mutation_lock:
+            if self._affinity.is_family:
+                return []
 
-        triggered = []
-
-        # 白名单检查：如果消息包含白名单短语，跳过该部分的负面检测
-        is_whitelisted = any(wl in message for wl in KEYWORD_WHITELIST)
-
-        # 检测正面关键词
-        for action, keywords in POSITIVE_KEYWORDS.items():
-            for kw in keywords:
-                if kw in message:
-                    pts = POSITIVE_ACTIONS.get(action, 1.0)
-                    self.add_points(pts, f"正面:{action}/{kw}")
-                    triggered.append(action)
-                    break
-
-        # 检测负面关键词（白名单命中时跳过）
-        if not is_whitelisted:
-            for action, keywords in NEGATIVE_KEYWORDS.items():
+            triggered = []
+            for action, keywords in POSITIVE_KEYWORDS.items():
                 for kw in keywords:
                     if kw in message:
+                        pts = POSITIVE_ACTIONS.get(action, 1.0)
+                        self.add_points(pts, f"正面:{action}/{kw}")
+                        triggered.append(action)
+                        break
+
+            # Only mask the exact benign phrase. A phrase such as "垃圾桶" must
+            # not exempt a separate real insult elsewhere in the same message.
+            negative_text = message
+            for phrase in KEYWORD_WHITELIST:
+                negative_text = negative_text.replace(phrase, " " * len(phrase))
+            for action, keywords in NEGATIVE_KEYWORDS.items():
+                for kw in keywords:
+                    if kw in negative_text:
                         pts = NEGATIVE_ACTIONS.get(action, -1.0)
                         self.add_points(pts, f"负面:{action}/{kw}")
                         triggered.append(action)
                         break
 
-        return triggered
+            return triggered
+
+    def process_event(self, message: str, event_ids: list[str] | tuple[str, ...] = ()) -> bool:
+        """Apply one merged interaction once, even if NapCat redelivers it."""
+
+        normalized_ids = list(dict.fromkeys(
+            str(event_id).strip() for event_id in event_ids if str(event_id).strip()
+        ))
+        with self._mutation_lock:
+            known = set(self._affinity.processed_event_ids)
+            new_ids = [event_id for event_id in normalized_ids if event_id not in known]
+            if normalized_ids and not new_ids:
+                logger.debug(
+                    f"[Affinity] 跳过重复事件: {','.join(normalized_ids[:3])}"
+                )
+                return False
+
+            snapshot = copy.deepcopy(self._affinity)
+            try:
+                self.process_interaction()
+                self.process_message(message)
+                if new_ids:
+                    self._affinity.processed_event_ids.extend(new_ids)
+                    self._affinity.processed_event_ids = (
+                        self._affinity.processed_event_ids[-256:]
+                    )
+                self._save()
+            except Exception:
+                self._affinity = snapshot
+                self._save()
+                raise
+            return True
 
     # ================================================================
     # 衰减和不活跃处理
@@ -706,36 +790,58 @@ class AffinityManager:
     # 手动操作
     # ================================================================
 
-    def set_family(self, is_family: bool) -> None:
-        """设置/取消家人状态。"""
-        self._affinity.is_family = is_family
-        if is_family:
-            self._affinity.points = 999999.0
-            self._affinity.level = AffinityLevel.FAMILY.value
-        self._save()
-        logger.info(f"[Affinity] 家人状态: {is_family}")
+    def set_family(self, is_family: bool, *, source: str = "manual") -> None:
+        """Set family status without destroying the user's previous score."""
+
+        with self._mutation_lock:
+            if is_family:
+                if not self._affinity.is_family:
+                    self._affinity.pre_family_points = self._affinity.points
+                self._affinity.is_family = True
+                self._affinity.points = 999999.0
+                self._affinity.level = AffinityLevel.FAMILY.value
+                if not self._affinity.family_source or source == "manual":
+                    self._affinity.family_source = source
+            else:
+                restore = self._affinity.pre_family_points
+                if restore is None:
+                    restore = 0.0 if self._affinity.points >= 999999.0 else self._affinity.points
+                self._affinity.is_family = False
+                self._affinity.points = float(restore)
+                self._affinity.pre_family_points = None
+                self._affinity.family_source = ""
+                self._affinity.level = self._get_level().value
+            self._save()
+            logger.info(f"[Affinity] 家人状态: {is_family} (source={source})")
 
     def set_points(self, points: float) -> None:
         """手动设置好感度积分。"""
-        self._affinity.points = points
-        self._affinity.level = self._get_level().value
-        self._save()
+        with self._mutation_lock:
+            if self._affinity.is_family:
+                self._affinity.pre_family_points = float(points)
+            else:
+                self._affinity.points = float(points)
+                self._affinity.level = self._get_level().value
+            self._save()
 
     # ================================================================
     # 统计
     # ================================================================
 
     def get_stats(self) -> dict:
-        level = self._get_level()
-        config = LEVEL_CONFIG[level]
-        return {
-            "points": round(self._affinity.points, 1),
-            "level_name": config["name"],
-            "level_value": level.value,
-            "emoji": config["emoji"],
-            "consecutive_days": self._affinity.consecutive_days,
-            "total_interactions": self._affinity.total_interactions,
-            "is_family": self._affinity.is_family,
-            "history": self._affinity.history[-10:],
-            "level_change": self.get_level_change_event(),
-        }
+        with self._mutation_lock:
+            level = self._get_level()
+            config = LEVEL_CONFIG[level]
+            return {
+                "user_id": self._affinity.user_id,
+                "points": round(self._affinity.points, 1),
+                "level_name": config["name"],
+                "level_value": level.value,
+                "emoji": config["emoji"],
+                "consecutive_days": self._affinity.consecutive_days,
+                "total_interactions": self._affinity.total_interactions,
+                "is_family": self._affinity.is_family,
+                "family_source": self._affinity.family_source,
+                "history": list(self._affinity.history[-10:]),
+                "level_change": self.get_level_change_event(),
+            }

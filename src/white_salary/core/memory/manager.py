@@ -37,6 +37,15 @@ from white_salary.core.memory.cross_session import CrossSessionLinker, DynamicRe
 from white_salary.core.memory.module_base import MemoryModule
 
 
+# Modules in this allowlist only contribute general speaking style. They are
+# safe to keep in group/non-owner prompts while private owner memories remain
+# excluded. All other auto-discovered modules are treated as private by default.
+_PUBLIC_SAFE_CONTEXT_MODULES = frozenset({
+    "dialogue_evolution",
+    "natural_expression",
+})
+
+
 # ================================================================
 # 记忆触发关键词（简繁体都覆盖）
 # ================================================================
@@ -400,10 +409,14 @@ class MemoryManager:
 
     def get_modules_context(self, message: str = "",
                            user_id: str = "desktop",
-                           is_group: bool = False) -> str:
+                           is_group: bool = False,
+                           allowed_names: Optional[set[str] | frozenset[str]] = None) -> str:
         """获取所有功能模块的上下文提示（注入system prompt）。"""
         parts = []
         for m in self._modules:
+            name = str(getattr(m, "name", "unknown"))
+            if allowed_names is not None and name not in allowed_names:
+                continue
             try:
                 ctx = m.get_context_prompt(message, user_id=user_id, is_group=is_group)
                 if ctx:
@@ -506,22 +519,24 @@ class MemoryManager:
 
         extracted = []
 
-        # 2026-07-02 审计修复（批4）：核心档案写入白名单闸门。
-        # 核心档案类提取（姓名/生日/职业/位置/喜好等）只允许主人消息写入，
-        # 防止QQ群任意用户的"我叫X/我在X"覆盖主人的核心事实（生产数据已实锤污染）。
-        # 其它记忆层（长期/情感/重要/知识图谱）不受影响。
+        # The legacy global stores have no user_id column. They are the owner's
+        # memory space, so writing any non-owner content there can later leak it
+        # into the owner conversation or another group. Non-owner continuity is
+        # kept by per-session ShortTermMemory and the user-scoped ConversationLog
+        # until all durable stores support explicit principals.
         owner_ok = is_owner_user(user_id)
 
-        if owner_ok:
-            # 1. 核心信息提取（正则匹配，零成本）
-            extracted.extend(self._extract_core_info(user_message))
-
-            # 2. 喜好提取（零成本）
-            extracted.extend(self._extract_preferences(user_message))
-        else:
+        if not owner_ok:
             logger.debug(
-                f"[Memory] 白名单闸门: 非主人用户 {user_id} 的消息跳过核心档案提取"
+                f"[Memory] 作用域闸门: 非主人用户 {user_id} 不写主人全局记忆库"
             )
+            return extracted
+
+        # 1. 核心信息提取（正则匹配，零成本）
+        extracted.extend(self._extract_core_info(user_message))
+
+        # 2. 喜好提取（零成本）
+        extracted.extend(self._extract_preferences(user_message))
 
         # 3. 关键词触发的长期记忆（零成本）
         extracted.extend(self._extract_long_term_by_keywords(user_message, ai_reply))
@@ -567,7 +582,7 @@ class MemoryManager:
 
         # 9. LLM智能提取（有限额，更智能）
         # 2026-07-02 审计修复（批4）：LLM提取的core层写入同样受白名单闸门约束
-        llm_memories = await self._extract_by_llm(user_message, ai_reply, allow_core=owner_ok)
+        llm_memories = await self._extract_by_llm(user_message, ai_reply, allow_core=True)
         extracted.extend(llm_memories)
 
         # 10. 通知所有自动发现模块（39个模块的on_message）
@@ -781,7 +796,8 @@ class MemoryManager:
 
     def get_context_injection(self, current_message: str = "",
                              user_id: str = "desktop",
-                             is_group: bool = False) -> str:
+                             is_group: bool = False,
+                             group_id: str = "") -> str:
         """
         获取要注入到LLM上下文中的记忆信息。
 
@@ -797,41 +813,62 @@ class MemoryManager:
             格式化的记忆文本，注入到系统提示词之后
         """
         parts = []
+        owner_private_scope = is_owner_user(user_id) and not is_group
 
-        # 动态渲染核心记忆（根据当前话题选择最相关的）
-        dynamic_ctx = self._dynamic_renderer.render_context(current_message)
-        if dynamic_ctx:
-            parts.append(dynamic_ctx)
+        if owner_private_scope:
+            # These stores predate user scoping and contain the owner's private
+            # profile. Never inject them into a public group or another user's
+            # private conversation.
+            dynamic_ctx = self._dynamic_renderer.render_context(current_message)
+            if dynamic_ctx:
+                parts.append(dynamic_ctx)
 
-        # 知识图谱（用户的社交关系网络）
-        kg_ctx = self._knowledge_graph.get_context_string()
-        if kg_ctx:
-            parts.append(kg_ctx)
+            kg_ctx = self._knowledge_graph.get_context_string()
+            if kg_ctx:
+                parts.append(kg_ctx)
 
-        # 重要记忆（用户的承诺、约定、特殊请求）
-        imp_ctx = self._important.get_context_string()
-        if imp_ctx:
-            parts.append(imp_ctx)
+            imp_ctx = self._important.get_context_string()
+            if imp_ctx:
+                parts.append(imp_ctx)
 
         # 最近跨平台对话（同一 user_id 在桌面/QQ 的最近几轮）
-        recent_ctx = self._get_recent_conversation_context(user_id=user_id)
+        recent_ctx = self._get_recent_conversation_context(
+            user_id=user_id,
+            is_group=is_group,
+            group_id=group_id,
+            owner_private_scope=owner_private_scope,
+        )
         if recent_ctx:
             parts.append(recent_ctx)
 
-        # 跨会话关联记忆（之前对话中提到的相关人/事）
-        cross_ctx = self._cross_linker.find_related_memories(current_message)
-        if cross_ctx:
-            parts.append(cross_ctx)
+        if owner_private_scope:
+            cross_ctx = self._cross_linker.find_related_memories(current_message)
+            if cross_ctx:
+                parts.append(cross_ctx)
 
-        # 当前情绪状态
-        emo_ctx = self._emotion_tracker.get_context_hint()
-        if emo_ctx:
-            parts.append(emo_ctx)
+            emo_ctx = self._emotion_tracker.get_context_hint()
+            if emo_ctx:
+                parts.append(emo_ctx)
 
-        # 所有自动发现模块的上下文（39个模块的get_context_prompt）
-        modules_ctx = self.get_modules_context(current_message, user_id=user_id, is_group=is_group)
+        modules_ctx = self.get_modules_context(
+            current_message,
+            user_id=user_id,
+            is_group=is_group,
+            allowed_names=None if owner_private_scope else _PUBLIC_SAFE_CONTEXT_MODULES,
+        )
         if modules_ctx:
             parts.append(modules_ctx)
+
+        if is_group:
+            parts.append(
+                "[记忆边界] 当前是群聊，只能使用当前用户在当前群公开说过的上下文；"
+                "不得引用任何私聊、桌面端或其他用户的记忆。"
+            )
+        elif not owner_private_scope:
+            parts.append(
+                "[记忆边界] 只能使用当前用户自己的私聊上下文；"
+                "不得引用主人或其他用户的记忆。"
+            )
 
         if not parts:
             return ""
@@ -842,6 +879,10 @@ class MemoryManager:
         self,
         user_id: str = "desktop",
         limit: int = 4,
+        *,
+        is_group: bool = False,
+        group_id: str = "",
+        owner_private_scope: bool = False,
     ) -> str:
         """
         获取同一用户最近的跨平台对话片段。
@@ -858,12 +899,25 @@ class MemoryManager:
 
             entries = ConversationLog.get_instance().get_recent_by_user(
                 user_id=str(user_id),
-                limit=limit,
+                limit=max(limit * 5, 20),
             )
         except Exception as exc:
             logger.debug(f"[Memory] 最近跨平台对话读取失败: {exc}")
             return ""
 
+        if is_group:
+            current_group = str(group_id or "").strip()
+            entries = [
+                entry for entry in entries
+                if entry.platform == "qq" and entry.group_id == current_group
+            ]
+        elif not owner_private_scope:
+            entries = [
+                entry for entry in entries
+                if entry.platform == "qq" and not entry.group_id
+            ]
+
+        entries = entries[:limit]
         if not entries:
             return ""
 
@@ -879,9 +933,36 @@ class MemoryManager:
             user_label = entry.user_name or entry.user_id or "用户"
             if entry.user_msg:
                 lines.append(f"- [{entry.time_str} {platform}] {user_label}: {_short(entry.user_msg)}")
-            if entry.ai_reply:
+            if entry.ai_reply and not self._is_low_signal_ai_reply(entry.ai_reply):
                 lines.append(f"  白: {_short(entry.ai_reply)}")
         return "\n".join(lines) if len(lines) > 1 else ""
+
+    @staticmethod
+    def _is_low_signal_ai_reply(reply: str) -> bool:
+        """
+        过滤最近上下文里的事故短回复，避免模型把“注意/如果”学成说话风格。
+
+        这里只过滤低信息、常见于工具失败或误触发的单字/两字回复；正常的用户消息
+        和有实际内容的 AI 回复仍会进入跨平台上下文。
+        """
+        text = (reply or "").strip()
+        if not text:
+            return True
+        stripped = text.strip("。.!！?？…~～ \t\r\n")
+        weak_exact = {
+            "注意",
+            "如果",
+            "嗯",
+            "好",
+            "好的",
+            "行",
+            "可以",
+            "谁啊",
+            "干嘛",
+        }
+        if stripped in weak_exact:
+            return True
+        return len(stripped) <= 2 and not any(ch in stripped for ch in "？?")
 
     # ================================================================
     # 统计和管理

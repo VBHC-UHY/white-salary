@@ -380,6 +380,9 @@ class TestCrossPlatformRecall:
         用户显式说“你还记得吗”触发 recall_conversation。
         """
         from white_salary.core.memory.conversation_log import ConversationLog
+        from white_salary.core.memory.manager import set_owner_user_id
+
+        set_owner_user_id("owner")
 
         conv_log = ConversationLog(data_dir=str(tmp_path / "conv"))
         monkeypatch.setattr(
@@ -398,6 +401,88 @@ class TestCrossPlatformRecall:
         assert "蓝莓蛋糕" in ctx
         assert "少糖" in ctx
         assert "榴莲蛋糕" not in ctx
+
+    def test_group_memory_only_uses_same_user_same_group(self, tmp_path, monkeypatch):
+        """A group prompt must never receive private, desktop, or other-group history."""
+        from white_salary.core.memory.conversation_log import ConversationLog
+        from white_salary.core.memory.manager import set_owner_user_id
+
+        set_owner_user_id("owner")
+        conv_log = ConversationLog(data_dir=str(tmp_path / "conv"))
+        monkeypatch.setattr(
+            ConversationLog,
+            "get_instance",
+            classmethod(lambda cls, data_dir="data/memory": conv_log),
+        )
+        conv_log.record("qq", "主人", "owner", "g1", "本群公开信息", "知道了")
+        conv_log.record("qq", "主人", "owner", "g2", "另一个群的秘密", "知道了")
+        conv_log.record("qq", "主人", "owner", "", "QQ私聊秘密", "知道了")
+        conv_log.record("desktop", "主人", "owner", "", "桌面端秘密", "知道了")
+
+        mgr = _make_memory_manager(tmp_path / "memory")
+        ctx = mgr.get_context_injection(
+            "继续",
+            user_id="owner",
+            is_group=True,
+            group_id="g1",
+        )
+
+        assert "本群公开信息" in ctx
+        assert "另一个群的秘密" not in ctx
+        assert "QQ私聊秘密" not in ctx
+        assert "桌面端秘密" not in ctx
+        assert "不得引用任何私聊" in ctx
+
+    async def test_non_owner_cannot_read_or_write_owner_global_memory(self, tmp_path, monkeypatch):
+        from white_salary.core.memory.conversation_log import ConversationLog
+        from white_salary.core.memory.manager import set_owner_user_id
+
+        set_owner_user_id("owner")
+        conv_log = ConversationLog(data_dir=str(tmp_path / "conv"))
+        monkeypatch.setattr(
+            ConversationLog,
+            "get_instance",
+            classmethod(lambda cls, data_dir="data/memory": conv_log),
+        )
+        conv_log.record("qq", "朋友", "friend", "", "朋友自己的私聊", "记住了")
+
+        mgr = _make_memory_manager(tmp_path / "memory")
+        await mgr.extract_and_store("我叫主人秘密名，记住主人密钥", "好", user_id="owner")
+        stranger_result = await mgr.extract_and_store(
+            "记住朋友的私密安排",
+            "好",
+            user_id="friend",
+        )
+        ctx = mgr.get_context_injection("继续", user_id="friend", is_group=False)
+
+        assert stranger_result == []
+        assert "朋友自己的私聊" in ctx
+        assert "主人秘密名" not in ctx
+        assert "主人密钥" not in ctx
+        assert "朋友的私密安排" not in ctx
+
+    def test_memory_context_filters_low_signal_ai_replies(self, tmp_path, monkeypatch):
+        """最近上下文不应把“注意/如果”这类事故短回复继续喂给模型学习。"""
+        from white_salary.core.memory.conversation_log import ConversationLog
+        from white_salary.core.memory.manager import set_owner_user_id
+
+        set_owner_user_id("owner")
+
+        conv_log = ConversationLog(data_dir=str(tmp_path / "conv"))
+        monkeypatch.setattr(
+            ConversationLog,
+            "get_instance",
+            classmethod(lambda cls, data_dir="data/memory": conv_log),
+        )
+        conv_log.record("qq", "小白", "owner", "216", "白，发个表情包", "注意")
+        conv_log.record("qq", "小白", "owner", "216", "刚才那个继续聊", "这次我听懂了，是想接着刚才那张表情包说。")
+
+        mgr = _make_memory_manager(tmp_path / "memory")
+        ctx = mgr.get_context_injection("继续刚才那个", user_id="owner")
+
+        assert "白，发个表情包" in ctx
+        assert "注意" not in ctx
+        assert "这次我听懂了" in ctx
 
 
 # ===================================================================

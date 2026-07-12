@@ -13,7 +13,7 @@ system:
   # 项目名称（不要改）
   name: "White Salary"
   # 版本号
-  version: "0.1.7"
+  version: "0.1.8"
   # 调试模式（true=输出更多日志，false=正常模式）
   debug: false
   # 日志级别：DEBUG / INFO / WARNING / ERROR
@@ -27,6 +27,9 @@ server:
   host: "localhost"
   # 端口号
   port: 12400
+  # 远程访问控制面板/API时必填；仅本机访问可留空。
+  # 也可通过环境变量 WHITE_SALARY_MANAGEMENT_TOKEN 设置，优先级更高。
+  management_token: ""
   # 是否允许跨域请求（前端和后端不在同一个地址时需要开启）
   cors_enabled: true
   # 允许跨域的来源地址
@@ -193,6 +196,9 @@ qq:
   # 和常见标点，所以 "白" 会同时匹配 "白？"、"白！"、"，白"、" 白 "。
   wake_words:
     - "白"
+  # 手动不屏蔽的QQ群号；这些群会提高“可能是在和白续聊”的候选分，
+  # 但仍会交给语义判断，避免白在别人闲聊时乱插嘴。
+  unblocked_group_ids: []
   # NapCat鉴权token（与NapCat WebSocket配置中的token一致）
   token: ""
   # 家人QQ号列表（这些QQ号自动设为"家人"关系，不受好感度衰减影响；

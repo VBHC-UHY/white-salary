@@ -28,6 +28,7 @@ from loguru import logger
 from white_salary.core.plugins.base import Plugin, PluginMeta
 from white_salary.core.plugins.safe_executor import SafeExecutor
 from white_salary.core.plugins.context import PluginContext
+from white_salary.core.plugins.security import validate_plugin_id
 
 
 class PluginManager:
@@ -65,13 +66,18 @@ class PluginManager:
         self._registry = None
         self._plugin_id_to_name: dict[str, str] = {}
         self._plugin_tools: dict[str, list[str]] = {}
+        self._plugin_configs: dict[str, dict[str, Any]] = {}
+        self._plugin_sources: dict[str, str] = {}
         # 2026-07-03 功能大项（批11）：消息钩子专用超时（3秒）——比工具执行的
         # 5秒更短，因为它挡在每条用户消息前，绝不能拖慢主链路（任务要求）。
         self._hook_timeout: float = 3.0
 
     def _has_role(self, plugin: Plugin, role: str) -> bool:
         """Return whether a plugin participates in a hook role."""
-        roles = getattr(getattr(plugin, "meta", None), "roles", None)
+        config = self._plugin_configs.get(plugin.meta.name, {})
+        roles = config.get("roles")
+        if roles is None:
+            roles = getattr(getattr(plugin, "meta", None), "roles", None)
         if roles is None:
             return True
         try:
@@ -93,7 +99,7 @@ class PluginManager:
             if not cat_dir.exists():
                 continue
             for d in cat_dir.iterdir():
-                if d.is_dir():
+                if d.is_dir() and not d.name.startswith("."):
                     # 目录插件：找plugin.py或__init__.py
                     if (d / "plugin.py").exists():
                         self._discovered.append(str(d / "plugin.py"))
@@ -116,6 +122,35 @@ class PluginManager:
 
         logger.info(f"[Plugins] 发现 {len(self._discovered)} 个插件")
         return [Path(p).stem for p in self._discovered]
+
+    @staticmethod
+    def _config_path(path: Path) -> Path:
+        if path.is_dir():
+            return path / "config.json"
+        if path.name in {"plugin.py", "__init__.py"}:
+            return path.parent / "config.json"
+        return path.with_suffix(".json")
+
+    @classmethod
+    def _read_config(cls, path: Path) -> dict[str, Any]:
+        config_path = cls._config_path(path)
+        if not config_path.exists():
+            return {}
+        try:
+            data = json.loads(config_path.read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else {}
+        except Exception as exc:
+            logger.warning(f"[Plugins] 配置读取失败 {config_path}: {exc}")
+            return {}
+
+    def _source_for_path(self, path: Path) -> str:
+        resolved = path.resolve()
+        package = resolved.parent if resolved.is_file() else resolved
+        for source in ("builtin", "community"):
+            root = (self._dir / source).resolve()
+            if package.is_relative_to(root):
+                return source
+        return "root"
 
     async def load_all(self) -> int:
         """加载所有发现的插件。"""
@@ -156,17 +191,24 @@ class PluginManager:
         """加载单个插件（带沙箱检查）。"""
         p = Path(path)
 
+        config = self._read_config(p)
+        if config.get("enabled") is False:
+            logger.info(f"[Plugins] 已禁用，跳过加载: {self._path_id(path)}")
+            return False
+
         # 沙箱检查
         code_file = p if p.is_file() else (p / "plugin.py" if (p / "plugin.py").exists() else p / "__init__.py")
         if code_file.exists():
-            from white_salary.core.plugins.sandbox import check_file_safety
-            is_safe, issues = check_file_safety(str(code_file))
+            from white_salary.core.plugins.sandbox import check_plugin_tree_safety
+
+            scan_root = p.parent if p.is_file() and p.name in {"plugin.py", "__init__.py"} else p
+            is_safe, issues = check_plugin_tree_safety(
+                scan_root,
+                permissions=config.get("permissions", []),
+            )
             if not is_safe:
                 logger.warning(f"[Plugins] {p.name} 代码不安全: {issues}")
                 return False
-
-            # 自动修复import路径（兼容v2插件）
-            self._fix_imports(code_file)
 
         try:
             # 导入模块
@@ -209,18 +251,8 @@ class PluginManager:
             # 注入上下文
             instance.context = self._context
 
-            # 加载配置
-            config_path = None
-            if p.is_dir():
-                config_path = p / "config.json"
-            elif p.is_file():
-                config_path = p.with_suffix(".json")
-            if config_path and config_path.exists():
-                try:
-                    config = json.loads(config_path.read_text(encoding="utf-8"))
-                    instance.set_config(config)
-                except Exception:
-                    pass
+            # 配置必须在模块执行前读取，enabled=false 才能真正阻止第三方代码运行。
+            instance.set_config(config)
 
             # 安全调用on_load
             await self._executor.run(
@@ -229,6 +261,8 @@ class PluginManager:
             )
 
             self._plugins[instance.meta.name] = instance
+            self._plugin_configs[instance.meta.name] = dict(config)
+            self._plugin_sources[instance.meta.name] = self._source_for_path(p)
             # 2026-07-03 功能大项（批11）：登记 plugin_id → meta.name 映射，
             # 供 load_one/unload_one 用磁盘标识定位运行中实例
             self._plugin_id_to_name[self._path_id(path)] = instance.meta.name
@@ -246,6 +280,8 @@ class PluginManager:
         plugin = self._plugins[name]
         await self._executor.run(plugin.on_unload(), plugin_name=name)
         del self._plugins[name]
+        self._plugin_configs.pop(name, None)
+        self._plugin_sources.pop(name, None)
         # 2026-07-03 功能大项（批11）：反注册该插件的工具 + 清理映射，
         # 避免卸载后 registry 里残留幽灵工具、映射表悬挂过期 meta.name
         self._unregister_plugin_tools(name)
@@ -323,6 +359,8 @@ class PluginManager:
         # 3. 重新发现并加载
         self._plugin_id_to_name.clear()
         self._plugin_tools.clear()
+        self._plugin_configs.clear()
+        self._plugin_sources.clear()
         self.discover()
         loaded = await self.load_all()
         # 4. 工具重新注册进 registry（若已接入）
@@ -345,6 +383,11 @@ class PluginManager:
         Returns:
             是否加载成功
         """
+        try:
+            plugin_id = validate_plugin_id(plugin_id)
+        except ValueError as exc:
+            logger.warning(f"[Plugins] load_one 拒绝无效ID: {exc}")
+            return False
         # 重新发现（新装的插件此前不在 _discovered 里）
         self.discover()
         # 若已加载（同名刷新场景），先卸载
@@ -387,6 +430,10 @@ class PluginManager:
         Returns:
             是否卸载成功（未加载返回 False）
         """
+        try:
+            plugin_id = validate_plugin_id(plugin_id)
+        except ValueError:
+            return False
         name = self._plugin_id_to_name.get(plugin_id)
         if name is None:
             logger.debug(f"[Plugins] unload_one: {plugin_id} 未加载，跳过")
@@ -418,8 +465,8 @@ class PluginManager:
         """
         if not self._plugins:
             return None
+        context_token = self._context.set_message_context(metadata)
         try:
-            self._context.set_message_context(metadata)
             return await asyncio.wait_for(
                 self._process_message_inner(text, user_id),
                 timeout=self._hook_timeout,
@@ -434,7 +481,7 @@ class PluginManager:
             logger.warning(f"[Plugins] process_message 异常，按不拦截处理: {e}")
             return None
         finally:
-            self._context.clear_message_context()
+            self._context.reset_message_context(context_token)
 
     async def observe_message(
         self,
@@ -445,8 +492,8 @@ class PluginManager:
         """Run observer plugins without allowing them to intercept a reply."""
         if not self._plugins:
             return
+        context_token = self._context.set_message_context(metadata)
         try:
-            self._context.set_message_context(metadata)
             await asyncio.wait_for(
                 self._observe_message_inner(text, user_id, metadata or {}),
                 timeout=self._hook_timeout,
@@ -459,7 +506,7 @@ class PluginManager:
         except Exception as e:
             logger.warning(f"[Plugins] observe_message 异常，已跳过观察钩子: {e}")
         finally:
-            self._context.clear_message_context()
+            self._context.reset_message_context(context_token)
 
     async def _observe_message_inner(
         self,
@@ -545,11 +592,62 @@ class PluginManager:
             try:
                 plugin_tools = plugin.get_tools()
                 for t in plugin_tools:
-                    t["_plugin"] = plugin.meta.name
-                tools.extend(plugin_tools)
+                    if not isinstance(t, dict):
+                        raise TypeError("插件工具定义必须是dict")
+                    normalized = dict(t)
+                    normalized["_plugin"] = plugin.meta.name
+                    config = self._plugin_configs.get(plugin.meta.name, {})
+                    if not normalized.get("platforms"):
+                        normalized["platforms"] = config.get("platforms", [])
+                    if not normalized.get("requires_service"):
+                        normalized["requires_service"] = config.get("requires_service", [])
+                    # Undeclared plugin tools are conservatively treated as
+                    # side-effecting. Authors can explicitly mark read-only tools.
+                    if "side_effect" not in normalized:
+                        normalized["side_effect"] = True
+                    tools.append(normalized)
             except Exception as e:
                 logger.warning(f"[Plugins] {plugin.meta.name} get_tools失败: {e}")
         return tools
+
+    @staticmethod
+    def _as_tuple(value: Any) -> tuple[str, ...]:
+        if value in (None, ""):
+            return ()
+        if isinstance(value, str):
+            items = [value]
+        else:
+            try:
+                items = list(value)
+            except TypeError:
+                items = [value]
+        result = tuple(dict.fromkeys(str(item).strip() for item in items if str(item).strip()))
+        return () if "all" in result else result
+
+    @classmethod
+    def _to_registry_definition(cls, tool_def: dict):
+        from white_salary.adapters.tools.registry import ToolDefinition
+
+        permissions = cls._as_tuple(
+            tool_def.get("required_permissions") or tool_def.get("requires_permissions")
+        )
+        services = cls._as_tuple(
+            tool_def.get("required_services") or tool_def.get("requires_service")
+        )
+        return ToolDefinition(
+            name=tool_def["name"],
+            description=tool_def.get("description", ""),
+            parameters=tool_def.get("parameters", {}),
+            handler=tool_def["handler"],
+            category="plugin",
+            platforms=cls._as_tuple(tool_def.get("platforms")),
+            requires_permission=str(tool_def.get("requires_permission") or ""),
+            requires_service="",
+            required_permissions=permissions,
+            required_services=services,
+            side_effect=bool(tool_def.get("side_effect", True)),
+            side_effect_group=str(tool_def.get("side_effect_group") or "global"),
+        )
 
     def register_tools_to_registry(self, registry) -> int:
         """
@@ -563,18 +661,7 @@ class PluginManager:
         count = 0
         for tool_def in self.get_all_tools():
             try:
-                from white_salary.adapters.tools.registry import ToolDefinition
-                td = ToolDefinition(
-                    name=tool_def["name"],
-                    description=tool_def.get("description", ""),
-                    parameters=tool_def.get("parameters", {}),
-                    handler=tool_def["handler"],
-                    category="plugin",
-                    platforms=tuple(tool_def.get("platforms") or ()),
-                    requires_permission=str(tool_def.get("requires_permission") or ""),
-                    requires_service=str(tool_def.get("requires_service") or ""),
-                    side_effect=bool(tool_def.get("side_effect", False)),
-                )
+                td = self._to_registry_definition(tool_def)
                 registry.register(td)
                 # 记录该工具属于哪个插件（"_plugin" 由 get_all_tools 注入）
                 owner = tool_def.get("_plugin", "")
@@ -613,18 +700,15 @@ class PluginManager:
             return 0
         for tool_def in plugin_tools:
             try:
-                from white_salary.adapters.tools.registry import ToolDefinition
-                td = ToolDefinition(
-                    name=tool_def["name"],
-                    description=tool_def.get("description", ""),
-                    parameters=tool_def.get("parameters", {}),
-                    handler=tool_def["handler"],
-                    category="plugin",
-                    platforms=tuple(tool_def.get("platforms") or ()),
-                    requires_permission=str(tool_def.get("requires_permission") or ""),
-                    requires_service=str(tool_def.get("requires_service") or ""),
-                    side_effect=bool(tool_def.get("side_effect", False)),
-                )
+                normalized = dict(tool_def)
+                config = self._plugin_configs.get(name, {})
+                if not normalized.get("platforms"):
+                    normalized["platforms"] = config.get("platforms", [])
+                if not normalized.get("requires_service"):
+                    normalized["requires_service"] = config.get("requires_service", [])
+                if "side_effect" not in normalized:
+                    normalized["side_effect"] = True
+                td = self._to_registry_definition(normalized)
                 self._registry.register(td)
                 self._plugin_tools.setdefault(name, []).append(td.name)
                 count += 1

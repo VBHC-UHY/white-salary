@@ -23,12 +23,22 @@ from typing import Optional
 import pytest
 
 from white_salary.core.interfaces.types import AudioData
+from white_salary.core.interfaces.asr import TranscriptionResult
+from white_salary.core.runtime import (
+    ConversationRef,
+    InteractiveTaskJournal,
+    RuntimeStore,
+    TaskState,
+)
 from white_salary.infrastructure.server import websocket_handler as wsh
 from white_salary.infrastructure.server.websocket_handler import (
     CancellationToken,
     _drain_sentences,
     _handle_chat_message,
+    _handle_voice_message,
     _resolve_owner_name,
+    _transcribe_voice_payload,
+    handle_chat_websocket,
 )
 
 
@@ -190,6 +200,7 @@ class FakeAgent:
     ):
         self.seen_user_name = user_name
         self.seen_user_id = user_id
+        self.seen_kwargs = kwargs
         try:
             for i, chunk in enumerate(self.chunks):
                 if self.on_yield is not None:
@@ -210,6 +221,46 @@ class FakeTTS:
     async def synthesize(self, text: str) -> AudioData:
         self.synthesized.append(text)
         return AudioData(samples=b"\x01\x02\x03", sample_rate=16000, dtype="wav")
+
+
+class FailingFirstTTS(FakeTTS):
+    """Fail one sentence, then prove later sentence audio can still advance."""
+
+    async def synthesize(self, text: str) -> AudioData:
+        self.synthesized.append(text)
+        if len(self.synthesized) == 1:
+            raise RuntimeError("temporary tts failure")
+        return AudioData(samples=b"\x04\x05", sample_rate=16000, dtype="wav")
+
+
+class FakeASR:
+    def __init__(self, text: str = "测试语音", error: Optional[Exception] = None) -> None:
+        self.text = text
+        self.error = error
+        self.seen: list[AudioData] = []
+
+    async def transcribe(self, audio: AudioData) -> TranscriptionResult:
+        self.seen.append(audio)
+        if self.error is not None:
+            raise self.error
+        return TranscriptionResult(text=self.text, language="zh")
+
+
+class BlockingASR(FakeASR):
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = asyncio.Event()
+        self.cancelled = False
+
+    async def transcribe(self, audio: AudioData) -> TranscriptionResult:
+        self.seen.append(audio)
+        self.started.set()
+        try:
+            await asyncio.sleep(999)
+        except asyncio.CancelledError:
+            self.cancelled = True
+            raise
+        return TranscriptionResult(text="不应到达")
 
 
 class _StubConvLog:
@@ -258,6 +309,39 @@ def test_reply_start_source_auto_for_system_input(quiet_side_effects):
     agent = FakeAgent(["主动打个招呼。"])
     _run(_handle_chat_message(ws, agent, None, "[主动对话触发] 早安", CancellationToken(), is_user_message=False))
     assert ws.frames[0] == {"type": "reply_start", "source": "auto"}
+
+
+def test_desktop_reply_records_runtime_and_passes_task_to_tool_loop(
+    tmp_path,
+    quiet_side_effects,
+):
+    ws = FakeWebSocket()
+    agent = FakeAgent(["已经处理好了。"])
+    store = RuntimeStore(tmp_path / "runtime.db")
+    task = InteractiveTaskJournal(store).begin(
+        ConversationRef("desktop", "owner", user_id="owner"),
+        "帮我处理",
+        owner_id="owner",
+    )
+
+    _run(_handle_chat_message(
+        ws,
+        agent,
+        None,
+        "帮我处理",
+        CancellationToken(),
+        owner_id="owner",
+        runtime_store=store,
+        runtime_task=task,
+    ))
+
+    assert store.get_task(task.id).state == TaskState.COMPLETED
+    assert agent.seen_kwargs["runtime_store"] is store
+    assert agent.seen_kwargs["runtime_task_id"] == task.id
+    assert any(
+        event.payload.get("receipt", {}).get("transport") == "websocket"
+        for event in store.list_events(task.id)
+    )
 
 
 def test_sentences_streamed_before_llm_finishes(quiet_side_effects):
@@ -357,6 +441,36 @@ def test_tts_audio_per_sentence_and_done_last(quiet_side_effects):
     assert tts.synthesized == ["第一句完整。", "第二句也完整！"]
 
 
+def test_tts_failure_marks_only_that_sentence_skipped(quiet_side_effects):
+    """One failed TTS sentence must not deadlock audio for later sentences."""
+    ws = FakeWebSocket()
+    tts = FailingFirstTTS()
+    agent = FakeAgent(["第一句失败。", "第二句成功！"])
+    _run(_handle_chat_message(ws, agent, tts, "说两句", CancellationToken()))
+
+    skipped = ws.of_type("sentence_audio_skipped")
+    audio = ws.of_type("sentence_audio")
+    assert [(frame["index"], frame["reason"]) for frame in skipped] == [
+        (0, "RuntimeError")
+    ]
+    assert [frame["index"] for frame in audio] == [1]
+    assert ws.types()[-1] == "done"
+
+
+def test_no_tts_marks_every_sentence_terminal(quiet_side_effects):
+    """Text-only mode still emits terminal audio states so UI indices advance."""
+    ws = FakeWebSocket()
+    agent = FakeAgent(["第一句。", "第二句！"])
+    _run(_handle_chat_message(ws, agent, None, "说两句", CancellationToken()))
+
+    assert [frame["index"] for frame in ws.of_type("sentence_audio_skipped")] == [0, 1]
+    assert all(
+        frame["reason"] == "tts_unavailable"
+        for frame in ws.of_type("sentence_audio_skipped")
+    )
+    assert ws.types()[-1] == "done"
+
+
 def test_emotion_extracted_per_sentence(quiet_side_effects):
     """情绪标签逐句提取：emotion 帧下发一次，正文不带 [tag]。"""
     ws = FakeWebSocket()
@@ -381,3 +495,136 @@ def test_owner_name_none_passed_through(quiet_side_effects):
     ))
     assert agent.seen_user_name is None
     assert agent.seen_user_id == "10086"
+
+
+# ---------------------------------------------------------------------------
+# Voice input lifecycle and receive-loop cancellation
+# ---------------------------------------------------------------------------
+
+def _encoded_wav(payload: bytes = b"voice") -> str:
+    header = b"RIFF" + (36 + len(payload)).to_bytes(4, "little") + b"WAVEfmt "
+    return base64.b64encode(header + payload).decode("ascii")
+
+
+def test_transcribe_voice_payload_rejects_invalid_base64():
+    with pytest.raises(ValueError, match="格式无效"):
+        _run(_transcribe_voice_payload(FakeASR(), "%%%not-base64%%%"))
+
+
+def test_voice_success_echoes_mode_request_and_terminal_status():
+    ws = FakeWebSocket()
+    _run(_handle_voice_message(
+        ws,
+        FakeASR("按住说话成功"),
+        _encoded_wav(),
+        CancellationToken(),
+        mode="push_to_talk",
+        request_id="voice-1",
+    ))
+
+    assert ws.types() == ["voice_status", "transcription", "voice_status"]
+    assert ws.frames[0] == {
+        "type": "voice_status",
+        "mode": "push_to_talk",
+        "state": "processing",
+        "request_id": "voice-1",
+    }
+    assert ws.frames[1]["content"] == "按住说话成功"
+    assert ws.frames[1]["request_id"] == "voice-1"
+    assert ws.frames[-1]["state"] == "done"
+
+
+def test_voice_error_has_error_frame_and_terminal_status():
+    ws = FakeWebSocket()
+    _run(_handle_voice_message(
+        ws,
+        FakeASR(error=RuntimeError("provider unavailable")),
+        _encoded_wav(),
+        CancellationToken(),
+        request_id="voice-error",
+    ))
+
+    assert ws.types() == ["voice_status", "error", "voice_status"]
+    assert "provider unavailable" in ws.of_type("error")[0]["content"]
+    assert ws.frames[-1]["state"] == "error"
+
+
+def test_voice_task_cancellation_has_terminal_status():
+    async def _scenario():
+        ws = FakeWebSocket()
+        asr = BlockingASR()
+        task = asyncio.create_task(_handle_voice_message(
+            ws,
+            asr,
+            _encoded_wav(),
+            CancellationToken(),
+            request_id="voice-cancel",
+        ))
+        await asr.started.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        return ws, asr
+
+    ws, asr = _run(_scenario())
+    assert asr.cancelled is True
+    assert ws.frames[-1]["type"] == "voice_status"
+    assert ws.frames[-1]["state"] == "cancelled"
+
+
+def test_websocket_receive_loop_can_interrupt_slow_asr(monkeypatch):
+    """A slow ASR call must not block receive_text from handling interrupt."""
+    asr = BlockingASR()
+
+    class VoiceWebSocket(FakeWebSocket):
+        def __init__(self) -> None:
+            super().__init__()
+            self.receive_count = 0
+
+        async def accept(self) -> None:
+            pass
+
+        async def receive_text(self) -> str:
+            self.receive_count += 1
+            if self.receive_count == 1:
+                return json.dumps({
+                    "type": "voice",
+                    "content": _encoded_wav(),
+                    "mode": "push_to_talk",
+                    "request_id": "voice-slow",
+                })
+            if self.receive_count == 2:
+                await asyncio.wait_for(asr.started.wait(), timeout=0.5)
+                return json.dumps({"type": "interrupt"})
+            raise wsh.WebSocketDisconnect()
+
+    class QuietAutoChat:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        async def start(self) -> None:
+            pass
+
+        async def stop(self) -> None:
+            pass
+
+        def notify_user_active(self) -> None:
+            pass
+
+    monkeypatch.setattr("white_salary.core.auto_chat.AutoChatManager", QuietAutoChat)
+    monkeypatch.setattr(wsh, "_resolve_owner_id", lambda *args, **kwargs: "desktop-test")
+    monkeypatch.setattr(wsh, "_resolve_owner_name", lambda *args, **kwargs: None)
+
+    ws = VoiceWebSocket()
+    agent = FakeAgent([])
+    _run(asyncio.wait_for(
+        handle_chat_websocket(ws, agent, asr=asr),
+        timeout=1.5,
+    ))
+
+    assert ws.receive_count == 3
+    assert asr.cancelled is True
+    statuses = ws.of_type("voice_status")
+    assert statuses[0]["state"] == "queued"
+    assert any(frame["state"] == "processing" for frame in statuses)
+    assert statuses[-1]["state"] == "cancelled"

@@ -126,12 +126,17 @@ class TestDirectoryStructure:
         assert "rvc-python" not in all_block
 
     def test_windows_launcher_uses_project_venv(self) -> None:
-        """Install/start scripts should use the Windows project .venv."""
+        """Installer and public launchers must use the project virtual environment."""
         install = (PROJECT_ROOT / "安装.bat").read_text(encoding="utf-8")
         start_backend = (PROJECT_ROOT / "Start-Backend.bat").read_text(encoding="utf-8")
-        assert "python -m venv" in install
+        assert '"%PYTHON_EXE%" -m venv' in install
         assert ".venv\\Scripts\\python.exe" in install
         assert '"%PROJECT_PYTHON%" -m pip install -e .' in install
+        assert "uv python find" in install
+        assert 'call :try_python "py" "-3.12"' in install
+        assert 'call :try_python "python" "" "PATH python"' in install
+        assert "WS_PYTHON override" in install
+        assert "Existing .venv uses an unsupported Python" in install
         assert "yt_dlp" in install
         assert "PIL" in install
         assert "mss" in install
@@ -155,7 +160,7 @@ class TestDirectoryStructure:
         assert "white-salary.service" in gitignore
 
     def test_gpt_sovits_launchers_use_configured_path(self) -> None:
-        """GPT-SoVITS launchers should resolve paths from config/env, not cd to one machine."""
+        """Public launchers resolve GPT-SoVITS from configuration, not one machine."""
         files = [
             PROJECT_ROOT / "Start.bat",
             PROJECT_ROOT / "Start-TTS.bat",

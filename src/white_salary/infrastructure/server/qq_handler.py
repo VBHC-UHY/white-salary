@@ -10,16 +10,29 @@ QQ消息处理器 — 连接QQ适配器和ChatAgent。
 """
 
 import asyncio
+import hashlib
 import json
 import re
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from loguru import logger
 
 from white_salary.core.agent.chat_agent import ChatAgent
+from white_salary.core.agent.session_pool import (
+    ChatAgentSessionPool,
+    qq_conversation_key,
+    qq_session_key,
+)
 from white_salary.core.affinity.manager import AffinityManager
 from white_salary.core.interfaces.types import AudioData, Message, MessageRole
+from white_salary.core.runtime import (
+    ChannelAddress,
+    ConversationRef,
+    InteractiveTaskHandle,
+    InteractiveTaskJournal,
+    RuntimeStore,
+)
 from white_salary.adapters.platform.qq_adapter import QQAdapter, QQMessage
 # 2026-07-03 面板升级（批6）：功能开关配置模型（features 节，纯Pydantic无循环依赖）
 from white_salary.infrastructure.config.models import FeaturesConfig
@@ -212,6 +225,68 @@ class _RedeliveredMsg:
         self._is_redelivered: bool = True
 
 
+def _compose_decision_raw_part(raw_message: str, text: str, original_text: str) -> str:
+    """
+    Build the raw text used by SmartReply after ASR/Vision enrichment.
+
+    SmartReply still needs the original CQ codes for @/reply/media checks, but
+    semantic continuation also needs the enriched text, such as image captions.
+    """
+    raw = raw_message or original_text or text or ""
+    enriched = text or ""
+    if enriched and enriched != original_text and enriched not in raw:
+        return f"{raw}\n{enriched}" if raw else enriched
+    return raw or enriched
+
+
+def _is_stop_reply_request(text: str) -> bool:
+    """Return whether *text* explicitly asks Bai to stop this conversation."""
+
+    normalized = re.sub(r"\s+", "", text or "")
+    if not normalized:
+        return False
+    stop_patterns = (
+        "别回", "不要回", "不用回", "别回复", "不要回复", "不用回复", "无需回复",
+        "别说话", "不要说话", "先别说", "暂时别说", "闭嘴",
+        "不许发消息", "不要发消息", "别发消息", "不准发消息",
+        "别回我", "别回话", "别理我", "不用理我",
+    )
+    return any(pattern in normalized for pattern in stop_patterns)
+
+
+def _parse_continuation_reply(content: str, *, fallback: bool) -> bool:
+    """Parse the continuation gate without treating negative phrases as positive."""
+
+    text = (content or "").strip()
+    match = re.search(r"\{.*\}", text, flags=re.S)
+    if match:
+        try:
+            value = json.loads(match.group(0)).get("reply")
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, str):
+                normalized = value.strip().lower()
+                if normalized in {"false", "no", "0"}:
+                    return False
+                if normalized in {"true", "yes", "1"}:
+                    return True
+        except (AttributeError, TypeError, ValueError, json.JSONDecodeError):
+            pass
+
+    lowered = text.lower()
+    negative_markers = (
+        "false", "不应该回复", "不需要回复", "不要回复", "无需回复",
+        "不用回复", "不回复", "不该回复",
+    )
+    if any(marker in lowered for marker in negative_markers):
+        return False
+
+    positive_markers = ("true", "应该回复", "需要回复")
+    if any(marker in lowered for marker in positive_markers):
+        return True
+    return fallback
+
+
 class QQContextManager:
     """
     QQ群聊上下文管理 — 每个群/用户独立的对话历史（带持久化）。
@@ -223,10 +298,23 @@ class QQContextManager:
         self._data_dir.mkdir(parents=True, exist_ok=True)
         self._load()
 
+    @staticmethod
+    def group_key(group_id: str) -> str:
+        return f"group:{str(group_id or '').strip()}"
+
+    @staticmethod
+    def private_key(user_id: str) -> str:
+        return f"private:{str(user_id or '').strip()}"
     def add_message(self, context_id: str, sender: str, text: str) -> None:
         if context_id not in self._contexts:
             self._contexts[context_id] = []
-        self._contexts[context_id].append({"sender": sender, "text": text[:100]})
+        stored_text = (text or "")[:300]
+        if not stored_text:
+            return
+        last = self._contexts[context_id][-1] if self._contexts[context_id] else None
+        if last and last.get("sender") == sender and last.get("text") == stored_text:
+            return
+        self._contexts[context_id].append({"sender": sender, "text": stored_text})
         if len(self._contexts[context_id]) > self._max:
             self._contexts[context_id] = self._contexts[context_id][-self._max:]
         self._save()
@@ -235,7 +323,8 @@ class QQContextManager:
         msgs = self._contexts.get(context_id, [])
         if not msgs:
             return ""
-        lines = ["[最近的群聊记录]"]
+        title = "[最近的群聊记录]" if context_id.startswith("group:") else "[最近的私聊记录]"
+        lines = [title]
         for m in msgs[-10:]:
             lines.append(f"  {m['sender']}: {m['text']}")
         return "\n".join(lines)
@@ -252,9 +341,78 @@ class QQContextManager:
         if path.exists():
             try:
                 with open(path, "r", encoding="utf-8") as f:
-                    self._contexts = json.load(f)
+                    loaded = json.load(f)
+                if not isinstance(loaded, dict):
+                    return
+                # Old releases used one bare numeric key space for both groups
+                # and private users. Preserve those records under an explicit
+                # legacy namespace, but never inject them automatically because
+                # a QQ number can equal a group number.
+                self._contexts = {
+                    (
+                        str(key)
+                        if str(key).startswith(("group:", "private:", "legacy:"))
+                        else f"legacy:{key}"
+                    ): value
+                    for key, value in loaded.items()
+                    if isinstance(value, list)
+                }
             except Exception as _e:
                     logger.debug(f'[QQ] 静默异常: {_e}')
+
+
+def _should_consume_stop_request(
+    *,
+    msg: QQMessage,
+    text: str,
+    is_direct: bool,
+    engagement_leases,
+) -> bool:
+    """Scope a stop request to the addressed or currently engaged QQ user."""
+
+    if not _is_stop_reply_request(text):
+        return False
+    if not msg.is_group or is_direct:
+        return True
+    try:
+        return engagement_leases.is_candidate(
+            QQContextManager.group_key(msg.group_id),
+            msg.user_id,
+        )
+    except Exception as exc:
+        logger.warning(f"[QQ] 检查停止回复活动窗口失败，按未命中处理: {exc}")
+        return False
+
+
+def _is_user_blocked(user_filter, user_id: str, *, is_family: bool) -> bool:
+    """Use the persistent runtime filter for every QQ message/event path."""
+
+    if user_filter is None or is_family:
+        return False
+    try:
+        from white_salary.core.memory.user_filter import FilterResult
+
+        return user_filter.check(user_id) == FilterResult.BLOCK
+    except Exception as exc:
+        logger.warning(f"[QQ] 用户过滤检查失败，按放行处理: {exc}")
+        return False
+
+
+def _record_silent_tool_completion(
+    *,
+    ctx_manager: QQContextManager,
+    context_id: str,
+    bot_name: str,
+    msg: QQMessage,
+    record_reply: Callable[[QQMessage], None],
+) -> None:
+    """Record a side-effect-only tool action without sending extra QQ text."""
+    ctx_manager.add_message(
+        context_id,
+        bot_name,
+        "[白通过工具完成了这次请求，没有额外发送文字]",
+    )
+    record_reply(msg)
 
 
 async def start_qq_service(
@@ -268,7 +426,11 @@ async def start_qq_service(
     vision_adapter=None,
     features: Optional[FeaturesConfig] = None,
     wake_words: Optional[list[str]] = None,
+    unblocked_group_ids: Optional[list[str]] = None,
     continuation_llm=None,
+    project_root: Optional[Path] = None,
+    agent_sessions: Optional[ChatAgentSessionPool] = None,
+    runtime_store: Optional[RuntimeStore] = None,
 ) -> None:
     """
     启动QQ服务（在后台运行）。
@@ -282,7 +444,10 @@ async def start_qq_service(
         asr_adapter: 语音识别适配器（收到语音消息时用）
         vision_adapter: 视觉适配器（收到图片消息时用）
         wake_words: QQ端唤醒词列表；只影响QQ群聊，不影响桌面端。
+        unblocked_group_ids: 手动不屏蔽的QQ群号列表；提高语义续聊候选分，不影响桌面端。
         continuation_llm: QQ活跃窗口续聊判断模型；None=用保守分数兜底。
+        project_root: 项目根目录，用于群内指令持久化 QQ 配置。
+        agent_sessions: QQ会话短期记忆池；None时按项目目录自动创建。
         features: 2026-07-03 面板升级（批6）：功能开关配置（run_server 传
                   config.features；None=自行读合并配置，失败回退全开=原行为）。
                   topic_tracker/rest_system 开关在此消费
@@ -294,7 +459,35 @@ async def start_qq_service(
         ws_url=ws_url, bot_name=bot_name, token=token,
         family_qq=[str(q) for q in (family_qq or [])],
     )
+    _service_root = Path(project_root) if project_root is not None else Path.cwd()
+    if runtime_store is None:
+        runtime_store = RuntimeStore(
+            _service_root / "data" / "runtime" / "agent_runtime.db"
+        )
+    runtime_journal = InteractiveTaskJournal(runtime_store)
     ctx_manager = QQContextManager()
+    if agent_sessions is None:
+        agent_sessions = ChatAgentSessionPool(
+            agent,
+            _service_root / "data" / "chat_history" / "qq_sessions",
+            max_turns=int(getattr(getattr(agent, "_memory", None), "_max_turns", 20)),
+        )
+    try:
+        from white_salary.infrastructure.server.settings_api import (
+            register_runtime_instance as _register_rt,
+        )
+        _register_rt("qq_agent_sessions", agent_sessions)
+    except Exception as e:
+        logger.warning(f"[QQ] 登记QQ会话记忆池失败（设置页无法即时清空）: {e}")
+
+    def _session_agent_for(msg: QQMessage) -> ChatAgent:
+        return agent_sessions.get(
+            qq_session_key(
+                user_id=msg.user_id,
+                group_id=msg.group_id if msg.is_group else "",
+                is_group=msg.is_group,
+            )
+        )
 
     # 把QQ适配器注册到QQ API工具（让桌面端也能调QQ API）
     try:
@@ -319,7 +512,11 @@ async def start_qq_service(
 
     # 群消息上下文记录（所有群消息都记，不管白回不回复，@白时能看到之前聊了什么）
     def _record_group_msg(group_id: str, sender_name: str, text: str) -> None:
-        ctx_manager.add_message(group_id, sender_name, text)
+        ctx_manager.add_message(
+            QQContextManager.group_key(group_id),
+            sender_name,
+            text,
+        )
 
     adapter.on_group_record = _record_group_msg
 
@@ -366,7 +563,11 @@ async def start_qq_service(
         from white_salary.infrastructure.server.settings_api import (
             register_runtime_instance,
         )
-        qq_user_filter = UserFilter(owner_id=str((family_qq or [0])[0]))
+        qq_user_filter = UserFilter(
+            data_dir=str(_service_root / "data" / "memory"),
+            owner_id=str((family_qq or [0])[0]),
+            affinity_data_dir=str(_service_root / "data" / "affinity"),
+        )
         register_runtime_instance("user_filter", qq_user_filter)
     except Exception as e:
         logger.warning(f"[QQ] 用户过滤器初始化/注册失败（消息将不做用户过滤）: {e}")
@@ -375,20 +576,62 @@ async def start_qq_service(
     msg_buffer = MessageBuffer(wait_timeout=2.0, min_wait=1.0, max_buffer=20, max_total_wait=30.0)
     _buffer_processing: dict[str, bool] = {}  # 记录哪些用户正在处理中
     _decision_raw_parts: dict[str, list[str]] = {}
+    _buffer_affinity_event_ids: dict[str, list[str]] = {}
 
     from white_salary.core.smart_reply import (
         ReplyDecision,
         SmartReplyDecider,
         contains_wake_word,
+        normalize_group_ids,
         normalize_wake_words,
     )
     qq_wake_words = normalize_wake_words(wake_words, bot_name=bot_name)
+    qq_unblocked_group_ids = normalize_group_ids(unblocked_group_ids)
+    from white_salary.core.runtime.engagement import EngagementLeaseBook
+    qq_engagement_leases = EngagementLeaseBook(
+        _service_root / "data" / "runtime" / "agent_runtime.db"
+    )
     qq_smart_decider = SmartReplyDecider(
         bot_self_id="",
         bot_name=bot_name,
         owner_ids=[str(q) for q in (family_qq or [])],
         wake_words=qq_wake_words,
+        unblocked_group_ids=qq_unblocked_group_ids,
+        engagement_leases=qq_engagement_leases,
     )
+    try:
+        from white_salary.infrastructure.server.settings_api import (
+            register_runtime_instance as _register_rt,
+        )
+        _register_rt("qq_smart_reply_decider", qq_smart_decider)
+        _register_rt("qq_engagement_leases", qq_engagement_leases)
+    except Exception as e:
+        logger.warning(f"[QQ] 登记SmartReply运行实例失败（设置页即时同步不可用）: {e}")
+
+    def _persist_unblocked_group_ids() -> None:
+        """Persist QQ manual unblocked group list to conf.yaml."""
+        root = Path(project_root) if project_root is not None else Path.cwd()
+        conf_path = root / "conf.yaml"
+        try:
+            import yaml
+
+            config = {}
+            if conf_path.exists():
+                config = yaml.safe_load(conf_path.read_text(encoding="utf-8")) or {}
+            if not isinstance(config.get("qq"), dict):
+                config["qq"] = {}
+            config["qq"]["unblocked_group_ids"] = qq_smart_decider.list_unblocked_groups()
+            conf_path.write_text(
+                yaml.dump(
+                    config,
+                    default_flow_style=False,
+                    allow_unicode=True,
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+        except Exception as e:
+            logger.warning(f"[QQ] 持久化不屏蔽群列表失败: {e}")
 
     class _MergedQQDecisionMessage:
         """Message-like object for SmartReply after QQ text buffering."""
@@ -410,6 +653,70 @@ async def start_qq_service(
         if msg.is_group:
             qq_smart_decider.record_reply(msg.group_id, msg.user_id)
 
+    def _begin_qq_runtime_task(
+        msg: QQMessage,
+        request_text: str,
+        *,
+        event_ids: Optional[list[str]] = None,
+        source: str = "message",
+    ) -> InteractiveTaskHandle:
+        stable_ids = sorted({str(value) for value in (event_ids or []) if value})
+        if not stable_ids and getattr(msg, "message_id", 0):
+            stable_ids = [f"qq:{msg.message_id}"]
+        idempotency_key = ""
+        if stable_ids:
+            digest = hashlib.sha256("|".join(stable_ids).encode("utf-8")).hexdigest()
+            idempotency_key = f"qq-input:{digest}"
+
+        scope = "group" if msg.is_group else "private"
+        conversation_id = (
+            f"{msg.group_id}:user:{msg.user_id}" if msg.is_group else msg.user_id
+        )
+        task = runtime_journal.begin(
+            ConversationRef(
+                platform="qq",
+                conversation_id=conversation_id,
+                scope=scope,
+                user_id=msg.user_id,
+                group_id=msg.group_id if msg.is_group else "",
+            ),
+            request_text,
+            owner_id=msg.user_id,
+            response_address=ChannelAddress(
+                platform="qq",
+                address=msg.group_id if msg.is_group else msg.user_id,
+                is_group=msg.is_group,
+            ),
+            metadata={
+                "source": source,
+                "event_ids": stable_ids,
+                "sender_name": msg.sender_name,
+            },
+            idempotency_key=idempotency_key,
+        )
+        setattr(msg, "_runtime_task", task)
+        return task
+
+    def _on_qq_reply_delivered(msg: QQMessage, message_id: int) -> None:
+        if msg.is_group and message_id:
+            qq_smart_decider.record_reply(msg.group_id, msg.user_id)
+        runtime_task = getattr(msg, "_runtime_task", None)
+        if runtime_task is not None and message_id:
+            runtime_task.complete(
+                receipt={
+                    "transport": "napcat",
+                    "message_id": int(message_id),
+                },
+            )
+
+    def _on_qq_reply_failed(msg: QQMessage, error: str) -> None:
+        runtime_task = getattr(msg, "_runtime_task", None)
+        if runtime_task is not None:
+            runtime_task.require_reconciliation(error)
+
+    adapter.on_reply_delivered = _on_qq_reply_delivered
+    adapter.on_reply_failed = _on_qq_reply_failed
+
     def _is_direct_to_bai(msg: QQMessage, raw: str, text: str) -> bool:
         """Whether this QQ message explicitly calls Bai."""
         return (
@@ -419,18 +726,72 @@ async def start_qq_service(
             or contains_wake_word(raw or text, qq_wake_words)
         )
 
-    def _is_stop_reply_request(text: str) -> bool:
-        """Hard stop phrases that must be consumed before tools/plugins/LLM."""
-        normalized = re.sub(r"\s+", "", text or "")
+    def _match_group_unblock_command(text: str) -> str | None:
+        """Match owner commands for QQ group inactive-gate bypass."""
+        normalized = re.sub(r"[\s,，。.!！?？:：;；、~～…“”\"'`]+", "", text or "")
         if not normalized:
-            return False
-        stop_patterns = (
-            "别回", "不要回", "不用回", "别回复", "不要回复", "不用回复",
-            "别说话", "不要说话", "先别说", "暂时别说", "闭嘴",
-            "不许发消息", "不要发消息", "别发消息", "不准发消息",
-            "别回我", "别回话", "别理我", "不用理我",
+            return None
+
+        status_terms = (
+            "这个群屏蔽状态", "本群屏蔽状态", "这个群不屏蔽状态", "本群不屏蔽状态",
+            "这个群会不会屏蔽", "本群会不会屏蔽",
         )
-        return any(p in normalized for p in stop_patterns)
+        enable_terms = (
+            "这个群不屏蔽", "本群不屏蔽", "这个群别屏蔽", "本群别屏蔽",
+            "这个群不要屏蔽", "本群不要屏蔽", "这个群取消屏蔽", "本群取消屏蔽",
+            "这个群放开", "本群放开", "这个群正常回复", "本群正常回复",
+            "这个群恢复正常", "本群恢复正常",
+        )
+        disable_terms = (
+            "这个群恢复智能屏蔽", "本群恢复智能屏蔽",
+            "这个群开启自动屏蔽", "本群开启自动屏蔽",
+            "这个群按活跃判断", "本群按活跃判断",
+            "关闭本群不屏蔽", "关闭这个群不屏蔽",
+            "这个群取消不屏蔽", "本群取消不屏蔽",
+        )
+
+        if any(term in normalized for term in status_terms):
+            return "status"
+        if any(term in normalized for term in disable_terms):
+            return "disable"
+        if any(term in normalized for term in enable_terms):
+            return "enable"
+        return None
+
+    def _handle_group_unblock_command(msg: QQMessage, text: str, raw: str) -> str | None:
+        """Handle owner-only manual group inactive-gate commands."""
+        if not msg.is_group:
+            return None
+
+        action = _match_group_unblock_command(text)
+        if action is None:
+            return None
+
+        direct = _is_direct_to_bai(msg, raw, text)
+        is_owner = msg.user_id in {str(q) for q in (family_qq or [])}
+        if not direct and not is_owner:
+            return None
+        if not is_owner:
+            return "这个设置要主人来改。"
+
+        if action == "status":
+            if qq_smart_decider.is_group_unblocked(msg.group_id):
+                return "这个群现在是不屏蔽状态：我会更容易把群消息交给续聊判断，但还是先判断是不是该接话。"
+            return "这个群现在按智能接话判断：没叫我、也不像续聊的时候，我会先观察。"
+
+        if action == "enable":
+            qq_smart_decider.set_group_unblocked(msg.group_id, True)
+            _persist_unblocked_group_ids()
+            logger.info(f"[QQ] 群 {msg.group_id} 已由主人设置为不屏蔽")
+            return "这个群已设为不屏蔽：我会更容易把群消息交给续聊判断，但还是先判断是不是该接话。"
+
+        if action == "disable":
+            qq_smart_decider.set_group_unblocked(msg.group_id, False)
+            _persist_unblocked_group_ids()
+            logger.info(f"[QQ] 群 {msg.group_id} 已恢复智能活跃判断")
+            return "这个群已恢复智能接话判断：没叫我、也不像续聊时我会先观察。"
+
+        return None
 
     async def _judge_active_continuation(
         *,
@@ -477,34 +838,29 @@ async def start_qq_service(
             logger.debug(f"[QQ] 续聊语义判断失败，使用分数兜底: {e}")
             return smart_score >= 30.0
 
-        content = (reply or "").strip()
-        try:
-            data = json.loads(re.search(r"\{.*\}", content, flags=re.S).group(0))
-            return bool(data.get("reply"))
-        except Exception:
-            lowered = content.lower()
-            if "true" in lowered or "应该回复" in content or "需要回复" in content:
-                return True
-            if "false" in lowered or "不回复" in content or "不用回复" in content:
-                return False
-            return smart_score >= 30.0
+        return _parse_continuation_reply(
+            reply or "",
+            fallback=smart_score >= 30.0,
+        )
 
     # 实时多消息拦截：白生成回复期间收到新消息，合并后重新生成
     _generating: dict[str, bool] = {}       # 记录哪些用户的回复正在生成中
     _pending_new_msgs: dict[str, list[str]] = {}  # 生成期间收到的新消息排队
 
-    # 初始化家人关系
-    for qq_id in (family_qq or []):
-        qq_str = str(qq_id)
-        aff = AffinityManager.get_for_user(qq_str)
-        if not aff._affinity.is_family:
-            aff.set_family(True)
-            logger.info(f"[QQ] 已设置 {qq_str} 为家人")
-        else:
-            logger.debug(f"[QQ] {qq_str} 已是家人")
+    # 初始化并同步由 qq.family_qq 管理的家人关系。手动设置的家人不受影响；
+    # 从配置移除的 config 来源条目会恢复进入家人前的真实好感度。
+    _affinity_root = str(
+        _service_root / "data"
+        / "affinity"
+    )
+    AffinityManager.sync_configured_family(
+        [str(qq_id) for qq_id in (family_qq or [])],
+        data_dir=_affinity_root,
+    )
 
     async def handle_qq_message(msg: QQMessage) -> Optional[str]:
         """处理QQ消息，返回回复文本（带完整功能模块）。"""
+        runtime_task: Optional[InteractiveTaskHandle] = None
         try:
             # 设置当前消息上下文（让工具知道是群聊还是私聊）
             try:
@@ -573,6 +929,7 @@ async def start_qq_service(
 
             if not text:
                 return None
+            decision_part = _compose_decision_raw_part(decision_raw, text, original_text)
 
             # 群聊里的媒体消息在 adapter 早期只能记录到 [图片]/[语音消息]，
             # 这里把 ASR/视觉后的富文本补进上下文。这样白被唤醒时能看到之前图片
@@ -581,25 +938,30 @@ async def start_qq_service(
                 bool(getattr(msg, "has_image", False))
                 or "[CQ:record," in getattr(msg, "raw_message", "")
             ):
-                ctx_manager.add_message(msg.group_id, msg.sender_name, text[:300])
+                ctx_manager.add_message(
+                    QQContextManager.group_key(msg.group_id),
+                    msg.sender_name,
+                    text[:300],
+                )
 
-            # ========== QQ硬闭嘴指令 ==========
-            # 必须早于插件、工具和LLM；只有私聊/@白/回复白/唤醒词这种“确实在叫白”
-            # 才消费，避免群里别人闲聊一句“别回”把白全局关掉。
-            if _is_stop_reply_request(text) and _is_direct_to_bai(msg, decision_raw, text):
-                if _is_owner_msg := (msg.user_id in {str(q) for q in (family_qq or [])}):
-                    try:
-                        from white_salary.core.services.presence_state import MODE_SILENT
-
-                        qq_presence.set_quiet(
-                            MODE_SILENT,
-                            duration_minutes=0,
-                            reason="QQ用户要求暂时不要发消息",
-                        )
-                    except Exception as _presence_err:
-                        logger.debug(f"[QQ] 设置静默失败，仅跳过当前回复: {_presence_err}")
+            # ========== QQ当前会话停止指令 ==========
+            # 私聊、显式呼叫，或当前(group,user)活动窗口内的用户都能立即停止本次会话。
+            # 这只关闭该用户在该群的 EngagementLease，绝不改全局在场/静默状态。
+            _direct_stop = _is_direct_to_bai(msg, decision_raw, text)
+            if _should_consume_stop_request(
+                msg=msg,
+                text=text,
+                is_direct=_direct_stop,
+                engagement_leases=qq_engagement_leases,
+            ):
+                if msg.is_group:
+                    qq_engagement_leases.close(
+                        QQContextManager.group_key(msg.group_id),
+                        msg.user_id,
+                        "user_requested_stop",
+                    )
                 logger.info(
-                    f"[QQ] 收到停止回复指令，跳过回复: {msg.sender_name}({msg.user_id})"
+                    f"[QQ] 已停止当前会话回复: {msg.sender_name}({msg.user_id})"
                 )
                 return None
 
@@ -634,12 +996,30 @@ async def start_qq_service(
                     )
                     return _quiet_decision.notice_text
 
+            # 持久黑/白名单必须覆盖普通消息和系统事件；此前系统事件快速通道
+            # 会绕过过滤，让已拉黑用户仍可用戳一戳/撤回等事件触发回复。
+            _is_family = msg.user_id in {str(q) for q in (family_qq or [])}
+            if _is_user_blocked(
+                qq_user_filter,
+                msg.user_id,
+                is_family=_is_family,
+            ):
+                logger.debug(f"[QQ] 用户过滤拦截: {msg.sender_name} ({msg.user_id})")
+                return None
+
             # ========== 系统事件快速通道 ==========
             # 戳一戳/撤回回应/入群欢迎等事件消息，跳过缓冲/社交/过滤等检查
             # 直接走ChatAgent生成回复，不然会被消息缓冲器合并或被社交冷却拒绝
             # 不清空记忆——保持记忆互通，事件回复也有上下文
             # 提示词已标清来源（谁在哪个群），大模型不会搞混
             if getattr(msg, '_is_system_event', False):
+                runtime_task = _begin_qq_runtime_task(
+                    msg,
+                    text,
+                    source="system_event",
+                )
+                if not runtime_task.should_process:
+                    return None
                 # 设置消息上下文（让工具知道是群聊还是私聊）
                 try:
                     from white_salary.adapters.tools.builtin.qq_api import set_msg_context
@@ -650,7 +1030,8 @@ async def start_qq_service(
                     )
                 except Exception:
                     pass
-                reply = await agent.chat(
+                event_agent = _session_agent_for(msg)
+                reply = await event_agent.chat(
                     text, user_name=msg.sender_name,
                     user_id=msg.user_id, is_group=msg.is_group,
                     group_id=msg.group_id if msg.is_group else "",
@@ -658,7 +1039,12 @@ async def start_qq_service(
                 if reply:
                     import re as _re
                     reply = _re.sub(r'<[^>]+>', '', reply).strip()
+                    runtime_task.response_ready(reply, awaiting_delivery=True)
                     return reply
+                runtime_task.complete(
+                    "No response generated",
+                    receipt={"transport": "none", "reason": "empty_response"},
+                )
                 return None
 
             # 冲突检测（打断直接return，修正/补充加hint）
@@ -673,11 +1059,16 @@ async def start_qq_service(
             # 静默丢弃的排队消息会以 _RedeliveredMsg 重新进入本入口；
             # 这类消息跳过缓冲与拦截合并，直接普通处理一轮（防死循环）
             _is_redelivery: bool = bool(getattr(msg, '_is_redelivered', False))
+            affinity_event_ids: list[str] = []
 
             # ========== 消息缓冲（合并连续消息，2秒窗口） ==========
             buffer_key = f"{msg.group_id}_{msg.user_id}" if msg.is_group else msg.user_id
             if not _is_redelivery:
-                _decision_raw_parts.setdefault(buffer_key, []).append(decision_raw)
+                _decision_raw_parts.setdefault(buffer_key, []).append(decision_part)
+                if msg.message_id:
+                    _buffer_affinity_event_ids.setdefault(buffer_key, []).append(
+                        f"qq:{msg.message_id}"
+                    )
                 msg_buffer.add(buffer_key, text)
 
                 # 如果这个用户已经有handler在等buffer → 消息已加入缓冲，直接return
@@ -691,16 +1082,60 @@ async def start_qq_service(
                     merged = await msg_buffer.wait_and_flush(buffer_key)
                     if not merged:
                         _decision_raw_parts.pop(buffer_key, None)
+                        _buffer_affinity_event_ids.pop(buffer_key, None)
                         return None
                     text = merged
                     decision_raw = "\n".join(
                         _decision_raw_parts.pop(buffer_key, [])
                     ) or text
+                    affinity_event_ids = _buffer_affinity_event_ids.pop(buffer_key, [])
                 finally:
                     _buffer_processing[buffer_key] = False
             else:
                 decision_raw = text
             # ========== 缓冲结束，text是合并后的完整消息 ==========
+
+            if msg.is_group and not _is_redelivery and (
+                "\n" in text or text != original_text
+            ):
+                ctx_manager.add_message(
+                    QQContextManager.group_key(msg.group_id),
+                    msg.sender_name,
+                    text,
+                )
+
+            group_unblock_reply = _handle_group_unblock_command(msg, text, decision_raw)
+            if group_unblock_reply is not None:
+                ctx_manager.add_message(
+                    QQContextManager.group_key(msg.group_id),
+                    bot_name,
+                    group_unblock_reply[:100],
+                )
+                return group_unblock_reply
+
+            _plugin_mgr = None
+            _plugin_metadata = None
+            _plugin_observed = False
+            try:
+                _plugin_mgr = _get_plugin_manager()
+                if _plugin_mgr is not None:
+                    _plugin_metadata = {
+                        "platform": "qq",
+                        "is_group": msg.is_group,
+                        "group_id": msg.group_id if msg.is_group else "",
+                        "user_id": msg.user_id,
+                        "sender_name": msg.sender_name,
+                        "is_at_me": bool(getattr(msg, "is_at_me", False)),
+                        "phase": "observe",
+                    }
+                    await _plugin_mgr.observe_message(
+                        text,
+                        msg.user_id,
+                        metadata=_plugin_metadata,
+                    )
+                    _plugin_observed = True
+            except Exception as _pe:
+                logger.warning(f"[QQ] 插件 observer 钩子异常，已跳过观察: {_pe}")
 
             # ========== QQ群聊回复决策（合并后再判断） ==========
             if msg.is_group and not _is_redelivery:
@@ -710,7 +1145,9 @@ async def start_qq_service(
                         _MergedQQDecisionMessage(msg, decision_raw)
                     )
                     if smart_result.decision == ReplyDecision.SEMANTIC_CHECK:
-                        group_ctx_for_gate = ctx_manager.get_context(msg.group_id)
+                        group_ctx_for_gate = ctx_manager.get_context(
+                            QQContextManager.group_key(msg.group_id)
+                        )
                         should_continue = await _judge_active_continuation(
                             msg=msg,
                             text=text,
@@ -719,11 +1156,19 @@ async def start_qq_service(
                             smart_score=smart_result.score,
                         )
                         if not should_continue:
+                            qq_smart_decider.record_unrelated_message(
+                                msg.group_id,
+                                msg.user_id,
+                            )
                             logger.debug(
                                 f"[QQ] 活跃窗口语义判断不接话 {msg.sender_name}({msg.user_id}): "
                                 f"{smart_result.reason}"
                             )
                             return None
+                        qq_smart_decider.record_relevant_followup(
+                            msg.group_id,
+                            msg.user_id,
+                        )
                     elif smart_result.decision != ReplyDecision.REPLY:
                         logger.debug(
                             f"[QQ] SmartReply不回复 {msg.sender_name}({msg.user_id}): "
@@ -740,27 +1185,11 @@ async def start_qq_service(
                 return None
 
             # 社交系统检查（家人跳过，不受冷却/黑名单限制）
-            _is_family = msg.user_id in {str(q) for q in (family_qq or [])}
             if not _is_family:
                 if not qq_social.should_process(msg.user_id, text, msg.is_group):
                     logger.debug(f"[QQ] 社交系统拦截: {msg.sender_name} ({msg.user_id})")
                     return None
             qq_social.on_message(msg.user_id, text, msg.is_group)
-
-            # 用户过滤（好感度自动拉黑）
-            # 2026-07-03 面板升级（批6）：改用服务启动时创建并已注册到
-            # settings_api 的共享实例（原为函数属性上的惰性单例，面板操作
-            # 触达不到）；实例创建失败时为 None，跳过过滤（与原异常路径一致）
-            try:
-                from white_salary.core.memory.user_filter import FilterResult
-                if (
-                    qq_user_filter is not None
-                    and not _is_family
-                    and qq_user_filter.check(msg.user_id) == FilterResult.BLOCK
-                ):
-                    return None
-            except Exception as _e:
-                    logger.debug(f'[QQ] 静默异常: {_e}')
 
             # 隐私守卫（群聊防套私聊内容）
             if msg.is_group:
@@ -793,14 +1222,32 @@ async def start_qq_service(
                 qq_topic_tracker.record_message(text, source="user")
 
             # 上下文（群聊由on_group_record记录所有消息，这里只记私聊的）
-            context_id = msg.group_id if msg.is_group else msg.user_id
+            context_id = (
+                QQContextManager.group_key(msg.group_id)
+                if msg.is_group
+                else QQContextManager.private_key(msg.user_id)
+            )
             if not msg.is_group:
                 ctx_manager.add_message(context_id, msg.sender_name, text)
 
+            runtime_task = _begin_qq_runtime_task(
+                msg,
+                text,
+                event_ids=affinity_event_ids,
+                source="redelivery" if _is_redelivery else "message",
+            )
+            if not runtime_task.should_process:
+                logger.info(
+                    f"[Runtime] 忽略重复QQ消息 task={runtime_task.id}"
+                )
+                return None
+
             # 处理多用户好感度（只执行一次，不需要随重新生成重复）
-            user_aff = AffinityManager.get_for_user(msg.user_id)
-            user_aff.process_interaction()
-            user_aff.process_message(text)
+            user_aff = AffinityManager.get_for_user(
+                msg.user_id,
+                data_dir=_affinity_root,
+            )
+            user_aff.process_event(text, affinity_event_ids)
 
             # 用户学习
             if user_learning:
@@ -833,22 +1280,26 @@ async def start_qq_service(
             # 钩子调用整体由 PluginManager.process_message 内部 try/except+超时
             # 兜底（单个坏插件不拖垮消息链路），这里再包一层保险：出任何岔子都
             # 当作"无插件拦截"继续走 LLM。插件仍受上面所有社交/过滤/静默门槛约束。
-            _plugin_mgr = _get_plugin_manager()
+            if _plugin_mgr is None:
+                _plugin_mgr = _get_plugin_manager()
             if _plugin_mgr is not None:
                 try:
-                    _plugin_metadata = {
-                        "platform": "qq",
-                        "is_group": msg.is_group,
-                        "group_id": msg.group_id if msg.is_group else "",
-                        "user_id": msg.user_id,
-                        "sender_name": msg.sender_name,
-                        "is_at_me": bool(getattr(msg, "is_at_me", False)),
-                    }
-                    await _plugin_mgr.observe_message(
-                        text,
-                        msg.user_id,
-                        metadata=_plugin_metadata,
-                    )
+                    if _plugin_metadata is None:
+                        _plugin_metadata = {
+                            "platform": "qq",
+                            "is_group": msg.is_group,
+                            "group_id": msg.group_id if msg.is_group else "",
+                            "user_id": msg.user_id,
+                            "sender_name": msg.sender_name,
+                            "is_at_me": bool(getattr(msg, "is_at_me", False)),
+                        }
+                    _plugin_metadata["phase"] = "intercept"
+                    if not _plugin_observed:
+                        await _plugin_mgr.observe_message(
+                            text,
+                            msg.user_id,
+                            metadata={**_plugin_metadata, "phase": "observe"},
+                        )
                     _plugin_reply = await _plugin_mgr.process_message(
                         text,
                         msg.user_id,
@@ -861,7 +1312,10 @@ async def start_qq_service(
                     logger.info(f"[QQ] 插件抢答 {msg.sender_name}: {_plugin_reply[:30]}")
                     # 记录到上下文并直接返回（不进 LLM）
                     ctx_manager.add_message(context_id, bot_name, _plugin_reply[:100])
-                    _record_qq_reply_for_smart(msg)
+                    runtime_task.response_ready(
+                        _plugin_reply,
+                        awaiting_delivery=True,
+                    )
                     return _plugin_reply
 
             # ========== 生成回复（带实时多消息拦截） ==========
@@ -875,8 +1329,19 @@ async def start_qq_service(
                 _pending_new_msgs.pop(buffer_key, None)  # 清空旧排队
             _max_regen = 0 if _is_redelivery else 2  # 最多重新生成2次
             leftover_pending: list[str] = []  # 达重生成上限后仍在排队的消息（重投递用）
+            session_agent = _session_agent_for(msg)
+            execution_lock = agent_sessions.execution_lock(
+                qq_conversation_key(
+                    user_id=msg.user_id,
+                    group_id=msg.group_id if msg.is_group else "",
+                    is_group=msg.is_group,
+                )
+            )
+            lock_acquired = False
 
             try:
+                await execution_lock.acquire()
+                lock_acquired = True
                 for _regen_round in range(_max_regen + 1):
                     # 构建输入（每次重新生成都要重新构建，因为text可能变了）
                     if msg.is_group:
@@ -885,7 +1350,7 @@ async def start_qq_service(
                         user_input = f"[QQ私聊 发送者:{msg.sender_name} QQ:{msg.user_id}]\n{text}"
 
                     if msg.is_group:
-                        group_ctx = ctx_manager.get_context(msg.group_id)
+                        group_ctx = ctx_manager.get_context(context_id)
                         if group_ctx:
                             user_input = f"{group_ctx}\n\n{msg.sender_name} 对你说: {text}"
 
@@ -910,12 +1375,12 @@ async def start_qq_service(
                     # 2026-07-02 审计修复（批4）：chat前快照记忆对象引用——
                     # 撤销时按对象身份删除本轮写入的一问一答，不再盲目pop末两条
                     # （快照列表必须保持强引用到撤销完成，防止 id() 复用误判）
-                    _ctx_snapshot = list(agent._memory._messages)
+                    _ctx_snapshot = list(session_agent._memory._messages)
                     _before_ids = {id(m) for m in _ctx_snapshot}
 
                     # 调大模型生成回复
                     reply_parts = []
-                    async for chunk in agent.chat_stream_with_tools(
+                    async for chunk in session_agent.chat_stream_with_tools(
                         user_input, user_name=msg.sender_name,
                         user_id=msg.user_id, is_group=msg.is_group,
                         group_id=msg.group_id if msg.is_group else "",
@@ -928,11 +1393,24 @@ async def start_qq_service(
                             ),
                             "allow_side_effects": msg.user_id in {str(q) for q in (family_qq or [])},
                         },
+                        runtime_store=runtime_store,
+                        runtime_task_id=runtime_task.id,
                     ):
                         reply_parts.append(chunk)
                     reply = "".join(reply_parts)
                     if "__WHITE_SALARY_TOOL_SILENT__" in reply:
                         logger.info("[QQ] 工具已完成且要求静默，本轮不发送额外文字")
+                        _record_silent_tool_completion(
+                            ctx_manager=ctx_manager,
+                            context_id=context_id,
+                            bot_name=bot_name,
+                            msg=msg,
+                            record_reply=_record_qq_reply_for_smart,
+                        )
+                        runtime_task.complete(
+                            "Tool completed without an extra text reply",
+                            receipt={"transport": "tool", "silent": True},
+                        )
                         return None
 
                     # ===== 检查排队：生成期间有没有新消息进来 =====
@@ -945,7 +1423,7 @@ async def start_qq_service(
                         # 按对象身份+内容/来源标记匹配删除，找不到就不删，
                         # 防止多用户并发时误删他人对话（原pop末两条会删到并发写入的记录）
                         removed = _undo_generation_pair(
-                            agent._memory._messages,
+                            session_agent._memory._messages,
                             _before_ids,
                             user_input,
                             _expected_memory_tag(
@@ -970,6 +1448,8 @@ async def start_qq_service(
                         break  # 没有排队消息，或已达重新生成上限，结束循环
 
             finally:
+                if lock_acquired:
+                    execution_lock.release()
                 if not _is_redelivery:
                     _generating.pop(buffer_key, None)
                     _pending_new_msgs.pop(buffer_key, None)
@@ -1065,17 +1545,19 @@ async def start_qq_service(
             if not clean_reply.strip():
                 clean_reply = "刚才脑袋空了一下，你再说一遍？"
 
-            _record_qq_reply_for_smart(msg)
-
             logger.info(
                 f"[QQ] {'群' if msg.is_group else '私'}聊 "
                 f"{msg.sender_name}: {text[:30]} → {clean_reply[:30]}"
             )
 
+            runtime_task.response_ready(clean_reply, awaiting_delivery=True)
+
             return clean_reply
 
         except Exception as e:
             import traceback
+            if runtime_task is not None:
+                runtime_task.fail(str(e))
             logger.error(f"[QQ] 回复生成失败: {e}\n{traceback.format_exc()}")
             return None
 
@@ -1128,5 +1610,56 @@ async def start_qq_service(
 
     adapter.on_connected = _on_connected
 
+    async def _qq_bridge_loop() -> None:
+        """Consume durable desktop-to-QQ deliveries after NapCat is connected."""
+        from white_salary.core.cross_platform import CrossPlatformBridge
+
+        bridge = CrossPlatformBridge()
+        default_owner = str((family_qq or [""])[0])
+        while True:
+            await asyncio.sleep(0.5)
+            ws = getattr(adapter, "_ws", None)
+            if ws is None or bool(getattr(ws, "closed", False)):
+                continue
+            messages = bridge.claim_qq_messages(limit=20)
+            for item in messages:
+                target_id = str(item.get("target_id") or default_owner).strip()
+                text = str(item.get("message") or "").strip()
+                is_group = bool(item.get("is_group", False))
+                if not target_id or not text:
+                    bridge.reject_message(item, "QQ bridge target or message is empty")
+                    continue
+                try:
+                    if is_group:
+                        message_id = await adapter.send_group_message(target_id, text)
+                    else:
+                        message_id = await adapter.send_private_message(target_id, text)
+                except Exception as e:
+                    bridge.mark_message_unknown(item, str(e))
+                    continue
+                if message_id:
+                    bridge.ack_message(
+                        item,
+                        receipt={
+                            "consumer": "qq_adapter",
+                            "message_id": int(message_id),
+                            "target_id": target_id,
+                            "is_group": is_group,
+                        },
+                    )
+                else:
+                    bridge.mark_message_unknown(
+                        item,
+                        "NapCat returned no message_id; delivery outcome is ambiguous",
+                    )
+
     logger.info(f"[QQ] 启动QQ服务: {ws_url}")
-    await adapter.connect()
+    qq_bridge_task = asyncio.create_task(_qq_bridge_loop(), name="qq-bridge-consumer")
+    try:
+        await adapter.connect()
+    finally:
+        qq_bridge_task.cancel()
+        try:
+            await qq_bridge_task
+        except asyncio.CancelledError:
+            pass

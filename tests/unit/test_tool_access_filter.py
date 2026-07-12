@@ -90,3 +90,61 @@ def test_get_openai_tools_filters_side_effects_when_disallowed() -> None:
     payload = registry.get_openai_tools(context={"allow_side_effects": False})
 
     assert _tool_names(payload) == {"read_only"}
+
+
+def test_all_builtin_tools_have_conservative_policy() -> None:
+    registry = ToolRegistry()
+    tools = registry.get_all()
+
+    assert len(tools) >= 100
+    assert all(tool.requires_permission or not tool.side_effect for tool in tools)
+    assert all(
+        tool.requires_permission == "owner"
+        for tool in tools
+        if tool.side_effect
+    )
+
+
+def test_non_owner_qq_candidates_exclude_dangerous_tools() -> None:
+    registry = ToolRegistry()
+    names = _tool_names(registry.get_openai_tools(context={
+        "platform": "qq",
+        "permissions": [],
+        "allow_side_effects": False,
+    }))
+
+    assert "web_search" in names
+    assert "calculator" in names
+    assert "execute_code" not in names
+    assert "pc_control" not in names
+    assert "qq_group_kick" not in names
+    assert "memory_remove" not in names
+
+
+async def test_execute_rechecks_access_after_candidate_selection() -> None:
+    called = False
+
+    async def dangerous_handler(**kwargs) -> str:
+        nonlocal called
+        called = True
+        return "should not run"
+
+    registry = _empty_registry()
+    registry.register(ToolDefinition(
+        name="dangerous",
+        description="dangerous",
+        parameters={"type": "object", "properties": {}},
+        handler=dangerous_handler,
+        requires_permission="owner",
+        side_effect=True,
+    ))
+
+    result = await registry.execute_detailed(
+        "dangerous",
+        {},
+        context={"platform": "qq", "permissions": [], "allow_side_effects": False},
+    )
+
+    assert not result.ok
+    assert result.error_type == "permission_denied"
+    assert not called

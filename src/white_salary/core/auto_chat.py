@@ -116,9 +116,14 @@ class AutoChatManager:
         self,
         send_callback: Callable[[str], Awaitable[None]],
         config: Optional[AutoChatConfig] = None,
+        *,
+        user_id: str = "desktop",
+        affinity_data_dir: str = "data/affinity",
     ) -> None:
         self._send = send_callback
         self._config = config or AutoChatConfig()
+        self._user_id = str(user_id or "desktop")
+        self._affinity_data_dir = affinity_data_dir
         self._running = False
         self._task: Optional[asyncio.Task] = None
 
@@ -223,7 +228,10 @@ class AutoChatManager:
         """好感度→主动聊天概率系数。家人2倍，好友1.5倍，陌生人1倍，反感0.3倍。"""
         try:
             from white_salary.core.affinity.manager import AffinityManager
-            aff = AffinityManager.get_for_user("desktop")
+            aff = AffinityManager.get_for_user(
+                self._user_id,
+                data_dir=self._affinity_data_dir,
+            )
             stats = aff.get_stats()
             if stats.get("is_family"):
                 return 2.0

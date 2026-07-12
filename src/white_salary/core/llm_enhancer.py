@@ -52,7 +52,9 @@ _QUESTION_PATTERNS = re.compile(
     r"(什么|怎么|为什么|如何|哪个|哪里|多少|是不是|能不能|会不会|可以吗|吗\?|吗？|呢\?|呢？|\?|？)$"
 )
 _REQUEST_PATTERNS = re.compile(
-    r"(帮我|帮忙|请|麻烦|能不能|可以|给我|替我|搜一下|查一下|算一下|翻译)"
+    r"(帮我|帮忙|请|麻烦|能不能|可以|给我|替我|搜一下|查一下|算一下|翻译|"
+    r"发个|发一[个张下]|发送|发语音|发图片|发表情包|来[个张]|截屏|截图|"
+    r"打开|点开|播放|生成|画[个张]?|做一下|弄一下)"
 )
 _EMOTION_PATTERNS = re.compile(
     r"(好开心|好难过|好生气|好累|好烦|伤心|难受|委屈|崩溃|焦虑|害怕|紧张|兴奋|感动|"
@@ -127,9 +129,9 @@ class LLMEnhancer:
     def _build_style_hint(self, intent: IntentType, urgency: Urgency) -> str:
         """根据意图和紧急度生成风格提示。"""
         hints = {
-            IntentType.QUESTION: "用户在提问，简洁准确地回答，如果不确定就说不知道。",
-            IntentType.REQUEST: "用户在请求帮助，直接给出有用的回答，不要啰嗦。",
-            IntentType.CHAT: "用户在闲聊，轻松自然地回应，可以适当展开话题。",
+            IntentType.QUESTION: "用户在提问，先回答清楚；普通聊天不要只回一两个字，可以自然补一句。",
+            IntentType.REQUEST: "用户在请求你做事或调用能力；先判断是否需要工具/动作，成功或失败都用自然口吻说明，不要只回一两个字。",
+            IntentType.CHAT: "用户在闲聊，轻松自然地回应，可以适当展开话题，不要把正常聊天压成单字。",
             IntentType.EMOTION: "用户在表达情绪，先共情再回应，不要急于给建议。",
             IntentType.SHARE: "用户在分享信息，表现出兴趣和好奇，适当追问。",
             IntentType.TEASE: "用户在开玩笑/调侃，用活泼俏皮的方式回应，可以反击。",
