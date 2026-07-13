@@ -43,6 +43,16 @@ DEFAULT_WAV2LIP_DIR: str = ""
 # ffmpeg 候选路径
 DEFAULT_FFMPEG_PATHS: tuple[str, ...] = (
 )
+NAPCAT_LAUNCHER_NAMES: tuple[str, ...] = (
+    "launcher-user.bat",
+    "launcher.bat",
+    "launcher-win10-user.bat",
+    "launcher-win10.bat",
+)
+
+
+def _project_root() -> Path:
+    return Path(__file__).resolve().parents[4]
 
 
 # =============================================================================
@@ -52,9 +62,10 @@ DEFAULT_FFMPEG_PATHS: tuple[str, ...] = (
 # _ExternalToolsConfig 单例缓存；None = 尚未尝试加载
 _cached_external_tools: Optional[object] = None
 _load_attempted: bool = False
+_cached_project_root: Optional[Path] = None
 
 
-def _get_external_tools_config() -> Optional[object]:
+def _get_external_tools_config(project_root: Optional[Path] = None) -> Optional[object]:
     """
     惰性读取合并后配置里的 external_tools 节（ExternalToolsConfig）。
 
@@ -64,16 +75,22 @@ def _get_external_tools_config() -> Optional[object]:
     Returns:
         ExternalToolsConfig 实例；不可用时返回 None
     """
-    global _cached_external_tools, _load_attempted
-    if _load_attempted:
+    global _cached_external_tools, _load_attempted, _cached_project_root
+    root = (Path(project_root) if project_root is not None else _project_root()).resolve(
+        strict=False
+    )
+    if _load_attempted and (
+        _cached_project_root is None or _cached_project_root == root
+    ):
         return _cached_external_tools
 
     _load_attempted = True
+    _cached_project_root = root
     try:
         # 延迟到此处 import，避免 adapter import 期触发配置模块加载
         from white_salary.infrastructure.config import load_config
 
-        config = load_config()
+        config = load_config(project_root=root)
         _cached_external_tools = getattr(config, "external_tools", None)
     except Exception as exc:  # 配置不可用时回退默认值，不影响云端主流程
         logger.debug(f"[ExternalPaths] 读取 external_tools 配置失败，回退内置默认值: {exc}")
@@ -85,12 +102,13 @@ def reset_cache() -> None:
     """
     清空 external_tools 配置缓存（仅供单测在 monkeypatch 配置后重置用）。
     """
-    global _cached_external_tools, _load_attempted
+    global _cached_external_tools, _load_attempted, _cached_project_root
     _cached_external_tools = None
     _load_attempted = False
+    _cached_project_root = None
 
 
-def _config_value(field: str) -> str:
+def _config_value(field: str, project_root: Optional[Path] = None) -> str:
     """
     从 external_tools 配置里取某字段（非空字符串才算"用户配置了"）。
 
@@ -100,14 +118,19 @@ def _config_value(field: str) -> str:
     Returns:
         配置的路径字符串；未配置 / 配置为空 / 配置不可用时返回空串
     """
-    cfg = _get_external_tools_config()
+    cfg = _get_external_tools_config(project_root)
     if cfg is None:
         return ""
     value = getattr(cfg, field, "")
     return value.strip() if isinstance(value, str) else ""
 
 
-def _resolve(env_var: str, config_field: str, default: str) -> str:
+def _resolve(
+    env_var: str,
+    config_field: str,
+    default: str,
+    project_root: Optional[Path] = None,
+) -> str:
     """
     按统一三级顺序解析一条外部工具路径。
 
@@ -125,72 +148,147 @@ def _resolve(env_var: str, config_field: str, default: str) -> str:
     env_value = os.environ.get(env_var, "").strip()
     if env_value:
         return env_value
-    cfg_value = _config_value(config_field)
+    cfg_value = _config_value(config_field, project_root)
     if cfg_value:
         return cfg_value
     return default
+
+
+def _path_from_value(value: str, project_root: Optional[Path] = None) -> Path:
+    """Turn a configured path into a project-relative or absolute ``Path``."""
+    result = Path(value).expanduser()
+    if not result.is_absolute():
+        root = (
+            Path(project_root).expanduser().resolve(strict=False)
+            if project_root is not None
+            else _project_root()
+        )
+        result = root / result
+    return result
 
 
 # =============================================================================
 # 对外的路径解析函数（各 adapter 调用）
 # =============================================================================
 
-def get_comfyui_bat() -> Path:
+def _find_napcat_launcher(candidate: Path) -> Optional[Path]:
+    """Resolve a NapCat launcher from either a .bat file or install directory."""
+    candidate = candidate.expanduser()
+    if candidate.is_file() and candidate.suffix.lower() == ".bat":
+        return candidate
+    if candidate.is_dir():
+        for name in NAPCAT_LAUNCHER_NAMES:
+            launcher = candidate / name
+            if launcher.is_file():
+                return launcher
+    return None
+
+
+def get_napcat_launcher(project_root: Optional[Path] = None) -> Path:
+    """Resolve NapCat without embedding an author's machine-specific path."""
+    root = (
+        Path(project_root).expanduser().resolve(strict=False)
+        if project_root is not None
+        else _project_root()
+    )
+    configured = _resolve(
+        "WS_NAPCAT_LAUNCHER", "napcat_launcher", "", project_root=root
+    )
+    candidates: list[Path] = []
+    if configured:
+        configured_path = Path(configured).expanduser()
+        if not configured_path.is_absolute():
+            configured_path = root / configured_path
+        candidates.append(configured_path)
+
+    candidates.append(root / "NapCat")
+
+    for candidate in candidates:
+        launcher = _find_napcat_launcher(candidate)
+        if launcher is not None:
+            return launcher.resolve()
+
+    configured_note = f" Configured value: {configured}." if configured else ""
+    raise FileNotFoundError(
+        "NapCat launcher was not found. Set external_tools.napcat_launcher in "
+        "conf.yaml or WS_NAPCAT_LAUNCHER, or place NapCat in project/NapCat."
+        + configured_note
+    )
+
+
+def get_comfyui_bat(project_root: Optional[Path] = None) -> Path:
     """ComfyUI 启动脚本路径（环境变量 WS_COMFYUI_BAT → 配置）。"""
-    value = _resolve("WS_COMFYUI_BAT", "comfyui_bat", DEFAULT_COMFYUI_BAT)
+    value = _resolve(
+        "WS_COMFYUI_BAT", "comfyui_bat", DEFAULT_COMFYUI_BAT, project_root
+    )
     if not value:
         raise FileNotFoundError(
             "ComfyUI start script is not configured. Set external_tools.comfyui_bat "
             "in conf.yaml or WS_COMFYUI_BAT."
         )
-    return Path(value)
+    return _path_from_value(value, project_root)
 
 
-def get_comfyui_input() -> Path:
+def get_comfyui_input(project_root: Optional[Path] = None) -> Path:
     """ComfyUI input 目录（环境变量 WS_COMFYUI_INPUT → 配置）。"""
-    value = _resolve("WS_COMFYUI_INPUT", "comfyui_input", DEFAULT_COMFYUI_INPUT)
+    value = _resolve(
+        "WS_COMFYUI_INPUT", "comfyui_input", DEFAULT_COMFYUI_INPUT, project_root
+    )
     if not value:
         raise FileNotFoundError(
             "ComfyUI input directory is not configured. Set external_tools.comfyui_input "
             "in conf.yaml or WS_COMFYUI_INPUT."
         )
-    return Path(value)
+    return _path_from_value(value, project_root)
 
 
-def get_gpt_sovits_dir() -> Path:
+def get_gpt_sovits_dir(project_root: Optional[Path] = None) -> Path:
     """GPT-SoVITS 安装目录（环境变量 WS_GPT_SOVITS_DIR → 配置）。"""
-    value = _resolve("WS_GPT_SOVITS_DIR", "gpt_sovits_dir", DEFAULT_GPT_SOVITS_DIR)
+    root = Path(project_root).expanduser().resolve(strict=False) if project_root else None
+    value = _resolve(
+        "WS_GPT_SOVITS_DIR",
+        "gpt_sovits_dir",
+        DEFAULT_GPT_SOVITS_DIR,
+        project_root=root,
+    )
     if not value:
         raise FileNotFoundError(
             "GPT-SoVITS path is not configured. Set external_tools.gpt_sovits_dir "
             "in conf.yaml or WS_GPT_SOVITS_DIR."
         )
-    return Path(value)
+    return _path_from_value(value, root)
 
 
-def get_cosyvoice_bat() -> Path:
+def get_cosyvoice_bat(project_root: Optional[Path] = None) -> Path:
     """CosyVoice 启动脚本路径（环境变量 WS_COSYVOICE_BAT → 配置）。"""
-    value = _resolve("WS_COSYVOICE_BAT", "cosyvoice_bat", DEFAULT_COSYVOICE_BAT)
+    value = _resolve(
+        "WS_COSYVOICE_BAT", "cosyvoice_bat", DEFAULT_COSYVOICE_BAT, project_root
+    )
     if not value:
         raise FileNotFoundError(
             "CosyVoice start script is not configured. Set external_tools.cosyvoice_bat "
             "in conf.yaml or WS_COSYVOICE_BAT."
         )
-    return Path(value)
+    return _path_from_value(value, project_root)
 
 
-def get_wav2lip_dir() -> Path:
+def get_wav2lip_dir(project_root: Optional[Path] = None) -> Path:
     """Wav2Lip 安装目录（环境变量 WS_WAV2LIP_DIR → 配置）。"""
-    value = _resolve("WS_WAV2LIP_DIR", "wav2lip_dir", DEFAULT_WAV2LIP_DIR)
+    value = _resolve(
+        "WS_WAV2LIP_DIR", "wav2lip_dir", DEFAULT_WAV2LIP_DIR, project_root
+    )
     if not value:
         raise FileNotFoundError(
             "Wav2Lip directory is not configured. Set external_tools.wav2lip_dir "
             "in conf.yaml or WS_WAV2LIP_DIR."
         )
-    return Path(value)
+    return _path_from_value(value, project_root)
 
 
-def find_ffmpeg(prefer_path_first: bool = False) -> Optional[str]:
+def find_ffmpeg(
+    prefer_path_first: bool = False,
+    project_root: Optional[Path] = None,
+) -> Optional[str]:
     """
     查找可用的 ffmpeg 可执行文件。
 
@@ -211,11 +309,15 @@ def find_ffmpeg(prefer_path_first: bool = False) -> Optional[str]:
 
     # 环境变量 / 配置显式指定的路径最优先。
     env_ff = os.environ.get("WS_FFMPEG_PATH", "").strip()
-    if env_ff and Path(env_ff).exists():
-        return env_ff
-    cfg_ff = _config_value("ffmpeg_path")
-    if cfg_ff and Path(cfg_ff).exists():
-        return cfg_ff
+    if env_ff:
+        env_path = _path_from_value(env_ff, project_root)
+        if env_path.exists():
+            return str(env_path)
+    cfg_ff = _config_value("ffmpeg_path", project_root)
+    if cfg_ff:
+        cfg_path = _path_from_value(cfg_ff, project_root)
+        if cfg_path.exists():
+            return str(cfg_path)
 
     def _from_path() -> Optional[str]:
         return shutil.which("ffmpeg")

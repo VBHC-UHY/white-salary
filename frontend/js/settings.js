@@ -95,6 +95,25 @@ document.getElementById('btn-close').addEventListener('click', () => {
 // Load Settings from Backend
 // ============================================================
 
+async function readApiResponse(resp) {
+    const text = await resp.text();
+    if (!text) return {};
+    try {
+        return JSON.parse(text);
+    } catch {
+        return { detail: text };
+    }
+}
+
+function apiErrorDetail(data, fallback) {
+    const detail = data && data.detail;
+    if (typeof detail === 'string' && detail.trim()) return detail;
+    if (detail && typeof detail === 'object') {
+        return detail.detail || detail.message || JSON.stringify(detail);
+    }
+    return (data && (data.message || data.error)) || fallback;
+}
+
 async function loadSettings() {
     try {
         const resp = await fetch(`${API_BASE}/api/settings/full`);
@@ -169,6 +188,14 @@ function populateForm(s) {
     setVal('qq-wake-words', (s.qq?.wake_words || ['白']).join('\n'));
     setVal('qq-unblocked-group-ids', (s.qq?.unblocked_group_ids || []).join('\n'));
     setVal('qq-token', s.qq?.token || '');
+    const externalTools = s.external_tools || {};
+    setVal('napcat-launcher', externalTools.napcat_launcher || '');
+    setVal('gpt-sovits-dir', externalTools.gpt_sovits_dir || '');
+    setVal('comfyui-bat', externalTools.comfyui_bat || '');
+    setVal('comfyui-input', externalTools.comfyui_input || '');
+    setVal('cosyvoice-bat', externalTools.cosyvoice_bat || '');
+    setVal('wav2lip-dir', externalTools.wav2lip_dir || '');
+    setVal('ffmpeg-path', externalTools.ffmpeg_path || '');
     // 家人QQ号列表
     window._familyQQList = (s.qq?.family_qq || []).map(String);
     renderFamilyQQList();
@@ -354,6 +381,15 @@ async function saveAllSettings() {
         emotion: {
             enabled: getVal('emotion-enabled') === 'true',
         },
+        external_tools: {
+            napcat_launcher: getVal('napcat-launcher'),
+            gpt_sovits_dir: getVal('gpt-sovits-dir'),
+            comfyui_bat: getVal('comfyui-bat'),
+            comfyui_input: getVal('comfyui-input'),
+            cosyvoice_bat: getVal('cosyvoice-bat'),
+            wav2lip_dir: getVal('wav2lip-dir'),
+            ffmpeg_path: getVal('ffmpeg-path'),
+        },
         qq: {
             enabled: getVal('qq-enabled') === 'true',
             ws_url: getVal('qq-ws-url'),
@@ -415,7 +451,14 @@ async function saveAllSettings() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ settings }),
         });
-        const data = await resp.json();
+        const data = await readApiResponse(resp);
+        if (!resp.ok || data.status !== 'ok') {
+            showHint(
+                '保存失败: ' + apiErrorDetail(data, `HTTP ${resp.status}`),
+                true,
+            );
+            return;
+        }
         showHint(data.message || '设置已保存！重启后端生效');
     } catch (err) {
         showHint('保存失败: ' + err.message, true);
@@ -900,16 +943,21 @@ async function restartBackend() {
     }
 }
 
-function startNapCat() {
+async function startNapCat() {
     try {
-        const { ipcRenderer } = require('electron');
-        // Ask main process to start NapCat
-        ipcRenderer.send('start-napcat');
-        showHint('NapCat 启动中...');
-    } catch {
-        // Fallback: try via API
-        fetch(`${API_BASE}/api/settings/start-napcat`, { method: 'POST' }).catch(() => {});
-        showHint('NapCat 启动请求已发送');
+        const resp = await fetch(`${API_BASE}/api/settings/start-napcat`, { method: 'POST' });
+        const data = await readApiResponse(resp);
+        const ok = resp.ok && (data.success === true || data.status === 'ok');
+        if (!ok) {
+            showHint(
+                'NapCat 启动失败: ' + apiErrorDetail(data, `HTTP ${resp.status}`),
+                true,
+            );
+            return;
+        }
+        showHint(data.message || 'NapCat 启动请求已发送');
+    } catch (err) {
+        showHint('NapCat 启动失败: ' + err.message, true);
     }
 }
 
@@ -1057,16 +1105,21 @@ function showHint(msg, isError = false) {
 // Launch Buttons & Quick Actions
 // ============================================================
 
-function startLocalTTS() {
+async function startLocalTTS() {
     try {
-        const { ipcRenderer } = require('electron');
-        ipcRenderer.send('start-local-tts');
-        showHint('本地TTS启动中...模型加载需要约45秒');
-    } catch {
-        // 非Electron环境（设置窗口），走API
-        fetch(`${API_BASE}/api/settings/start-tts`, { method: 'POST' })
-            .then(() => showHint('TTS启动请求已发送'))
-            .catch(() => showHint('TTS启动失败', true));
+        const resp = await fetch(`${API_BASE}/api/settings/start-tts`, { method: 'POST' });
+        const data = await readApiResponse(resp);
+        const ok = resp.ok && (data.success === true || data.status === 'ok');
+        if (!ok) {
+            showHint(
+                'TTS启动失败: ' + apiErrorDetail(data, `HTTP ${resp.status}`),
+                true,
+            );
+            return;
+        }
+        showHint(data.message || 'TTS启动请求已发送');
+    } catch (err) {
+        showHint('TTS启动失败: ' + err.message, true);
     }
 }
 
@@ -1081,15 +1134,26 @@ function openProjectDir() {
     }
 }
 
-function openNapCatLogs() {
-    // 2026-07-03 面板升级（批6）：按钮叫"NapCat日志目录"，补 logs 子目录名实相符
-    // （依据 panel-main.json"NapCat日志目录按钮"审计项）
+async function openNapCatLogs() {
     try {
-        const path = require('path');
-        const napLogDir = path.join(__dirname, '..', 'NapCat', 'logs');
-        require('electron').shell.openPath(napLogDir);
-    } catch {
-        showHint('请手动打开 NapCat/logs 目录');
+        const resp = await fetch(`${API_BASE}/api/settings/napcat/path`);
+        const data = await readApiResponse(resp);
+        if (!resp.ok || !data.available) {
+            showHint(apiErrorDetail(data, `HTTP ${resp.status}`), true);
+            return;
+        }
+        if (!data.logs_exist) {
+            showHint('NapCat 日志目录还没有生成: ' + data.logs_dir, true);
+            return;
+        }
+        try {
+            const result = await require('electron').shell.openPath(data.logs_dir);
+            if (result) showHint(result, true);
+        } catch {
+            showHint('NapCat 日志目录: ' + data.logs_dir);
+        }
+    } catch (err) {
+        showHint('无法解析 NapCat 日志目录: ' + err.message, true);
     }
 }
 
@@ -2633,14 +2697,15 @@ async function startComfyUI() {
     el.innerHTML = '<span style="color:#f59e0b;">🔄 正在启动ComfyUI（加载模型中，请等待...）</span>';
     try {
         const resp = await fetch(`${API_BASE}/api/settings/comfyui/start`, { method: "POST" });
-        const data = await resp.json();
-        if (data.success) {
+        const data = await readApiResponse(resp);
+        if (resp.ok && data.success) {
             el.innerHTML = '<span style="color:#22c55e;">✅ ' + data.message + '</span>';
             checkComfyUIStatus();
             showHint("ComfyUI启动成功");
         } else {
-            el.innerHTML = '<span style="color:#ff4444;">❌ ' + data.message + '</span>';
-            showHint(data.message, true);
+            const detail = apiErrorDetail(data, `HTTP ${resp.status}`);
+            el.innerHTML = '<span style="color:#ff4444;">❌ ' + detail + '</span>';
+            showHint(detail, true);
         }
     } catch (e) {
         el.innerHTML = '<span style="color:#ff4444;">启动失败</span>';

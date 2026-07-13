@@ -155,7 +155,9 @@ class TestDirectoryStructure:
         assert "WS_API_KEY" in text
         assert "memory.long_term_provider" in text
         assert "systemd" in text
-        assert "Windows desktop users should use 安装.bat" in text
+        assert "Windows desktop users should" in text
+        assert "--check" in text
+        assert "chmod 600 conf.yaml" in text
         assert "./server-setup.sh" in install
         assert "white-salary.service" in gitignore
 
@@ -166,7 +168,6 @@ class TestDirectoryStructure:
             PROJECT_ROOT / "Start-TTS.bat",
             PROJECT_ROOT / "Start-TTS-Local.bat",
             PROJECT_ROOT / "scripts" / "train_voice.bat",
-            PROJECT_ROOT / "frontend" / "main.js",
         ]
         for path in files:
             text = path.read_text(encoding="utf-8")

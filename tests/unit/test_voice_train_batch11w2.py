@@ -91,7 +91,7 @@ def _patch_sovits(monkeypatch: pytest.MonkeyPatch, sovits_dir: Path) -> None:
     """让端点内的 get_gpt_sovits_dir 返回指定目录。"""
     import white_salary.adapters.tools.external_paths as ep
 
-    monkeypatch.setattr(ep, "get_gpt_sovits_dir", lambda: sovits_dir)
+    monkeypatch.setattr(ep, "get_gpt_sovits_dir", lambda **_kwargs: sovits_dir)
 
 
 class TestVoiceTrainStart:

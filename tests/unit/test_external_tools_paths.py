@@ -47,6 +47,7 @@ class TestExternalToolsConfigDefaults:
     def test_all_fields_default_empty(self) -> None:
         """默认值全为空串 = '不覆盖，用环境变量或内置默认值'。"""
         et = ExternalToolsConfig()
+        assert et.napcat_launcher == ""
         assert et.comfyui_bat == ""
         assert et.comfyui_input == ""
         assert et.gpt_sovits_dir == ""
@@ -126,12 +127,113 @@ class _FakeExternalTools:
     """模拟 ExternalToolsConfig（只带需要的字段）。"""
 
     def __init__(self, **kw: str) -> None:
+        self.napcat_launcher = kw.get("napcat_launcher", "")
         self.comfyui_bat = kw.get("comfyui_bat", "")
         self.comfyui_input = kw.get("comfyui_input", "")
         self.gpt_sovits_dir = kw.get("gpt_sovits_dir", "")
         self.cosyvoice_bat = kw.get("cosyvoice_bat", "")
         self.wav2lip_dir = kw.get("wav2lip_dir", "")
         self.ffmpeg_path = kw.get("ffmpeg_path", "")
+
+
+class TestNapCatResolution:
+    def test_configured_launcher_file(self, tmp_path: Path) -> None:
+        launcher = tmp_path / "launcher-user.bat"
+        launcher.write_text("@echo off", encoding="utf-8")
+        ep._cached_external_tools = _FakeExternalTools(napcat_launcher=str(launcher))
+        ep._load_attempted = True
+        assert ep.get_napcat_launcher(tmp_path / "project") == launcher.resolve()
+
+    def test_configured_directory(self, tmp_path: Path) -> None:
+        napcat_dir = tmp_path / "external-napcat"
+        napcat_dir.mkdir()
+        launcher = napcat_dir / "launcher.bat"
+        launcher.write_text("@echo off", encoding="utf-8")
+        ep._cached_external_tools = _FakeExternalTools(napcat_launcher=str(napcat_dir))
+        ep._load_attempted = True
+        assert ep.get_napcat_launcher(tmp_path / "project") == launcher.resolve()
+
+    def test_relative_config_is_resolved_from_project_root(self, tmp_path: Path) -> None:
+        napcat_dir = tmp_path / "tools" / "NapCat"
+        napcat_dir.mkdir(parents=True)
+        launcher = napcat_dir / "launcher-user.bat"
+        launcher.write_text("@echo off", encoding="utf-8")
+        ep._cached_external_tools = _FakeExternalTools(
+            napcat_launcher="tools/NapCat"
+        )
+        ep._load_attempted = True
+
+        assert ep.get_napcat_launcher(tmp_path) == launcher.resolve()
+
+    def test_direct_non_bat_file_is_rejected(self, tmp_path: Path) -> None:
+        executable = tmp_path / "NapCat.exe"
+        executable.write_text("not a launcher", encoding="utf-8")
+        ep._cached_external_tools = _FakeExternalTools(
+            napcat_launcher=str(executable)
+        )
+        ep._load_attempted = True
+
+        with pytest.raises(FileNotFoundError, match="NapCat launcher"):
+            ep.get_napcat_launcher(tmp_path)
+
+    def test_directory_only_accepts_known_launcher_names(self, tmp_path: Path) -> None:
+        napcat_dir = tmp_path / "external-napcat"
+        napcat_dir.mkdir()
+        (napcat_dir / "custom-start.bat").write_text("@echo off", encoding="utf-8")
+        ep._cached_external_tools = _FakeExternalTools(
+            napcat_launcher=str(napcat_dir)
+        )
+        ep._load_attempted = True
+
+        with pytest.raises(FileNotFoundError, match="NapCat launcher"):
+            ep.get_napcat_launcher(tmp_path)
+
+    def test_project_autodiscovery(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("WS_NAPCAT_LAUNCHER", raising=False)
+        ep._cached_external_tools = _FakeExternalTools()
+        ep._load_attempted = True
+        napcat_dir = tmp_path / "NapCat"
+        napcat_dir.mkdir()
+        launcher = napcat_dir / "launcher-win10.bat"
+        launcher.write_text("@echo off", encoding="utf-8")
+        assert ep.get_napcat_launcher(tmp_path) == launcher.resolve()
+
+    def test_missing_launcher_has_configuration_guidance(self, tmp_path: Path) -> None:
+        ep._cached_external_tools = _FakeExternalTools()
+        ep._load_attempted = True
+        with pytest.raises(FileNotFoundError, match="external_tools.napcat_launcher"):
+            ep.get_napcat_launcher(tmp_path)
+
+
+class TestPortableLaunchPanel:
+    def test_panel_exposes_all_local_tool_paths(self) -> None:
+        html = (PROJECT_ROOT / "frontend" / "settings.html").read_text(encoding="utf-8")
+        for field_id in (
+            "napcat-launcher",
+            "gpt-sovits-dir",
+            "comfyui-bat",
+            "comfyui-input",
+            "cosyvoice-bat",
+            "wav2lip-dir",
+            "ffmpeg-path",
+        ):
+            assert f'id="{field_id}"' in html
+
+    def test_panel_launches_services_through_backend_resolution(self) -> None:
+        settings_js = (PROJECT_ROOT / "frontend" / "js" / "settings.js").read_text(
+            encoding="utf-8"
+        )
+        main_js = (PROJECT_ROOT / "frontend" / "main.js").read_text(encoding="utf-8")
+        assert "/api/settings/start-napcat" in settings_js
+        assert "/api/settings/start-tts" in settings_js
+        assert "/api/settings/napcat/path" in settings_js
+        assert "ipcRenderer.send('start-napcat')" not in settings_js
+        assert "ipcRenderer.send('start-local-tts')" not in settings_js
+        assert "path.join(__dirname, '..', 'NapCat')" not in main_js
+        assert "!resp.ok" in settings_js
+        assert "apiErrorDetail(data" in settings_js
 
 
 class TestResolutionPriority:
@@ -176,6 +278,47 @@ class TestResolutionPriority:
         ep._load_attempted = True
         assert str(ep.get_gpt_sovits_dir()) == str(Path("F:/cfg/sovits"))
 
+    def test_explicit_project_root_reloads_config_and_resolves_relative_paths(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("WS_GPT_SOVITS_DIR", raising=False)
+        first = tmp_path / "first"
+        second = tmp_path / "second"
+        for root, configured in ((first, "tools/one"), (second, "tools/two")):
+            root.mkdir()
+            _write_minimal_default(
+                root,
+                "external_tools:\n  gpt_sovits_dir: \"\"\n",
+            )
+            (root / "conf.yaml").write_text(
+                f"external_tools:\n  gpt_sovits_dir: {configured}\n",
+                encoding="utf-8",
+            )
+
+        assert ep.get_gpt_sovits_dir(first) == first / "tools" / "one"
+        assert ep.get_gpt_sovits_dir(second) == second / "tools" / "two"
+
+    def test_all_relative_tool_paths_are_resolved_from_project_root(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("WS_COMFYUI_BAT", raising=False)
+        monkeypatch.delenv("WS_COMFYUI_INPUT", raising=False)
+        monkeypatch.delenv("WS_COSYVOICE_BAT", raising=False)
+        monkeypatch.delenv("WS_WAV2LIP_DIR", raising=False)
+        ep._load_attempted = True
+        ep._cached_project_root = tmp_path.resolve()
+        ep._cached_external_tools = _FakeExternalTools(
+            comfyui_bat="tools/comfy/run.bat",
+            comfyui_input="tools/comfy/input",
+            cosyvoice_bat="tools/cosy/start.bat",
+            wav2lip_dir="tools/wav2lip",
+        )
+
+        assert ep.get_comfyui_bat(tmp_path) == tmp_path / "tools" / "comfy" / "run.bat"
+        assert ep.get_comfyui_input(tmp_path) == tmp_path / "tools" / "comfy" / "input"
+        assert ep.get_cosyvoice_bat(tmp_path) == tmp_path / "tools" / "cosy" / "start.bat"
+        assert ep.get_wav2lip_dir(tmp_path) == tmp_path / "tools" / "wav2lip"
+
 
 class TestFindFfmpeg:
     """ffmpeg 查找顺序测试。"""
@@ -201,6 +344,21 @@ class TestFindFfmpeg:
         ep._cached_external_tools = _FakeExternalTools(ffmpeg_path=str(fake))
         ep._load_attempted = True
         assert ep.find_ffmpeg() == str(fake)
+
+    def test_relative_config_is_resolved_from_project_root(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        fake = tmp_path / "tools" / "ffmpeg" / "ffmpeg.exe"
+        fake.parent.mkdir(parents=True)
+        fake.write_bytes(b"")
+        monkeypatch.delenv("WS_FFMPEG_PATH", raising=False)
+        ep._cached_external_tools = _FakeExternalTools(
+            ffmpeg_path="tools/ffmpeg/ffmpeg.exe"
+        )
+        ep._cached_project_root = tmp_path.resolve()
+        ep._load_attempted = True
+
+        assert ep.find_ffmpeg(project_root=tmp_path) == str(fake)
 
     def test_nonexistent_env_falls_through_to_none(
         self, monkeypatch: pytest.MonkeyPatch

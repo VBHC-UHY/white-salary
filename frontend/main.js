@@ -213,68 +213,6 @@ ipcMain.on('settings-control', (event, action) => {
 });
 
 // ============================================================
-// NapCat QQ start
-// ============================================================
-
-ipcMain.on('start-napcat', () => {
-    const { exec } = require('child_process');
-    const napcatPath = path.join(__dirname, '..', 'NapCat');
-    const launcher = path.join(napcatPath, 'launcher.bat');
-    const launcherWin10 = path.join(napcatPath, 'launcher-win10.bat');
-    const bat = fs.existsSync(launcher) ? launcher : launcherWin10;
-
-    if (fs.existsSync(bat)) {
-        exec(`start cmd /k "${bat}"`, { cwd: napcatPath });
-        console.log('[NapCat] Started:', bat);
-    } else {
-        console.error('[NapCat] Launcher not found');
-    }
-});
-
-ipcMain.on('start-local-tts', () => {
-    const { execFileSync, spawn } = require('child_process');
-    const projectRoot = path.resolve(__dirname, '..');
-    const venvPython = path.join(projectRoot, '.venv', 'Scripts', 'python.exe');
-    const pythonExe = fs.existsSync(venvPython) ? venvPython : 'python';
-    let ttsDir = process.env.WS_GPT_SOVITS_DIR || '';
-
-    if (!ttsDir) {
-        try {
-            ttsDir = execFileSync(
-                pythonExe,
-                [path.join(projectRoot, 'scripts', 'resolve_gpt_sovits_dir.py')],
-                { cwd: projectRoot, encoding: 'utf8', windowsHide: true }
-            ).trim();
-        } catch (err) {
-            console.error('[TTS] Failed to resolve GPT-SoVITS path:', err);
-            ttsDir = '';
-        }
-    }
-
-    if (!ttsDir) {
-        console.error('[TTS] GPT-SoVITS path is not configured. Set external_tools.gpt_sovits_dir or WS_GPT_SOVITS_DIR.');
-        return;
-    }
-
-    const activateBat = path.join(ttsDir, 'venv_new', 'Scripts', 'activate.bat');
-    const apiScript = path.join(ttsDir, 'api_v2.py');
-    if (!fs.existsSync(apiScript) || !fs.existsSync(activateBat)) {
-        console.error(`[TTS] GPT-SoVITS not found or incomplete: ${ttsDir}`);
-        return;
-    }
-
-    const cmd = `call "${activateBat}" && python api_v2.py -a 127.0.0.1 -p 9880 -c GPT_SoVITS/configs/tts_infer.yaml`;
-    const child = spawn('cmd.exe', ['/k', cmd], {
-        cwd: ttsDir,
-        detached: true,
-        stdio: 'ignore',
-        windowsHide: false,
-    });
-    child.unref();
-    console.log(`[TTS] Local GPT-SoVITS start requested: ${ttsDir}`);
-});
-
-// ============================================================
 // Screenshot capture (for vision system)
 // ============================================================
 
