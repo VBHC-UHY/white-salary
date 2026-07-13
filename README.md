@@ -10,12 +10,12 @@
 <!-- 徽章行（2026-07-03 新手体验（批10）：静态徽章，不接 CI） -->
 ![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)
 ![Python 3.10-3.12](https://img.shields.io/badge/Python-3.10--3.12-blue.svg)
-![Tests](https://img.shields.io/badge/tests-916%20passed-brightgreen.svg)
+![Tests](https://img.shields.io/badge/tests-926%20passed-brightgreen.svg)
 ![PRs Welcome](https://img.shields.io/badge/PRs-welcome-ff69b4.svg)
 
 Python 3.10-3.12 · FastAPI · Electron · Live2D · 六边形架构
 
-当前版本：**v0.1.9**
+当前版本：**v0.1.10**
 
 <!-- 2026-07-03：交流群。二维码图放到 docs/assets/qq-group.png 后可取消下一行注释显示图片 -->
 <p>
@@ -99,7 +99,7 @@ Python 3.10-3.12 · FastAPI · Electron · Live2D · 六边形架构
 - 🧠 **五层记忆系统**：短期（20 轮）/ 核心（永久）/ 重要（90 天）/ 长期（向量检索，可选 ChromaDB）/ 知识图谱（13 类实体）。全项目最大子系统。
 - 💕 **好感度系统**：11 级关系（厌恶→知己）+ 独立"家人"关系、等级效率系数、每日衰减、里程碑奖励、300+ 关键词检测、多用户分账。
 - 😊 **情感系统**：心情分 0–100、6 种情绪、情绪惯性，联动 Live2D 表情与 TTS 语速音调。
-- ⚡ **并行工具流式对话**：主模型流式输出的同时，工具判断模型并行决策——不需要工具时零延迟。
+- ⚡ **单一人格工具对话**：始终由一个「白」负责回复，独立 `tool_llm` 只规划工具；只读工具可并行，发消息、控制电脑等副作用串行执行。
 - 🗣️ **语音对话**：逐句流式 TTS、按住说话、持续监听、语音打断、多段合并（本地 GPT-SoVITS 优先，云端兜底）。
 - 🤖 **主动行为**：闲置主动聊天（早安 / 关心 / 追问）、休息模式、每晚写第一人称日记。
 <!-- 2026-07-03 便捷化文档：强调控制面板图形化配置，不用碰配置文件 -->

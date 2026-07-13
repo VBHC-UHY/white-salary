@@ -25,13 +25,14 @@ import asyncio
 import base64
 import json
 import re
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Awaitable, Callable, Optional
 
 from fastapi import WebSocket, WebSocketDisconnect
 from loguru import logger
 
-from white_salary.core.agent.chat_agent import ChatAgent
+from white_salary.core.agent.chat_agent import ChatAgent, TOOL_SILENT_SENTINEL
 from white_salary.core.interfaces.asr import ASRInterface
 from white_salary.core.interfaces.tts import TTSInterface
 from white_salary.core.interfaces.types import AudioData
@@ -160,38 +161,34 @@ def _should_skip_proactive(ignore_quiet: bool = False) -> bool:
     return _presence_is_quiet()
 
 
-def _partition_bridge_messages(messages: list[dict]) -> tuple[list[str], list[str]]:
-    """
-    2026-07-03 工具实现（批9）：把跨平台桥消息分成「提醒类」与「普通播报」两组提示片段。
-
-    穿透静默的两类（第一组）：
-      - source=="reminder"：用户明确设的提醒到点，不算"主动搭话"，静默期也要通知。
-      - source=="game"：游戏事件触发的道喜/吐槽（批11 游戏对接）——是对用户当下
-        操作的即时回应，静默期也应照常出现，否则打赢 Boss 白却不吭声，体验割裂。
-    其余（source=="qq" 等普通转发播报）归第二组，静默期间跳过。纯函数便于单测。
-
-    Args:
-        messages: CrossPlatformBridge.pop_desktop_messages() 的结果
-
-    Returns:
-        (穿透静默的提示片段列表, 普通播报提示片段列表)
-    """
-    passthrough_parts: list[str] = []
-    normal_parts: list[str] = []
+def _partition_bridge_messages(
+    messages: list[dict],
+) -> tuple[list[dict], list[tuple[dict, str]], list[tuple[dict, str]]]:
+    """Separate finished text delivery from events that need one LLM response."""
+    direct_messages: list[dict] = []
+    passthrough_events: list[tuple[dict, str]] = []
+    normal_events: list[tuple[dict, str]] = []
     for msg in messages:
-        text = msg.get("message", "")
+        text = str(msg.get("message", "") or "").strip()
         if not text:
             continue
-        source = msg.get("source", "qq")
-        if source == "reminder":
-            passthrough_parts.append(f"你之前设的提醒到点了，请自然地转告用户：{text}")
+        source = str(msg.get("source", "qq") or "qq").strip().lower()
+        kind = str(msg.get("delivery_kind", "") or "").strip().lower()
+        if not kind:
+            # Compatibility for rows queued before delivery_kind existed.
+            kind = "event_prompt" if source == "game" else "direct"
+
+        if kind == "direct":
+            direct_messages.append(msg)
         elif source == "game":
-            # 2026-07-03 功能大项（批11）：游戏事件提示已是"翻译好的一句自然话术"，
-            # 直接作为触发提示交给白（穿透静默），让她对玩家刚发生的游戏事件即时回应
-            passthrough_parts.append(text)
+            passthrough_events.append((msg, text))
+        elif source == "reminder":
+            passthrough_events.append(
+                (msg, f"你之前设的提醒到点了，请自然地转告用户：{text}")
+            )
         else:
-            normal_parts.append(f"收到来自{source}的消息：{text}")
-    return passthrough_parts, normal_parts
+            normal_events.append((msg, f"收到来自{source}的事件：{text}"))
+    return direct_messages, passthrough_events, normal_events
 
 
 _SENTENCE_END = re.compile(r"[。！？!?…\n]")
@@ -199,6 +196,8 @@ _SENTENCE_END = re.compile(r"[。！？!?…\n]")
 # 2026-07-02 审计修复（批3）：LLM 流式超时秒数抽成模块常量（便于单测注入短超时）
 _LLM_STREAM_TIMEOUT: float = 120.0
 _MAX_VOICE_PAYLOAD_BYTES = 20 * 1024 * 1024
+_ERROR_DEDUPE_SECONDS: float = 30.0
+_RECENT_ERROR_FRAMES: dict[tuple[int, str], float] = {}
 
 
 class CancellationToken:
@@ -389,6 +388,105 @@ def _get_emotion_speed_multiplier(agent: ChatAgent) -> float:
         return 1.0
 
 
+async def _deliver_direct_desktop_message(
+    websocket: WebSocket,
+    tts: Optional[TTSInterface],
+    text: str,
+    *,
+    send_lock: Optional[asyncio.Lock] = None,
+) -> bool:
+    """Deliver already-authored text without feeding it back into Bai's LLM."""
+    raw_text = str(text or "").strip()
+    if not raw_text:
+        return False
+
+    segments, tail = _drain_sentences(raw_text)
+    if tail.strip():
+        segments.append(tail.strip())
+    if not segments:
+        return False
+
+    await _send_json(websocket, {"type": "reply_start", "source": "bridge"}, send_lock)
+    delivered: list[str] = []
+    emotion_sent = False
+    for segment in segments:
+        clean_segment, emotions = extract_emotion_tags(segment)
+        display_text = strip_xml_tags(clean_segment or segment).strip()
+        if not display_text:
+            continue
+        display_text = _content_filter.filter(display_text).text
+        if not display_text:
+            continue
+        if emotions and not emotion_sent:
+            await _send_json(
+                websocket,
+                {"type": "emotion", "content": emotions[0]},
+                send_lock,
+            )
+            emotion_sent = True
+
+        frame_index = len(delivered)
+        delivered.append(display_text)
+        await _send_json(
+            websocket,
+            {"type": "sentence", "content": display_text, "index": frame_index},
+            send_lock,
+        )
+
+        tts_text = strip_action_tags(clean_segment or segment).strip()
+        if tts is None or not tts_text or not is_valid_for_tts(tts_text):
+            await _send_json(
+                websocket,
+                {
+                    "type": "sentence_audio_skipped",
+                    "index": frame_index,
+                    "reason": "tts_unavailable" if tts is None else "text_not_speakable",
+                },
+                send_lock,
+            )
+            continue
+        try:
+            audio = await tts.synthesize(tts_text)
+            if audio.samples:
+                await _send_json(
+                    websocket,
+                    {
+                        "type": "sentence_audio",
+                        "content": base64.b64encode(audio.samples).decode("ascii"),
+                        "format": audio.dtype,
+                        "index": frame_index,
+                    },
+                    send_lock,
+                )
+            else:
+                await _send_json(
+                    websocket,
+                    {
+                        "type": "sentence_audio_skipped",
+                        "index": frame_index,
+                        "reason": "empty_audio",
+                    },
+                    send_lock,
+                )
+        except Exception as exc:
+            logger.warning(f"[Bridge] direct-message TTS skipped: {exc}")
+            await _send_json(
+                websocket,
+                {
+                    "type": "sentence_audio_skipped",
+                    "index": frame_index,
+                    "reason": type(exc).__name__,
+                },
+                send_lock,
+            )
+
+    final_text = "".join(delivered)
+    if not final_text:
+        return False
+    await _send_json(websocket, {"type": "done", "content": final_text}, send_lock)
+    return True
+
+
 def _resolve_owner_id(conf_path: Optional[Path] = None) -> str:
     """
     2026-07-02 审计修复（批2）：跨平台身份统一。
@@ -545,6 +643,7 @@ async def handle_chat_websocket(
     runtime_journal = (
         InteractiveTaskJournal(runtime_store) if runtime_store is not None else None
     )
+    proactive_llm_blocked_until = 0.0
 
     def _reply_in_progress() -> bool:
         """2026-07-02 审计修复（批3）：是否确有一轮回复正在进行。"""
@@ -596,8 +695,8 @@ async def handle_chat_websocket(
                 logger.warning(f"[Initiative] 取消续聊任务异常: {e}")
 
     async def _launch_reply(
-        reply_coro_factory: Callable[[CancellationToken], Awaitable[None]],
-    ) -> None:
+        reply_coro_factory: Callable[[CancellationToken], Awaitable[bool]],
+    ) -> asyncio.Task[bool]:
         """
         2026-07-02 审计修复（批3）：取消进行中的回复并启动新的后台回复任务。
 
@@ -611,10 +710,10 @@ async def handle_chat_websocket(
         await _cancel_current_reply()
         token = CancellationToken()
 
-        async def _runner() -> None:
+        async def _runner() -> bool:
             nonlocal current_token, current_task
             try:
-                await reply_coro_factory(token)
+                return bool(await reply_coro_factory(token))
             except asyncio.CancelledError:
                 raise  # 被 _cancel_current_reply 取消：原样上抛由取消方吞掉
             except Exception as e:
@@ -623,6 +722,7 @@ async def handle_chat_websocket(
                     await _send_error(websocket, f"处理失败: {str(e)[:100]}", send_lock)
                 except Exception:
                     pass
+                return False
             finally:
                 # 只在引用仍指向本任务时清理（防止误清后启动的新任务）
                 if current_task is asyncio.current_task():
@@ -631,6 +731,7 @@ async def handle_chat_websocket(
 
         current_token = token
         current_task = asyncio.create_task(_runner())
+        return current_task
 
     async def _send_voice_lifecycle(
         state: str,
@@ -724,9 +825,9 @@ async def handle_chat_websocket(
         allow_tools: bool = True,
         request_id: str = "",
         source: str = "",
-    ) -> Callable[[CancellationToken], Awaitable[None]]:
+    ) -> Callable[[CancellationToken], Awaitable[bool]]:
         """构造一轮标准对话回复的协程工厂（按值捕获 text，防循环变量漂移）。"""
-        async def _factory(token: CancellationToken) -> None:
+        async def _factory(token: CancellationToken) -> bool:
             runtime_task: Optional[InteractiveTaskHandle] = None
             if runtime_journal is not None:
                 runtime_task = runtime_journal.begin(
@@ -755,9 +856,9 @@ async def handle_chat_websocket(
                     logger.info(
                         f"[Runtime] 忽略重复桌面请求 request_id={request_id}"
                     )
-                    return
+                    return True
 
-            await _handle_chat_message(
+            return await _handle_chat_message(
                 websocket, agent, tts, text, token,
                 owner_id=owner_id, owner_name=owner_name,
                 user_learning=user_learning, is_user_message=is_user_message,
@@ -871,6 +972,10 @@ async def handle_chat_websocket(
         走本回调，检查点收敛在触发处，不动 AutoChatManager 内部）；
         提醒到点的通知传 ignore_quiet=True 穿透静默（用户明确设的提醒必须到人）。
         """
+        nonlocal proactive_llm_blocked_until
+        if time.monotonic() < proactive_llm_blocked_until:
+            logger.info("[AutoChat] 主模型暂时不可用，跳过本次主动事件")
+            return False
         if _should_skip_proactive(ignore_quiet):
             logger.info("[AutoChat] 忙碌/静默模式中，跳过本次主动发言")
             return False
@@ -885,9 +990,20 @@ async def handle_chat_websocket(
         try:
             # 2026-07-02 审计修复（批2）：主动对话是系统构造的输入，
             # is_user_message=False → 不进画像学习（好感度本就只在chat分支计）
-            await _launch_reply(_chat_reply_factory(chat_input, is_user_message=False))
-            return True
+            task = await _launch_reply(
+                _chat_reply_factory(chat_input, is_user_message=False, source="auto")
+            )
+            succeeded = bool(await task)
+            if not succeeded:
+                proactive_llm_blocked_until = time.monotonic() + 30.0
+            return succeeded
+        except asyncio.CancelledError:
+            current = asyncio.current_task()
+            if current is not None and current.cancelling():
+                raise
+            return False
         except Exception as e:
+            proactive_llm_blocked_until = time.monotonic() + 30.0
             logger.warning(f"[AutoChat] 主模型回复失败: {e}")
             return False
 
@@ -907,49 +1023,86 @@ async def handle_chat_websocket(
         while True:
             await asyncio.sleep(2)  # 每2秒检查
             messages: list[dict] = []
+            unsettled: dict[str, dict] = {}
             try:
                 # 2026-07-02 审计修复（批3）：有回复进行中先不取消息（留在桥队列，
                 # 下一轮再取），避免桥回复抢占正在进行的用户回复
                 if _reply_in_progress() or _voice_in_progress():
                     continue
                 messages = bridge.claim_desktop_messages()
-                # 2026-07-02 审计修复（批3）：同一轮取到的多条消息合并成一次提示，
-                # 避免第一条占用回复槽位后其余消息被互斥逻辑丢弃
-                # 2026-07-03 工具实现（批9）：桥消息分流——提醒类（source=reminder）
-                # 穿透静默照常播报；普通播报静默期间丢弃（不留队列，避免静默结束后
-                # 一次性轰炸；主人下静默命令即表示不要这些转发）
-                # 2026-07-03 功能大项（批11）：passthrough=提醒+游戏事件（穿透静默）
-                passthrough_parts, normal_parts = _partition_bridge_messages(messages)
-                if normal_parts and _presence_is_quiet():
+                key_for = lambda item: str(item.get("_delivery_id") or id(item))
+                unsettled = {key_for(message): message for message in messages}
+
+                for message in list(messages):
+                    if str(message.get("message", "") or "").strip():
+                        continue
+                    bridge.reject_message(message, "desktop bridge message was empty")
+                    unsettled.pop(key_for(message), None)
+
+                direct, passthrough_events, normal_events = _partition_bridge_messages(messages)
+                for message in direct:
+                    try:
+                        delivered = await _deliver_direct_desktop_message(
+                            websocket,
+                            tts,
+                            str(message.get("message", "")),
+                            send_lock=send_lock,
+                        )
+                    except Exception as exc:
+                        bridge.retry_message(message, f"direct desktop delivery failed: {exc}")
+                        unsettled.pop(key_for(message), None)
+                        continue
+                    if delivered:
+                        bridge.ack_message(
+                            message,
+                            receipt={"consumer": "desktop_websocket", "mode": "direct"},
+                        )
+                    else:
+                        bridge.reject_message(message, "direct desktop delivery was empty")
+                    unsettled.pop(key_for(message), None)
+
+                if normal_events and _presence_is_quiet():
                     logger.info(
-                        f"[Bridge] 忙碌/静默模式：丢弃{len(normal_parts)}条主动播报"
+                        f"[Bridge] 忙碌/静默模式：丢弃{len(normal_events)}条主动事件"
                     )
-                    normal_parts = []
-                parts: list[str] = passthrough_parts + normal_parts
-                spoken = False
-                if parts:
-                    hint = "；".join(parts) + "。请用语音回复用户。"
+                    for message, _ in normal_events:
+                        bridge.ack_message(
+                            message,
+                            receipt={
+                                "consumer": "desktop_websocket",
+                                "mode": "event_prompt",
+                                "suppressed_by_quiet": True,
+                            },
+                        )
+                        unsettled.pop(key_for(message), None)
+                    normal_events = []
+
+                event_items = passthrough_events + normal_events
+                if event_items:
+                    hint = "；".join(prompt for _, prompt in event_items)
                     spoken = await _auto_chat_send(
                         hint,
-                        ignore_quiet=bool(passthrough_parts),
+                        ignore_quiet=bool(passthrough_events),
                     )
                     if not spoken:
-                        for message in messages:
-                            bridge.retry_message(message, "desktop reply slot was unavailable")
+                        for message, _ in event_items:
+                            bridge.retry_message(message, "desktop event reply was unavailable")
+                            unsettled.pop(key_for(message), None)
                         continue
-                for message in messages:
-                    bridge.ack_message(
-                        message,
-                        receipt={
-                            "consumer": "desktop_websocket",
-                            "spoken": spoken,
-                            "suppressed_by_quiet": bool(normal_parts == [] and not passthrough_parts),
-                        },
-                    )
+                    for message, _ in event_items:
+                        bridge.ack_message(
+                            message,
+                            receipt={
+                                "consumer": "desktop_websocket",
+                                "mode": "event_prompt",
+                                "spoken": True,
+                            },
+                        )
+                        unsettled.pop(key_for(message), None)
             except Exception as e:
                 # 2026-07-02 审计修复（批3）：桥轮询异常不再裸吞，至少留日志
                 logger.warning(f"[Bridge] 桌面桥轮询异常: {e}")
-                for message in messages:
+                for message in unsettled.values():
                     bridge.mark_message_unknown(message, str(e))
     _bridge_task = asyncio.create_task(_bridge_check_loop())
 
@@ -1089,7 +1242,7 @@ async def handle_chat_websocket(
                     _img: str = content,
                     _prompt: str = user_prompt,
                     _request_id: str = str(data.get("request_id") or "")[:128],
-                ) -> None:
+                ) -> bool:
                     """图片流程：识别 → 拼上下文 → 交给主模型回复（占用回复槽位）。"""
                     runtime_task: Optional[InteractiveTaskHandle] = None
                     if runtime_journal is not None:
@@ -1117,7 +1270,7 @@ async def handle_chat_websocket(
                             logger.info(
                                 f"[Runtime] 忽略重复桌面图片请求 request_id={_request_id}"
                             )
-                            return
+                            return True
                     try:
                         # Step 1: vision_llm获取图片描述（这只是原始数据）
                         description = await vision.describe_image(
@@ -1147,11 +1300,11 @@ async def handle_chat_websocket(
                     if token.cancelled:
                         if runtime_task is not None:
                             runtime_task.cancel("desktop image response interrupted")
-                        return
+                        return False
                     # Step 3: 走正常对话流程（主模型回复）
                     # 2026-07-02 审计修复（批2）：图片流程的输入是系统构造的
                     # （拼了视觉识别结果），is_user_message=False → 不进画像学习
-                    await _handle_chat_message(
+                    return await _handle_chat_message(
                         websocket, agent, tts, chat_input, token,
                         owner_id=owner_id, owner_name=owner_name,
                         user_learning=user_learning, is_user_message=False,
@@ -1349,7 +1502,7 @@ async def _handle_chat_message(
     on_reply_complete: Optional[Callable[[str, str, bool], Awaitable[None]]] = None,
     runtime_store: Optional[RuntimeStore] = None,
     runtime_task: Optional[InteractiveTaskHandle] = None,
-) -> None:
+) -> bool:
     """
     处理一轮对话：LLM流式生成 → 【边生成边】逐句下发文本+TTS音频 → 收尾记录。
 
@@ -1374,8 +1527,13 @@ async def _handle_chat_message(
     if not user_input.strip():
         if runtime_task is not None:
             runtime_task.fail("Message cannot be empty")
-        await _send_error(websocket, "Message cannot be empty", send_lock)
-        return
+        await _send_error(
+            websocket,
+            "Message cannot be empty",
+            send_lock,
+            dedupe=not is_user_message,
+        )
+        return False
 
     logger.debug(f"User message: {user_input[:50]}...")
 
@@ -1424,12 +1582,13 @@ async def _handle_chat_message(
                         await on_reply_complete(user_input, _plugin_reply, is_user_message)
                     except Exception as _ice:
                         logger.warning(f"[Initiative] 插件抢答后续聊记录失败: {_ice}")
-                return
+                return True
 
     # 2026-07-02 审计修复（批3）：TTS 后台 worker —— 句子文本入队，worker 按
     # 句序合成并下发 sentence_audio；这样 TTS 合成不阻塞 LLM chunk 接收循环
     tts_queue: "asyncio.Queue[Optional[tuple[int, str]]]" = asyncio.Queue()
     tts_worker: Optional[asyncio.Task] = None
+    completed = False
 
     async def _send_audio_skipped(idx: int, reason: str) -> None:
         if cancel.cancelled:
@@ -1497,6 +1656,7 @@ async def _handle_chat_message(
         buffer = ""                 # 尚未凑满一句的残留
         sent_idx = 0                # 已下发 sentence 帧的 index
         emotion_sent = False        # emotion 帧每轮只发第一次
+        tool_silent = False         # 已完成副作用工具，不需要再补一条文字
 
         if tts is not None:
             tts_worker = asyncio.create_task(_tts_worker_loop())
@@ -1570,6 +1730,9 @@ async def _handle_chat_message(
                 if cancel.cancelled:
                     logger.debug("[WS] LLM streaming cancelled")
                     break
+                if chunk == TOOL_SILENT_SENTINEL:
+                    tool_silent = True
+                    continue
                 buffer += chunk
                 # 2026-07-02 审计修复（批3）：真流式核心 —— 每收到一个 chunk 就
                 # 增量切句，凑齐一句立即下发（不再等整个 LLM 流结束才切句）
@@ -1594,6 +1757,24 @@ async def _handle_chat_message(
             sentences.append(tail)
             await _emit_sentence(tail)
             buffer = ""
+
+        if tool_silent and not sentences:
+            if tts_worker is not None:
+                tts_queue.put_nowait(None)
+                await tts_worker
+            if runtime_task is not None:
+                runtime_task.response_ready("", awaiting_delivery=True)
+            await _send_json(
+                websocket,
+                {"type": "done", "content": "", "silent": True},
+                send_lock,
+            )
+            if runtime_task is not None:
+                runtime_task.complete(
+                    receipt={"transport": "websocket", "frame": "done", "silent": True},
+                )
+            logger.debug("[WS] 工具副作用已完成，不追加重复文字回复")
+            return True
 
         if not sentences:
             fallback = "...抱歉，我刚才走神了。你说什么？"
@@ -1650,6 +1831,7 @@ async def _handle_chat_message(
             if runtime_task is not None:
                 runtime_task.response_ready(final_text, awaiting_delivery=True)
             await _send_json(websocket, {"type": "done", "content": final_text}, send_lock)
+            completed = True
             if runtime_task is not None:
                 runtime_task.complete(
                     receipt={"transport": "websocket", "frame": "done"},
@@ -1713,7 +1895,12 @@ async def _handle_chat_message(
                 }, send_lock)
                 logger.warning("[WS] Auto-reset due to content filter 400")
             else:
-                await _send_error(websocket, f"回复生成失败: {error_msg[:100]}", send_lock)
+                await _send_error(
+                    websocket,
+                    f"回复生成失败: {error_msg[:100]}",
+                    send_lock,
+                    dedupe=not is_user_message,
+                )
     finally:
         if runtime_task is not None and cancel.cancelled:
             runtime_task.cancel("desktop response interrupted")
@@ -1725,6 +1912,7 @@ async def _handle_chat_message(
                 await tts_worker
             except (asyncio.CancelledError, Exception):
                 pass
+    return completed
 
 
 async def _send_json(
@@ -1746,6 +1934,28 @@ async def _send_json(
 
 async def _send_error(
     websocket: WebSocket, message: str, lock: Optional[asyncio.Lock] = None,
-) -> None:
-    """发送一条 error 帧（2026-07-02 审计修复（批3）：透传发送锁）。"""
-    await _send_json(websocket, {"type": "error", "content": message}, lock)
+    *,
+    dedupe: bool = True,
+) -> bool:
+    """Send one error frame, optionally coalescing automatic duplicate failures."""
+    normalized = str(message or "").strip() or "未知错误"
+    key = (id(websocket), normalized)
+    if dedupe:
+        now = time.monotonic()
+        stale_before = now - _ERROR_DEDUPE_SECONDS
+        for recent_key, timestamp in list(_RECENT_ERROR_FRAMES.items()):
+            if timestamp < stale_before:
+                _RECENT_ERROR_FRAMES.pop(recent_key, None)
+
+        if now - _RECENT_ERROR_FRAMES.get(key, float("-inf")) < _ERROR_DEDUPE_SECONDS:
+            logger.debug(f"[WS] 合并重复错误提示: {normalized[:80]}")
+            return False
+        _RECENT_ERROR_FRAMES[key] = now
+
+    try:
+        await _send_json(websocket, {"type": "error", "content": normalized}, lock)
+    except Exception:
+        if dedupe:
+            _RECENT_ERROR_FRAMES.pop(key, None)
+        raise
+    return True

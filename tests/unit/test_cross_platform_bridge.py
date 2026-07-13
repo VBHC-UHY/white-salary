@@ -17,6 +17,7 @@ def test_desktop_message_is_claimed_then_explicitly_acked(tmp_path) -> None:
     messages = bridge.claim_desktop_messages()
     assert len(messages) == 1
     assert messages[0]["message"] == "hello"
+    assert messages[0]["delivery_kind"] == bridge.DIRECT_DELIVERY
     assert bridge.claim_desktop_messages() == []
 
     bridge.ack_message(messages[0], receipt={"accepted": True})
@@ -77,5 +78,28 @@ def test_legacy_pop_preserves_shape_and_marks_delivered(tmp_path) -> None:
 
     assert messages[0]["message"] == "legacy"
     assert messages[0]["source"] == "reminder"
+    assert messages[0]["delivery_kind"] == bridge.DIRECT_DELIVERY
     saved = bridge.store.get_delivery(delivery_id)
     assert saved is not None and saved.state == DeliveryState.DELIVERED
+
+
+def test_game_event_defaults_to_one_model_prompt(tmp_path) -> None:
+    bridge = _bridge(tmp_path)
+    bridge.push_to_desktop("刚打赢了 Boss", source="game")
+
+    message = bridge.claim_desktop_messages()[0]
+
+    assert message["delivery_kind"] == bridge.EVENT_PROMPT_DELIVERY
+
+
+def test_explicit_delivery_kind_overrides_source_default(tmp_path) -> None:
+    bridge = _bridge(tmp_path)
+    bridge.push_to_desktop(
+        "已经组织好的游戏播报",
+        source="game",
+        delivery_kind=bridge.DIRECT_DELIVERY,
+    )
+
+    message = bridge.claim_desktop_messages()[0]
+
+    assert message["delivery_kind"] == bridge.DIRECT_DELIVERY

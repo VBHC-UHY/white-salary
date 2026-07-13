@@ -22,6 +22,7 @@ from typing import Optional
 
 import pytest
 
+from white_salary.core.agent.chat_agent import TOOL_SILENT_SENTINEL
 from white_salary.core.interfaces.types import AudioData
 from white_salary.core.interfaces.asr import TranscriptionResult
 from white_salary.core.runtime import (
@@ -33,10 +34,12 @@ from white_salary.core.runtime import (
 from white_salary.infrastructure.server import websocket_handler as wsh
 from white_salary.infrastructure.server.websocket_handler import (
     CancellationToken,
+    _deliver_direct_desktop_message,
     _drain_sentences,
     _handle_chat_message,
     _handle_voice_message,
     _resolve_owner_name,
+    _send_error,
     _transcribe_voice_payload,
     handle_chat_websocket,
 )
@@ -233,6 +236,28 @@ class FailingFirstTTS(FakeTTS):
         return AudioData(samples=b"\x04\x05", sample_rate=16000, dtype="wav")
 
 
+def test_direct_bridge_delivery_never_needs_an_agent(quiet_side_effects):
+    ws = FakeWebSocket()
+    tts = FakeTTS()
+
+    delivered = _run(_deliver_direct_desktop_message(
+        ws,
+        tts,
+        "Done. No duplicate reply.",
+    ))
+
+    assert delivered is True
+    assert ws.frames[0] == {"type": "reply_start", "source": "bridge"}
+    assert [frame["content"] for frame in ws.of_type("sentence")] == [
+        "Done. No duplicate reply.",
+    ]
+    assert ws.of_type("done") == [{
+        "type": "done",
+        "content": "Done. No duplicate reply.",
+    }]
+    assert tts.synthesized == ["Done. No duplicate reply."]
+
+
 class FakeASR:
     def __init__(self, text: str = "测试语音", error: Optional[Exception] = None) -> None:
         self.text = text
@@ -406,6 +431,48 @@ def test_empty_finished_stream_sends_fallback_and_done(quiet_side_effects):
     assert len(sentence_frames) == 1
     assert "走神" in sentence_frames[0]["content"]
     assert len(ws.of_type("done")) == 1
+
+
+def test_successful_side_effect_tool_finishes_without_duplicate_text(quiet_side_effects):
+    ws = FakeWebSocket()
+    agent = FakeAgent([TOOL_SILENT_SENTINEL])
+
+    succeeded = _run(_handle_chat_message(
+        ws,
+        agent,
+        None,
+        "Send a desktop message",
+        CancellationToken(),
+    ))
+
+    assert succeeded is True
+    assert ws.of_type("sentence") == []
+    assert ws.of_type("done") == [{"type": "done", "content": "", "silent": True}]
+
+
+def test_identical_backend_errors_are_coalesced_per_connection():
+    ws = FakeWebSocket()
+
+    assert _run(_send_error(ws, "Connection error")) is True
+    assert _run(_send_error(ws, "Connection error")) is False
+    assert _run(_send_error(ws, "Different error")) is True
+
+    assert [frame["content"] for frame in ws.of_type("error")] == [
+        "Connection error",
+        "Different error",
+    ]
+
+
+def test_user_retry_can_repeat_the_same_backend_error():
+    ws = FakeWebSocket()
+
+    assert _run(_send_error(ws, "Connection error", dedupe=False)) is True
+    assert _run(_send_error(ws, "Connection error", dedupe=False)) is True
+
+    assert [frame["content"] for frame in ws.of_type("error")] == [
+        "Connection error",
+        "Connection error",
+    ]
 
 
 def test_cancel_closes_generator_and_skips_done(quiet_side_effects):

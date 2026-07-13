@@ -22,7 +22,7 @@ from typing import AsyncGenerator
 import pytest
 
 from white_salary.adapters.tools.registry import ToolRegistry
-from white_salary.core.agent.chat_agent import ChatAgent
+from white_salary.core.agent.chat_agent import ChatAgent, ToolResultPresentationError
 from white_salary.core.interfaces.llm import LLMInterface
 from white_salary.core.interfaces.types import Message, MessageRole, ToolCall, ToolResult
 from white_salary.core.memory.short_term import ShortTermMemory
@@ -439,16 +439,19 @@ class TestDesktopProactiveGate:
         assert _should_skip_proactive() is False
 
     def test_partition_bridge_messages(self) -> None:
-        """source=reminder 的桥消息归提醒组，其余归普通播报组。"""
+        """Finished reminder/QQ text is transported directly, not re-generated."""
         messages = [
             {"message": "到点啦，你让我提醒你：开会", "source": "reminder"},
             {"message": "记得吃饭", "source": "qq", "from_user": "10001"},
             {"message": "", "source": "qq"},  # 空消息剔除
         ]
-        reminder_parts, normal_parts = _partition_bridge_messages(messages)
-        assert len(reminder_parts) == 1 and "开会" in reminder_parts[0]
-        assert "提醒到点" in reminder_parts[0]
-        assert len(normal_parts) == 1 and "来自qq" in normal_parts[0]
+        direct, passthrough_events, normal_events = _partition_bridge_messages(messages)
+        assert [item["message"] for item in direct] == [
+            "到点啦，你让我提醒你：开会",
+            "记得吃饭",
+        ]
+        assert passthrough_events == []
+        assert normal_events == []
 
     def test_partition_game_events_passthrough(self) -> None:
         """2026-07-03 批11：source=game 的游戏事件归穿透组（静默期也播报），
@@ -457,10 +460,25 @@ class TestDesktopProactiveGate:
             {"message": "阿白刚打赢了Boss，快夸夸他！", "source": "game"},
             {"message": "普通QQ转发", "source": "qq"},
         ]
-        passthrough_parts, normal_parts = _partition_bridge_messages(messages)
-        assert len(passthrough_parts) == 1
-        assert passthrough_parts[0] == "阿白刚打赢了Boss，快夸夸他！"
-        assert len(normal_parts) == 1 and "来自qq" in normal_parts[0]
+        direct, passthrough_events, normal_events = _partition_bridge_messages(messages)
+        assert [item["message"] for item in direct] == ["普通QQ转发"]
+        assert len(passthrough_events) == 1
+        assert passthrough_events[0][1] == "阿白刚打赢了Boss，快夸夸他！"
+        assert normal_events == []
+
+    def test_explicit_normal_event_requires_one_model_response(self) -> None:
+        messages = [{
+            "message": "外部状态变化",
+            "source": "monitor",
+            "delivery_kind": "event_prompt",
+        }]
+
+        direct, passthrough_events, normal_events = _partition_bridge_messages(messages)
+
+        assert direct == []
+        assert passthrough_events == []
+        assert normal_events[0][0] is messages[0]
+        assert "外部状态变化" in normal_events[0][1]
 
 
 # ================================================================
@@ -711,8 +729,8 @@ class TestHintInjection:
         assert tool_llm.calls == 1
         assert "周末计划" not in tool_llm.seen_messages[0][-1].content
 
-    async def test_empty_tool_postprocess_falls_back_to_tool_result(self) -> None:
-        """If the main model returns empty text after a tool call, do not emit silence."""
+    async def test_empty_tool_postprocess_never_leaks_internal_result(self) -> None:
+        """Empty persona output becomes one transport error, never an internal tool log."""
         registry = HintFakeRegistry()
         tool_llm = RecordingToolLLM([
             ToolCall(id="call_1", name="set_reminder", arguments={}),
@@ -725,10 +743,6 @@ class TestHintInjection:
             tool_llm=tool_llm,
         )
 
-        chunks = []
-        async for chunk in agent.chat_stream_with_tools("提醒我三点开会"):
-            chunks.append(chunk)
-
-        reply = "".join(chunks)
-        assert reply.strip()
-        assert "执行完成" in reply
+        with pytest.raises(ToolResultPresentationError):
+            async for _ in agent.chat_stream_with_tools("提醒我三点开会"):
+                pass

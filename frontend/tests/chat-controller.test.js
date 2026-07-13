@@ -41,6 +41,9 @@ function bareController() {
   controller._voiceMergeTimeout = 25;
   controller._pendingVoiceRequests = new Set();
   controller._activeVoiceRequestId = null;
+  controller._recentBackendErrors = new Map();
+  controller._fullReply = '';
+  controller._replyDone = false;
   controller.micBtn = null;
   controller._updateSubtitle = () => {};
   controller._updateBubble = () => {};
@@ -101,4 +104,45 @@ test('a stale push-to-talk transcript cannot replace the latest request', () => 
   controller._handleTranscription('旧结果', 'push_to_talk', 'voice-old');
 
   assert.deepEqual(controller._voiceBuffer, []);
+});
+
+test('a silent tool completion does not add an empty assistant message', () => {
+  const controller = bareController();
+  const messages = [];
+  controller._addChatMessage = (role, text) => messages.push({ role, text });
+  controller._scheduleHideAfterAudio = () => {};
+
+  controller._handleMessage({ type: 'done', content: '', silent: true });
+
+  assert.deepEqual(messages, []);
+  assert.equal(controller._replyDone, true);
+});
+
+test('identical automatic backend errors are shown only once', () => {
+  const controller = bareController();
+  const messages = [];
+  controller._addChatMessage = (role, text) => messages.push({ role, text });
+
+  controller._handleMessage({ type: 'error', content: 'Connection error' });
+  controller._handleMessage({ type: 'error', content: 'Connection error' });
+
+  assert.deepEqual(messages, [
+    { role: 'system', text: '[Error] Connection error' },
+  ]);
+});
+
+test('a new user reply attempt clears the previous error suppression', () => {
+  const controller = bareController();
+  const messages = [];
+  controller._addChatMessage = (role, text) => messages.push({ role, text });
+  controller._handleReplyStart = () => {};
+
+  controller._handleMessage({ type: 'error', content: 'Connection error' });
+  controller._handleMessage({ type: 'reply_start', source: 'user' });
+  controller._handleMessage({ type: 'error', content: 'Connection error' });
+
+  assert.deepEqual(messages, [
+    { role: 'system', text: '[Error] Connection error' },
+    { role: 'system', text: '[Error] Connection error' },
+  ]);
 });
