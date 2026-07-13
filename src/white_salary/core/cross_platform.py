@@ -16,6 +16,8 @@ class CrossPlatformBridge:
 
     DESKTOP_PLATFORM = "desktop_bridge"
     QQ_PLATFORM = "qq_bridge"
+    DIRECT_DELIVERY = "direct"
+    EVENT_PROMPT_DELIVERY = "event_prompt"
     _instance = None
 
     def __new__(cls):
@@ -42,13 +44,20 @@ class CrossPlatformBridge:
         message: str,
         from_user: str = "",
         source: str = "qq",
+        delivery_kind: str = "",
     ) -> str:
+        source = str(source or "qq").strip() or "qq"
+        delivery_kind = self._normalize_desktop_delivery_kind(
+            delivery_kind,
+            source=source,
+        )
         delivery = self._store.enqueue_delivery(
             ChannelAddress(platform=self.DESKTOP_PLATFORM, address="primary"),
             {
                 "message": str(message),
                 "from_user": str(from_user),
-                "source": str(source),
+                "source": source,
+                "delivery_kind": delivery_kind,
             },
             conversation_key="bridge:desktop:primary",
             replay_safe=False,
@@ -163,13 +172,31 @@ class CrossPlatformBridge:
     def has_qq_messages(self) -> bool:
         return self._store.has_pending_deliveries(self.QQ_PLATFORM)
 
-    @staticmethod
-    def _to_message(record: DeliveryRecord) -> dict[str, Any]:
+    @classmethod
+    def _to_message(cls, record: DeliveryRecord) -> dict[str, Any]:
         message = dict(record.payload)
+        if record.target.platform == cls.DESKTOP_PLATFORM:
+            message["delivery_kind"] = cls._normalize_desktop_delivery_kind(
+                message.get("delivery_kind", ""),
+                source=str(message.get("source", "qq")),
+            )
         message["_delivery_id"] = record.id
         message["_delivery_attempt"] = record.attempts
         message["_delivery_claim_token"] = record.claim_token
         return message
+
+    @classmethod
+    def _normalize_desktop_delivery_kind(cls, value: object, *, source: str) -> str:
+        """Keep old outbox rows compatible while separating transport from prompts."""
+        normalized = str(value or "").strip().lower()
+        if normalized in {cls.DIRECT_DELIVERY, cls.EVENT_PROMPT_DELIVERY}:
+            return normalized
+        # Existing game rows are raw events that need one persona response. Every
+        # other legacy source already contains user-facing text and must not be
+        # sent through the LLM again.
+        if str(source or "").strip().lower() == "game":
+            return cls.EVENT_PROMPT_DELIVERY
+        return cls.DIRECT_DELIVERY
 
     @staticmethod
     def _delivery_id(message_or_id: dict[str, Any] | str) -> str:

@@ -174,6 +174,7 @@ class UserLearningService:
             profile = self._parse_json(reply)
 
             if profile:
+                profile = self._normalize_profile(profile)
                 profile["user_name"] = name
                 profile["user_id"] = user_id
                 profile["analyzed_at"] = time.strftime("%Y-%m-%d %H:%M")
@@ -255,29 +256,111 @@ class UserLearningService:
 
     def _cross_validate(self, old: dict, new: dict) -> dict:
         """跨源验证：合并新旧画像，保留一致的，合并新增的。"""
+        old = self._normalize_profile(old)
+        new = self._normalize_profile(new)
         merged = dict(new)  # 新画像为基础
 
         for field in ("interests", "likes", "dislikes", "topics"):
-            old_items = set(old.get(field, []))
-            new_items = set(new.get(field, []))
+            old_items = list(old.get(field, []))
+            new_items = list(new.get(field, []))
             if old_items and new_items:
                 # 保留两次都出现的（高置信）+ 新出现的
-                confirmed = old_items & new_items
-                fresh = new_items - old_items
+                old_set = set(old_items)
+                confirmed = [item for item in new_items if item in old_set]
+                fresh = [item for item in new_items if item not in old_set]
                 # 确认的排前面
-                merged[field] = list(confirmed) + list(fresh)
+                merged[field] = confirmed + fresh
 
         # personality和communication_style取新的（LLM最新分析更准）
         # deep_preferences合并去重
         old_deep = old.get("deep_preferences", [])
         new_deep = new.get("deep_preferences", [])
         if old_deep and new_deep:
-            merged["deep_preferences"] = list(set(old_deep + new_deep))[:10]
+            merged["deep_preferences"] = self._dedupe_strings(old_deep + new_deep)[:10]
 
         # 记录验证次数
         merged["validation_count"] = old.get("validation_count", 0) + 1
 
         return merged
+
+    @classmethod
+    def _normalize_profile(cls, profile: dict) -> dict:
+        """Normalize free-form LLM JSON into stable, display-safe profile data."""
+        if not isinstance(profile, dict):
+            return {}
+        normalized = dict(profile)
+        for field in (
+            "interests",
+            "likes",
+            "dislikes",
+            "topics",
+            "personality",
+            "deep_preferences",
+        ):
+            if field in normalized:
+                normalized[field] = cls._normalize_profile_list(normalized[field])
+
+        style = normalized.get("communication_style")
+        if isinstance(style, (list, tuple, set, dict)):
+            normalized["communication_style"] = cls._normalize_profile_list(style)
+
+        mood_triggers = normalized.get("mood_triggers")
+        if isinstance(mood_triggers, dict):
+            normalized["mood_triggers"] = {
+                str(key): cls._normalize_profile_list(value)
+                for key, value in mood_triggers.items()
+            }
+        return normalized
+
+    @classmethod
+    def _normalize_profile_list(cls, value: object) -> list[str]:
+        if value is None:
+            return []
+        values = value if isinstance(value, (list, tuple, set)) else [value]
+        return cls._dedupe_strings(
+            item
+            for raw in values
+            if (item := cls._profile_item_to_text(raw))
+        )
+
+    @staticmethod
+    def _profile_item_to_text(value: object) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, str):
+            return value.strip()
+        if isinstance(value, dict):
+            subject = next((
+                str(value[key]).strip()
+                for key in ("item", "name", "value", "content", "preference", "topic", "trait")
+                if value.get(key) is not None and str(value[key]).strip()
+            ), "")
+            reason = next((
+                str(value[key]).strip()
+                for key in ("reason", "why", "detail", "description")
+                if value.get(key) is not None and str(value[key]).strip()
+            ), "")
+            if subject and reason and reason != subject:
+                return f"{subject}（{reason}）"
+            if subject:
+                return subject
+            return json.dumps(value, ensure_ascii=False, sort_keys=True)
+        if isinstance(value, (list, tuple, set)):
+            parts = [UserLearningService._profile_item_to_text(item) for item in value]
+            return "、".join(part for part in parts if part)
+        return str(value).strip()
+
+    @staticmethod
+    def _dedupe_strings(values) -> list[str]:
+        result: list[str] = []
+        seen: set[str] = set()
+        for value in values:
+            text = str(value or "").strip()
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            result.append(text)
+        return result
 
     def _get_state(self, user_id: str) -> _UserState:
         if user_id not in self._users:
@@ -317,7 +400,8 @@ class UserLearningService:
         for f in self._profiles_dir.glob("*.json"):
             try:
                 uid = f.stem
-                self._profiles[uid] = json.loads(f.read_text(encoding="utf-8"))
+                loaded = json.loads(f.read_text(encoding="utf-8"))
+                self._profiles[uid] = self._normalize_profile(loaded)
             except Exception:
                 pass
 

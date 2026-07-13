@@ -30,6 +30,13 @@ from white_salary.core.personality.character import PersonalityManager
 from white_salary.core.message.processing import MessageRouter
 
 
+TOOL_SILENT_SENTINEL = "__WHITE_SALARY_TOOL_SILENT__"
+
+
+class ToolResultPresentationError(RuntimeError):
+    """Tool ran, but no safe persona reply could be produced for the user."""
+
+
 class ChatAgent:
     """
     对话智能体。
@@ -313,7 +320,7 @@ class ChatAgent:
                 yield chunk
             return
 
-        logger.debug(f"收到用户输入(并行模式): {user_input[:50]}...")
+        logger.debug(f"收到用户输入(工具模式): {user_input[:50]}...")
         route_source = route_text if route_text is not None else user_input
 
         # 1. 用户消息存入记忆
@@ -422,6 +429,7 @@ class ChatAgent:
                 silent_success_prefixes = {
                     "qq_send_voice": "语音已发送",
                     "qq_send_sticker": "表情包已发送",
+                    "push_to_desktop": "已推送到桌面端",
                 }
                 silent_side_effect_done = any(
                     run.ok
@@ -442,7 +450,7 @@ class ChatAgent:
         try:
             if tool_results:
                 if silent_side_effect_done and len(tool_results) == 1:
-                    yield "__WHITE_SALARY_TOOL_SILENT__"
+                    yield TOOL_SILENT_SENTINEL
                     full_response = ""
                     return
                 # 把工具结果喂给主模型（process_tool_results内部会加提示）
@@ -470,13 +478,9 @@ class ChatAgent:
                                 "[Agent] 工具失败后处理回复过短，已要求主模型按人设自然重写"
                             )
                         else:
-                            final_reply = self._raw_tool_result_fallback(tool_results)
-                            logger.warning(
-                                "[Agent] 工具失败后自然重写仍为空，直接保留真实工具输出"
+                            raise ToolResultPresentationError(
+                                "主模型未能把工具失败结果转换为自然回复"
                             )
-                            if not final_reply:
-                                full_response = ""
-                                return
                     if not final_reply:
                         final_reply = await self._repair_tool_failure_reply(
                             user_input=user_input,
@@ -484,18 +488,16 @@ class ChatAgent:
                             tool_results=tool_results,
                         )
                         if not final_reply:
-                            final_reply = self._raw_tool_result_fallback(tool_results)
-                            logger.warning(
-                                "[Agent] 工具结果后处理返回空回复，直接保留真实工具输出"
+                            raise ToolResultPresentationError(
+                                "主模型未能把工具结果转换为自然回复"
                             )
-                            if not final_reply:
-                                full_response = ""
-                                return
                     parts = re.split(r'(?<=[。！？!?\n])', final_reply)
                     for part in parts:
                         if part:
                             yield part
                     full_response = final_reply
+                except ToolResultPresentationError:
+                    raise
                 except Exception as e:
                     # process_tool_results失败时，先让主模型按人设解释失败；不拼固定回复。
                     logger.warning(f"工具结果处理失败，降级回复: {e}")
@@ -506,13 +508,9 @@ class ChatAgent:
                         tool_results=tool_results,
                     )
                     if not fallback:
-                        fallback = self._raw_tool_result_fallback(tool_results)
-                        logger.warning(
-                            "[Agent] 工具结果自然重写失败，直接保留真实工具输出"
-                        )
-                        if not fallback:
-                            full_response = ""
-                            return
+                        raise ToolResultPresentationError(
+                            "工具结果的两次自然语言整理均失败"
+                        ) from e
                     yield fallback
                     full_response = fallback
 
@@ -530,17 +528,14 @@ class ChatAgent:
 
                 full_response = "".join(main_chunks)
 
+        except ToolResultPresentationError:
+            raise
         except Exception as e:
-            logger.warning(f"并行对话失败，降级为普通流式: {e}")
-            # 降级：普通流式（不带工具）
-            async for chunk in self._llm.chat_completion_stream(
-                messages=context,
-                temperature=self._temperature,
-                max_tokens=self._max_tokens,
-            ):
-                main_chunks.append(chunk)
-                yield chunk
-            full_response = "".join(main_chunks)
+            # Retrying the same provider immediately used to create duplicate
+            # requests and repeated desktop error cards. The transport layer now
+            # reports this single failure and decides when a later retry is safe.
+            logger.warning(f"工具模式对话失败: {e}")
+            raise
 
         # 7. 存入记忆（加标记防并发交错串群）
         if full_response:
@@ -604,16 +599,6 @@ class ChatAgent:
                 continue
             lines.append(f"- {content[:400]}")
         return "\n".join(lines)
-
-    def _raw_tool_result_fallback(self, tool_results: list[ToolResult]) -> str:
-        """Return honest tool output when both natural-language passes are empty."""
-
-        contents: list[str] = []
-        for result in tool_results:
-            content = str(result.content or "").strip()
-            if content and content not in contents:
-                contents.append(content)
-        return "\n".join(contents)
 
     async def _repair_tool_failure_reply(
         self,

@@ -62,6 +62,7 @@ class ChatController {
         this._voiceRequestSeq = 0;
         this._activeVoiceRequestId = null;
         this._pendingVoiceRequests = new Set();
+        this._recentBackendErrors = new Map();
 
         // Voice message merging (accumulate multiple speech segments)
         this._voiceBuffer = [];          // Accumulated transcription texts
@@ -261,6 +262,11 @@ class ChatController {
             // 跨平台桥、图片流程触发）。统一在此重置流式播放状态，修复主动语音因
             // 播放游标 _nextPlayIndex 残留上一轮句数而永不出声的问题。
             case 'reply_start':
+                // A deliberate user retry starts a new attempt. Do not let an
+                // identical error from the previous attempt hide this result.
+                if ((data.source || 'user') === 'user') {
+                    this._recentBackendErrors.clear();
+                }
                 this._handleReplyStart(data.source || 'user');
                 break;
 
@@ -282,7 +288,9 @@ class ChatController {
                 // Full reply complete — always trust backend's text over local reconstruction
                 const finalText = data.content || this._fullReply;
                 this._fullReply = finalText;  // Sync with backend
-                this._addChatMessage('assistant', finalText);
+                if (finalText && finalText.trim()) {
+                    this._addChatMessage('assistant', finalText);
+                }
                 this._replyDone = true;
                 // Schedule hide after audio finishes (or immediately if no audio)
                 this._scheduleHideAfterAudio();
@@ -322,7 +330,16 @@ class ChatController {
             // 类型；其"新一轮回复重置"职责由上方 reply_start 分支接管。
             case 'error':
                 console.error('[Chat] Backend error:', data.content);
-                this._addChatMessage('system', `[Error] ${data.content}`);
+                const errorText = String(data.content || '未知错误');
+                const now = Date.now();
+                const lastSeen = this._recentBackendErrors.get(errorText) || 0;
+                if (now - lastSeen >= 30000) {
+                    this._recentBackendErrors.set(errorText, now);
+                    this._addChatMessage('system', `[Error] ${errorText}`);
+                }
+                for (const [text, timestamp] of this._recentBackendErrors.entries()) {
+                    if (now - timestamp >= 30000) this._recentBackendErrors.delete(text);
+                }
                 break;
 
             default:

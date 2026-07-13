@@ -20,7 +20,7 @@ from white_salary.adapters.tools.registry import (
     ToolRegistry,
     get_tool_timeout,
 )
-from white_salary.core.agent.chat_agent import ChatAgent
+from white_salary.core.agent.chat_agent import ChatAgent, ToolResultPresentationError
 from white_salary.core.interfaces.llm import LLMInterface
 from white_salary.core.interfaces.types import Message, ToolCall, ToolResult
 from white_salary.core.memory.short_term import ShortTermMemory
@@ -350,6 +350,31 @@ class StickerSendSuccessRegistry(FakeRegistry):
         return "表情包已发送"
 
 
+class PushDesktopSuccessRegistry(FakeRegistry):
+    """Registry stub for a confirmed QQ-to-desktop push."""
+
+    @property
+    def count(self) -> int:
+        return 1
+
+    def get_tool(self, name: str):
+        return object() if name == "push_to_desktop" else None
+
+    def get_openai_tools(self) -> list[dict]:
+        return [{
+            "type": "function",
+            "function": {
+                "name": "push_to_desktop",
+                "description": "推送到桌面端",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }]
+
+    async def execute(self, name: str, arguments: dict) -> str:
+        self.execute_calls.append((name, dict(arguments)))
+        return "已推送到桌面端"
+
+
 def _make_agent(
     tool_llm: LLMInterface,
     registry: FakeRegistry,
@@ -460,6 +485,20 @@ class TestForcedRecallRouting:
         assert chunks == ["__WHITE_SALARY_TOOL_SILENT__"]
         assert not main_llm.tool_results_seen
 
+    async def test_confirmed_desktop_push_has_no_raw_success_reply(self) -> None:
+        registry = PushDesktopSuccessRegistry()
+        tool_llm = FakeToolLLM([
+            ToolCall(id="c1", name="push_to_desktop", arguments="{}"),
+        ])
+        agent, main_llm = _make_agent(tool_llm, registry)  # type: ignore[arg-type]
+
+        chunks = []
+        async for chunk in agent.chat_stream_with_tools("桌面端给我发条消息"):
+            chunks.append(chunk)
+
+        assert chunks == ["__WHITE_SALARY_TOOL_SILENT__"]
+        assert not main_llm.tool_results_seen
+
     async def test_tool_failure_short_reply_reasks_main_llm(self) -> None:
         """工具超时而主模型只回“注意”时，应再请主模型按人设自然解释。"""
         registry = StickerFailureRegistry()
@@ -507,8 +546,8 @@ class TestForcedRecallRouting:
         assert reply != "如果"
         assert "没生成出来" in reply
 
-    async def test_tool_failure_keeps_real_result_when_both_llm_passes_are_empty(self) -> None:
-        """两次自然重写都失败时也不能静默，至少保留真实工具结果。"""
+    async def test_tool_failure_never_leaks_raw_result_when_llm_passes_are_empty(self) -> None:
+        """两次自然重写都失败时上报一次失败，绝不把内部工具日志发给用户。"""
         registry = StickerFailureRegistry()
         tool_llm = FakeToolLLM([
             ToolCall(id="c1", name="generate_sticker", arguments="{}"),
@@ -520,14 +559,9 @@ class TestForcedRecallRouting:
             tool_result_response="注意",
         )
 
-        chunks = []
-        async for chunk in agent.chat_stream_with_tools("白，发个表情包"):
-            chunks.append(chunk)
+        with pytest.raises(ToolResultPresentationError):
+            async for _ in agent.chat_stream_with_tools("白，发个表情包"):
+                pass
 
         assert main_llm.tool_results_seen
         assert main_llm.chat_completion_messages
-        reply = "".join(chunks)
-        assert reply
-        assert reply != "注意"
-        assert "generate_sticker" in reply
-        assert "超时" in reply
