@@ -49,7 +49,7 @@ llm:
 ```yaml
 system:
   name: "White Salary"    # 项目名（别改）
-  version: "0.1.7"
+  version: "0.1.9"
   debug: false            # true=更多日志
   log_level: "INFO"       # DEBUG / INFO / WARNING / ERROR
 
@@ -162,6 +162,27 @@ qq:
 - `owner_name`：白对主人的称呼。留空时按用户画像的 `user_name` 回退，再没有就让模型自然称呼（**不会硬编码叫"主人"**）。
 <!-- 2026-07-03 便捷化文档：QQ 配置推荐用控制面板 QQ 页 -->
 - **最省心的填法**：打开控制面板（在桌宠上按 `Ctrl+,`）→ 进 **QQ 配置**页填上面这些项 → 点保存 → 点『重启后端』按钮，无需手动编辑本节。完整接入步骤（含 NapCat 下载运行）见 [INSTALL.md](INSTALL.md) 6.2。
+- NapCat / OneBot 重新连接后会自动补拉遗漏历史；补回消息与实时消息走同一套 QQ 处理流程，并用持久消息 ID / 游标去重。该能力不需要单独开关。
+
+---
+
+## `external_tools` 可选本地工具路径
+
+```yaml
+external_tools:
+  napcat_launcher: ""  # NapCat目录或launcher*.bat；空=只查项目下NapCat/
+  comfyui_bat: ""      # ComfyUI启动脚本
+  comfyui_input: ""    # ComfyUI input目录
+  gpt_sovits_dir: ""   # GPT-SoVITS安装目录
+  cosyvoice_bat: ""    # CosyVoice启动脚本
+  wav2lip_dir: ""      # Wav2Lip安装目录
+  ffmpeg_path: ""      # ffmpeg可执行文件；空=查系统PATH
+```
+
+- 推荐在控制面板 **终端控制室 → 本地工具路径**里填写，保存后启动按钮会立即使用新路径。
+- 环境变量优先级高于配置，对应名称见 [LOCAL_ADVANCED.md](LOCAL_ADVANCED.md#6-关于-external_tools-配置节路径怎么配)。
+- 这些都是可选本地增强。只使用云端 API 时全部留空，不会回退到作者电脑的固定路径。
+- Linux 服务器不会执行 Windows `.bat`；需要 QQ 时应单独运行 OneBot 桥接，并配置 `qq.ws_url`。
 
 ---
 

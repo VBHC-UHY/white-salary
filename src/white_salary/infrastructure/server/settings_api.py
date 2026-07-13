@@ -117,13 +117,15 @@ LLM_TEST_ROLES: tuple[str, ...] = (
 # 2026-07-03 外部依赖优化（批8）：候选路径改为按可配置的 GPT-SoVITS 安装目录动态推导
 # （external_tools.gpt_sovits_dir，解析顺序：环境变量→配置；未配置则返回不可用）。
 # 保留为函数而非模块级常量，因为路径依赖运行期配置；单测仍可 monkeypatch 本函数。
-def get_tts_infer_config_candidates() -> tuple[str, ...]:
+def get_tts_infer_config_candidates(
+    project_root: Path | None = None,
+) -> tuple[str, ...]:
     """
     返回 GPT-SoVITS 推理配置文件(tts_infer.yaml)的候选路径。
 
     路径基于可配置的 GPT-SoVITS 安装目录动态推导，换机器时改
     conf.yaml external_tools.gpt_sovits_dir 即可，无需改源码。
-    配置解析失败时回退到内置默认目录（行为不变）。
+    配置不可用时返回空候选。
 
     Returns:
         候选路径元组（当前仅一个：<安装目录>/GPT_SoVITS/configs/tts_infer.yaml）
@@ -131,16 +133,49 @@ def get_tts_infer_config_candidates() -> tuple[str, ...]:
     try:
         from white_salary.adapters.tools.external_paths import get_gpt_sovits_dir
 
-        sovits_dir = get_gpt_sovits_dir()
+        sovits_dir = get_gpt_sovits_dir(project_root=project_root)
     except Exception:
         return ()
     return (str(sovits_dir / "GPT_SoVITS" / "configs" / "tts_infer.yaml"),)
 
 
-# 向后兼容：保留模块级常量名，import 期用 get_tts_infer_config_candidates() 求值
-# 一次（吃到 external_tools.gpt_sovits_dir 配置覆盖；配置不可用时回退内置默认）。
-# 单测仍可 monkeypatch 本常量整体替换（voice-clone/status 端点读的就是它）。
-TTS_INFER_CONFIG_CANDIDATES: tuple[str, ...] = get_tts_infer_config_candidates()
+# 向后兼容：保留可供单测覆盖的名字，但默认不在 import 期派生路径。
+# None 表示每次请求都根据当前 external_tools.gpt_sovits_dir 重新计算。
+TTS_INFER_CONFIG_CANDIDATES: tuple[str, ...] | None = None
+
+
+def _current_tts_infer_config_candidates(
+    project_root: Path,
+) -> tuple[str, ...]:
+    if TTS_INFER_CONFIG_CANDIDATES is not None:
+        return TTS_INFER_CONFIG_CANDIDATES
+    return get_tts_infer_config_candidates(project_root)
+
+
+def _local_windows_launch_supported() -> bool:
+    return os.name == "nt"
+
+
+def _tool_error(code: str, detail: str) -> dict[str, Any]:
+    return {
+        "success": False,
+        "status": "error",
+        "code": code,
+        "detail": detail,
+        "message": detail,
+    }
+
+
+def _active_processes(endpoint: Any) -> list[Any]:
+    active: list[Any] = []
+    for process in getattr(endpoint, "_processes", []):
+        try:
+            if process.poll() is None:
+                active.append(process)
+        except Exception:
+            active.append(process)
+    endpoint._processes = active
+    return active
 
 
 # 2026-07-03 功能大项（批11二波）：声音一键训练——训练进程与日志的模块级状态。
@@ -435,6 +470,11 @@ def create_settings_router(
             _save_config(existing)
 
             runtime_sync_notes: list[str] = []
+            if isinstance(cleaned.get("external_tools"), dict):
+                from white_salary.adapters.tools.external_paths import reset_cache
+
+                reset_cache()
+                runtime_sync_notes.append("Local tool paths refreshed")
             cleaned_qq = cleaned.get("qq") if isinstance(cleaned.get("qq"), dict) else {}
             if "unblocked_group_ids" in cleaned_qq:
                 decider = _get_runtime("qq_smart_reply_decider")
@@ -455,6 +495,8 @@ def create_settings_router(
                     "message": "设置已保存，" + "；".join(runtime_sync_notes) + "，其余配置重启后生效",
                 }
             return {"status": "ok", "message": "设置已保存，重启后生效"}
+        except HTTPException:
+            raise
         except Exception as e:
             logger.error(f"Failed to save settings: {e}")
             raise HTTPException(status_code=500, detail=str(e))
@@ -899,27 +941,69 @@ def create_settings_router(
     async def start_napcat() -> dict:
         """Start NapCat QQ bot."""
         import subprocess
-        napcat_dir = project_root / "NapCat"
-        launcher = napcat_dir / "launcher.bat"
-        if not launcher.exists():
-            launcher = napcat_dir / "launcher-win10.bat"
-        if not launcher.exists():
-            raise HTTPException(status_code=404, detail="NapCat launcher not found")
+
+        if not _local_windows_launch_supported():
+            return _tool_error(
+                "windows_only",
+                "Local NapCat auto-start is available on Windows only. "
+                "On a Linux server, run a OneBot bridge separately and configure qq.ws_url.",
+            )
+
+        active = _active_processes(start_napcat)
+        if active:
+            return _tool_error(
+                "already_running",
+                f"NapCat is already running (pid={getattr(active[0], 'pid', 'unknown')}).",
+            )
+        try:
+            from white_salary.adapters.tools.external_paths import get_napcat_launcher
+
+            launcher = get_napcat_launcher(project_root)
+        except FileNotFoundError as exc:
+            return _tool_error("not_configured", str(exc))
+
+        napcat_dir = launcher.parent
         try:
             proc = subprocess.Popen(
-                ["cmd", "/c", "start", str(launcher)],
+                ["cmd.exe", "/d", "/c", str(launcher)],
                 cwd=str(napcat_dir),
+                creationflags=(
+                    getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
+                    | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+                ),
             )
-            # 追踪进程避免僵尸
-            if not hasattr(start_napcat, '_processes'):
-                start_napcat._processes = []
-            start_napcat._processes.append(proc)
-            # 清理已结束的
-            start_napcat._processes = [p for p in start_napcat._processes if p.poll() is None]
+            start_napcat._processes = [*active, proc]
             logger.info(f"NapCat started (pid={proc.pid})")
-            return {"status": "ok"}
+            return {
+                "success": True,
+                "status": "ok",
+                "code": "started",
+                "message": "NapCat start request sent",
+                "launcher": _path_for_display(launcher),
+            }
         except Exception as e:
-            raise HTTPException(status_code=500, detail=str(e))
+            logger.exception(f"NapCat start failed: {e}")
+            return _tool_error("start_failed", str(e))
+
+    @router.get("/napcat/path")
+    async def get_napcat_path() -> dict:
+        """Return the resolved local NapCat launcher and logs directory."""
+        try:
+            from white_salary.adapters.tools.external_paths import get_napcat_launcher
+
+            launcher = get_napcat_launcher(project_root)
+        except FileNotFoundError as exc:
+            return {
+                **_tool_error("not_configured", str(exc)),
+                "available": False,
+            }
+        logs_dir = launcher.parent / "logs"
+        return {
+            "available": True,
+            "launcher": str(launcher),
+            "logs_dir": str(logs_dir),
+            "logs_exist": logs_dir.is_dir(),
+        }
 
     @router.get("/logs")
     async def get_logs() -> dict:
@@ -1013,54 +1097,68 @@ def create_settings_router(
         """Start local GPT-SoVITS TTS server."""
         import subprocess
 
+        if not _local_windows_launch_supported():
+            return _tool_error(
+                "windows_only",
+                "Local GPT-SoVITS auto-start is available on Windows only. "
+                "On Linux, run GPT-SoVITS separately and configure tts.local_api_url.",
+            )
+
+        active = _active_processes(start_tts)
+        if active:
+            return _tool_error(
+                "already_running",
+                "Local GPT-SoVITS is already starting or running "
+                f"(pid={getattr(active[0], 'pid', 'unknown')}).",
+            )
+
         # 2026-07-03 外部依赖优化（批8）：GPT-SoVITS 安装目录改走统一解析
         # （环境变量 WS_GPT_SOVITS_DIR → conf.yaml external_tools.gpt_sovits_dir）。
-        # cd /d 需要 Windows 反斜杠路径，故转成本机原生写法。
         try:
             from white_salary.adapters.tools.external_paths import get_gpt_sovits_dir
 
-            _sovits_dir = get_gpt_sovits_dir()
+            _sovits_dir = get_gpt_sovits_dir(project_root=project_root)
         except Exception as exc:
-            return {
-                "success": False,
-                "message": (
-                    "未配置 GPT-SoVITS 安装目录。请在 conf.yaml 的 "
-                    "external_tools.gpt_sovits_dir 中填写路径，或设置 "
-                    f"WS_GPT_SOVITS_DIR。详情: {exc}"
-                ),
-            }
-        # os.path.normpath 在 Windows 上把 / 归一为 \，得到 cd /d 认识的原生路径
-        import os as _os
-
-        _sovits_dir_win = _os.path.normpath(str(_sovits_dir))
+            return _tool_error(
+                "not_configured",
+                "未配置 GPT-SoVITS 安装目录。请在 conf.yaml 的 "
+                "external_tools.gpt_sovits_dir 中填写路径，或设置 "
+                f"WS_GPT_SOVITS_DIR。详情: {exc}",
+            )
         _venv_activate = _sovits_dir / "venv_new" / "Scripts" / "activate.bat"
         _api_script = _sovits_dir / "api_v2.py"
         if not _api_script.exists() or not _venv_activate.exists():
-            return {
-                "success": False,
-                "message": (
-                    f"未找到 GPT-SoVITS 或其 venv_new 虚拟环境：{_sovits_dir}。"
-                    "请在 conf.yaml 的 external_tools.gpt_sovits_dir 填你的安装目录；"
-                    "不装本地 GPT-SoVITS 时会继续使用云端 TTS/纯文字兜底。"
-                ),
-            }
+            return _tool_error(
+                "invalid_install",
+                f"未找到 GPT-SoVITS 或其 venv_new 虚拟环境：{_sovits_dir}。"
+                "请在 conf.yaml 的 external_tools.gpt_sovits_dir 填你的安装目录；"
+                "不装本地 GPT-SoVITS 时会继续使用云端 TTS/纯文字兜底。",
+            )
         tts_cmd = (
-            'start "WhiteSalary-TTS" cmd /k "'
-            f'cd /d "{_sovits_dir_win}" && '
             'call "venv_new\\Scripts\\activate.bat" && '
             'python api_v2.py -a 127.0.0.1 -p 9880 '
-            '-c GPT_SoVITS/configs/tts_infer.yaml"'
+            '-c GPT_SoVITS/configs/tts_infer.yaml'
         )
         try:
-            proc = subprocess.Popen(tts_cmd, shell=True)
-            if not hasattr(start_tts, '_processes'):
-                start_tts._processes = []
-            start_tts._processes.append(proc)
-            start_tts._processes = [p for p in start_tts._processes if p.poll() is None]
+            proc = subprocess.Popen(
+                ["cmd.exe", "/d", "/k", tts_cmd],
+                cwd=str(_sovits_dir),
+                creationflags=(
+                    getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
+                    | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+                ),
+            )
+            start_tts._processes = [*active, proc]
             logger.info(f"[TTS] Local GPT-SoVITS start requested (pid={proc.pid})")
-            return {"status": "ok", "message": "TTS启动中...模型加载需要约45秒"}
+            return {
+                "success": True,
+                "status": "ok",
+                "code": "started",
+                "message": "TTS启动中...模型加载需要约45秒",
+            }
         except Exception as e:
-            raise HTTPException(status_code=500, detail=str(e))
+            logger.exception(f"[TTS] Local GPT-SoVITS start failed: {e}")
+            return _tool_error("start_failed", str(e))
 
     @router.post("/memory/consolidate")
     async def trigger_consolidation() -> dict:
@@ -2279,7 +2377,7 @@ def create_settings_router(
         （见 panel-voiceclone.json"当前语音模型信息卡"审计项）。
         """
         cfg_path: Path | None = None
-        for cand in TTS_INFER_CONFIG_CANDIDATES:
+        for cand in _current_tts_infer_config_candidates(project_root):
             p = Path(cand)
             if p.exists():
                 cfg_path = p
@@ -2445,7 +2543,7 @@ def create_settings_router(
         try:
             from white_salary.adapters.tools.external_paths import get_gpt_sovits_dir
 
-            return get_gpt_sovits_dir()
+            return get_gpt_sovits_dir(project_root=project_root)
         except Exception as exc:
             raise FileNotFoundError(
                 "GPT-SoVITS 安装目录未配置。请设置 external_tools.gpt_sovits_dir "

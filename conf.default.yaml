@@ -13,7 +13,7 @@ system:
   # 项目名称（不要改）
   name: "White Salary"
   # 版本号
-  version: "0.1.8"
+  version: "0.1.9"
   # 调试模式（true=输出更多日志，false=正常模式）
   debug: false
   # 日志级别：DEBUG / INFO / WARNING / ERROR
@@ -292,6 +292,8 @@ singing:
 # 留空 = 不覆盖，沿用环境变量或内置默认值——保持现有行为，老用户无需改动。
 # 进阶用户把本地工具装在别的位置时，改这里对应字段即可，无需改源码。
 external_tools:
+  # NapCat launcher .bat or installation directory. Empty = auto-detect project/NapCat.
+  napcat_launcher: ""
   # ComfyUI 启动脚本(.bat)。空=不自动启动本地 ComfyUI；需要时填你的实际路径。
   comfyui_bat: ""
   # ComfyUI 的 input 目录（图生视频时把输入图复制进去）。

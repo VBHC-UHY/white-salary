@@ -33,6 +33,25 @@
 
 ## 最近完成
 
+### 2026-07-12 v0.1.9：服务器安装、可移植工具路径与 QQ 离线补消息
+
+完成内容：
+- 重写 `install.sh` 和 `server-setup.sh`：Python 3.10-3.12 自动选择、项目 `.venv` 隔离、缺失 `ensurepip` / `pythonX.Y-venv` 的诊断与可选补齐、只读 `--check`、可选 systemd 服务。
+- 加固 Windows `安装.bat`：检查模式验证虚拟环境能力但不下载/改写；旧 `.venv` 只有在身份可确认时才允许自动重建。
+- 公开控制面板增加本地工具路径配置，统一解析 NapCat、GPT-SoVITS、ComfyUI、CosyVoice、Wav2Lip 和 ffmpeg；启动按钮改为返回后端真实结果，不再依赖作者机器盘符。
+- NapCat 重连补消息改为持久化游标与消息 ID 去重，并将遗漏消息重新送入 `QQAdapter` 的正常消息入口，保留上下文、好感度、黑白名单、插件、工具与发送回执。
+- README、INSTALL、CONFIG、LOCAL_ADVANCED 和快速上手区分 Windows 桌面宠物与 Linux 服务器后端，写清本地工具配置入口和 NapCat 部署边界。
+
+验证结果：
+- Windows Python 全量测试 `916 passed, 16 skipped`；前端测试 `4 passed`。
+- WSL / Linux 安装器测试 `15 passed`，脚本语法、systemd 单元、只读检查、Python/venv 选择与权限边界均通过。
+- Windows `安装.bat /check` 通过；公开文件绝对路径、作者账号与敏感信息扫描通过。
+- 已重新对齐远端 `origin/main`，确认 v0.1.9 基于公开版 v0.1.8 开发并复跑关键验证。真实依赖下载仍取决于目标服务器的 DNS 和软件源可用性，发布后还需核对 PR、标签与 Release 指向同一提交。
+
+发布边界：
+- 这批公开改动在从 `origin/main` 派生的独立工作树中完成，不从 `D:\White Salary` 原样复制或上传机器专用启动路径。
+- Windows 本地 `.bat` 启动器与 Linux 服务器后端是两条路线；服务器上的 NapCat / OneBot 桥接需要独立部署。
+
 ### 2026-07-12 v0.1.8：Agent Runtime v2 旁路、云端能力与安装器修复
 
 完成内容：

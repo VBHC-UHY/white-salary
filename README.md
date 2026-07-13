@@ -10,12 +10,12 @@
 <!-- 徽章行（2026-07-03 新手体验（批10）：静态徽章，不接 CI） -->
 ![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)
 ![Python 3.10-3.12](https://img.shields.io/badge/Python-3.10--3.12-blue.svg)
-![Tests](https://img.shields.io/badge/tests-695%20passed-brightgreen.svg)
+![Tests](https://img.shields.io/badge/tests-916%20passed-brightgreen.svg)
 ![PRs Welcome](https://img.shields.io/badge/PRs-welcome-ff69b4.svg)
 
 Python 3.10-3.12 · FastAPI · Electron · Live2D · 六边形架构
 
-当前版本：**v0.1.7**
+当前版本：**v0.1.9**
 
 <!-- 2026-07-03：交流群。二维码图放到 docs/assets/qq-group.png 后可取消下一行注释显示图片 -->
 <p>
@@ -199,12 +199,18 @@ chmod +x server-setup.sh
 ./server-setup.sh
 ```
 
-它会自动调用 `install.sh` 创建 `.venv`、安装后端依赖、生成 `conf.yaml`，然后提示你粘贴一把 SiliconFlow key、选择端口、选择是否安装 ChromaDB 长期记忆、是否创建 systemd 服务。新手一路回车也能先跑起来。
+它会自动选择 Python 3.10-3.12、补齐 Debian/Ubuntu 缺少的 `pythonX.Y-venv`、创建项目专用 `.venv`、安装后端依赖并生成 `conf.yaml`。之后只需按提示填写 key、端口、长期记忆和 systemd 选项；依赖不会装进系统 Python。
+
+先做只读检查，不修改服务器：
+
+```bash
+./server-setup.sh --check
+```
 
 只想一条命令快速配置：
 
 ```bash
-WS_API_KEY=sk-你的key ./server-setup.sh --yes
+WS_API_KEY=sk-你的key ./server-setup.sh --yes --install-service
 ```
 
 需要长期向量记忆：
@@ -216,8 +222,7 @@ WS_API_KEY=sk-你的key ./server-setup.sh --yes
 装完后前台启动：
 
 ```bash
-source .venv/bin/activate
-PYTHONPATH=src python run_server.py --host 0.0.0.0 --port 12400
+PYTHONPATH=src .venv/bin/python run_server.py --host 0.0.0.0 --port 12400
 ```
 
 检查是否启动成功：
@@ -226,12 +231,12 @@ PYTHONPATH=src python run_server.py --host 0.0.0.0 --port 12400
 curl http://127.0.0.1:12400/health
 ```
 
-> `server-setup.sh` 是给新手的服务器向导；`install.sh` 是底层安装器，适合懂 Linux 的用户手动控制。两者都会创建项目专用 `.venv`，不会污染系统 Python。Linux 脚本会优先使用 Python 3.12 / 3.11 / 3.10，暂不选择 Python 3.13，避免部分可选 AI 依赖还没跟上新版解释器。
+> `server-setup.sh` 是给新手的服务器向导；`install.sh` 是底层安装器。两者都只把 Python 包装进项目 `.venv`，不会污染系统 Python。服务器版只运行 FastAPI 后端，不会启动 Electron 桌宠和 Windows 本地工具；远程开放端口前请配置防火墙、反向代理和管理令牌。
 
 **不确定配好了没？** 跑一次首次运行自检：
 
 ```bash
-.venv\Scripts\python.exe scripts\first_run_check.py
+.venv/bin/python scripts/first_run_check.py
 ```
 
 它会检查 conf.yaml、主 LLM 密钥、Python 版本、关键依赖、目录结构，并用中文告诉你「下一步做什么」。
@@ -245,10 +250,12 @@ curl http://127.0.0.1:12400/health
 
 <!-- 2026-07-03 便捷化文档：NapCat 是独立程序不放进项目文件夹；配置改走控制面板 QQ 页 -->
 ### 💬 QQ 机器人
-1. 自行下载并登录 [NapCat](https://github.com/NapNeko/NapCatQQ)（第三方**独立开源程序**，**不随本仓库分发、也不用放进 White Salary 文件夹**——下载后放哪都行、双击自己运行；白通过网络端口与它通信。新手强烈推荐它的一键版 NapCat.OneKey）。
+1. 自行下载并登录 [NapCat](https://github.com/NapNeko/NapCatQQ)（第三方**独立开源程序**，不随本仓库分发；新手可使用它的一键版）。
 2. 在 NapCat 里配置**正向 WebSocket**（记下端口，配一个 token）。
-3. **打开控制面板**（在桌宠上按 `Ctrl+,`）→ 进 **QQ 配置**页 → 把 NapCat 给你的端口（`ws_url`）、`token` 填进去，开启 QQ、填上你自己的 QQ 号（会被认成"主人"）→ 点保存 → 点『重启后端』按钮。（进阶用户也可直接改 `conf.yaml` 的 `qq` 节。）
-4. 详见 [docs/CONFIG.md](docs/CONFIG.md) 的 `qq` 节。
+3. **打开控制面板**（在桌宠上按 `Ctrl+,`）→ **QQ 配置**，填写 `ws_url`、`token`、自己的 QQ 号并开启 QQ。
+4. 想让面板代你启动 NapCat：到 **终端控制室 → 本地工具路径**，填写 NapCat 的安装目录或 `launcher*.bat`。留空时只会安全查找项目下的 `NapCat/`，不会猜作者电脑路径。
+5. NapCat 断线后重新连接时，白会拉取遗漏历史并重新走正常 QQ 消息链路；黑白名单、活动窗口、上下文、好感度、插件和工具判断仍然生效。
+6. 详见 [docs/INSTALL.md](docs/INSTALL.md) 的 NapCat 章节。
 
 ### 🌐 QQ 空间社交
 在控制面板（`Ctrl+,`）的 QQ 空间页扫码 / Cookie 登录后即可自动发说说、逛空间。

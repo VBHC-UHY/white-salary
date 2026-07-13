@@ -269,6 +269,9 @@ class QQAdapter:
 
         # 消息处理回调：async def handler(msg: QQMessage) -> str | None
         self.on_message: Optional[Callable[[QQMessage], Awaitable[Optional[str]]]] = None
+        # Persistent dedupe hooks shared by live and offline-history messages.
+        self.on_message_claim: Optional[Callable] = None
+        self.on_message_completed: Optional[Callable] = None
 
         # 群消息记录回调：所有群消息都调（不管回不回复），用于记录上下文
         # def recorder(group_id: str, sender_name: str, text: str) -> None
@@ -442,15 +445,50 @@ class QQAdapter:
             msg.self_id = self._self_id or msg.self_id
             await self._handle_message(msg)
 
-    async def _handle_message(self, msg: QQMessage) -> None:
+    async def replay_history_message(self, event: dict) -> bool:
+        """Replay one OneBot history item through the ordinary live-message path."""
+        msg = QQMessage(event)
+        msg.self_id = self._self_id or msg.self_id
+        setattr(msg, "_offline_replay", True)
+        setattr(msg, "_offline_reply_to_me", bool(event.get("_offline_reply_to_me")))
+        return await self._handle_message(msg)
+
+    async def _claim_incoming_message(self, msg: QQMessage) -> bool:
+        callback = self.on_message_claim
+        if callback is None:
+            return True
+        try:
+            result = callback(msg)
+            if asyncio.iscoroutine(result):
+                result = await result
+            return result is not False
+        except Exception as exc:
+            logger.warning(f"[QQ] Message dedupe claim failed; continuing safely: {exc}")
+            return True
+
+    async def _complete_incoming_message(self, msg: QQMessage, success: bool) -> None:
+        callback = self.on_message_completed
+        if callback is None:
+            return
+        try:
+            result = callback(msg, success)
+            if asyncio.iscoroutine(result):
+                await result
+        except Exception as exc:
+            logger.warning(f"[QQ] Message dedupe completion failed: {exc}")
+
+    async def _handle_message(self, msg: QQMessage) -> bool:
         """处理QQ消息。"""
         # 跳过自己发的消息（self_id未初始化时也跳过，防死循环）
         if not self._self_id:
             # meta_event还没来，不知道自己是谁，先不处理
             logger.debug("[QQ] self_id未初始化，跳过消息")
-            return
+            return False
         if msg.user_id == self._self_id:
-            return
+            return True
+        if not await self._claim_incoming_message(msg):
+            logger.debug(f"[QQ] Duplicate message skipped: {msg.message_id}")
+            return True
 
         # 缓存消息内容（撤回时用来查原文）
         if msg.message_id and msg.text:
@@ -464,7 +502,7 @@ class QQAdapter:
                 pass
 
         # 引用白的消息检测（引用白=叫白，不需要唤醒词）
-        _is_reply_to_me = False
+        _is_reply_to_me = bool(getattr(msg, "_offline_reply_to_me", False))
         if "[CQ:reply," in msg.raw_message and self._sent_messages:
             import re as _re
             reply_id_match = _re.search(r"\[CQ:reply,id=(-?\d+)", msg.raw_message)
@@ -485,14 +523,20 @@ class QQAdapter:
             logger.debug(f"[QQ] 私聊({msg.user_id}) {msg.sender_name}: {msg.text[:50]}")
 
         # 调用消息处理回调
+        processing_ok = True
         if self.on_message and msg.text:
             try:
                 reply = await self.on_message(msg)
                 if reply:
                     await self.send_reply(msg, reply)
             except Exception as e:
+                processing_ok = False
                 await self._notify_reply_failed(msg, str(e))
                 logger.error(f"[QQ] 消息处理失败: {e}")
+        if getattr(msg, "_processing_failed", False):
+            processing_ok = False
+        await self._complete_incoming_message(msg, processing_ok)
+        return processing_ok
 
     # ================================================================
     # 通知事件处理

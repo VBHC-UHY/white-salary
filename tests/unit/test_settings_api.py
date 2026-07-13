@@ -23,6 +23,7 @@ import pytest
 import yaml
 from fastapi import HTTPException
 
+import white_salary.infrastructure.server.settings_api as settings_api_module
 from white_salary.infrastructure.server.settings_api import (
     SettingsUpdate,
     create_settings_router,
@@ -108,6 +109,43 @@ class TestSaveSettingsDeepMerge:
 
         saved = yaml.safe_load((root / "conf.yaml").read_text(encoding="utf-8"))
         assert saved["llm"]["api_key"] == "sk-realkey12345678"
+
+    async def test_invalid_settings_keeps_original_http_detail(self, tmp_path: Path) -> None:
+        root = _make_project(tmp_path)
+        router = create_settings_router(root)
+        save_settings = _endpoint(router, "/api/settings", "POST")
+
+        with pytest.raises(HTTPException) as exc_info:
+            await save_settings(SettingsUpdate(settings={}))
+
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.detail == "Invalid settings format"
+
+    async def test_saved_tts_path_is_visible_to_status_immediately(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from white_salary.adapters.tools import external_paths as ep
+
+        monkeypatch.delenv("WS_GPT_SOVITS_DIR", raising=False)
+        root = _make_project(tmp_path)
+        infer = root / "tools" / "GPT-SoVITS" / "GPT_SoVITS" / "configs" / "tts_infer.yaml"
+        infer.parent.mkdir(parents=True)
+        infer.write_text("custom:\n  version: v2\n", encoding="utf-8")
+        router = create_settings_router(root)
+        save_settings = _endpoint(router, "/api/settings", "POST")
+        voice_status = _endpoint(router, "/api/settings/voice-clone/status", "GET")
+
+        before = await voice_status()
+        assert before["available"] is False
+
+        await save_settings(SettingsUpdate(settings={
+            "external_tools": {"gpt_sovits_dir": "tools/GPT-SoVITS"}
+        }))
+        after = await voice_status()
+
+        assert after["available"] is True
+        assert after["config_path"] == str(infer)
+        ep.reset_cache()
 
     async def test_qq_unblocked_groups_sync_runtime_decider(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -331,6 +369,9 @@ class TestStartTTSEndpoint:
     async def test_start_tts_uses_configured_quoted_path(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        monkeypatch.setattr(
+            settings_api_module, "_local_windows_launch_supported", lambda: True
+        )
         sovits = tmp_path / "GPT SoVITS"
         (sovits / "venv_new" / "Scripts").mkdir(parents=True)
         (sovits / "venv_new" / "Scripts" / "activate.bat").write_text(
@@ -340,7 +381,7 @@ class TestStartTTSEndpoint:
 
         from white_salary.adapters.tools import external_paths as ep
 
-        monkeypatch.setattr(ep, "get_gpt_sovits_dir", lambda: sovits)
+        monkeypatch.setattr(ep, "get_gpt_sovits_dir", lambda **_kwargs: sovits)
         calls: dict[str, Any] = {}
 
         class FakePopen:
@@ -360,16 +401,25 @@ class TestStartTTSEndpoint:
         resp = await start_tts()
 
         assert resp["status"] == "ok"
-        assert f'cd /d "{os.path.normpath(str(sovits))}"' in calls["cmd"]
-        assert 'call "venv_new\\Scripts\\activate.bat"' in calls["cmd"]
-        assert calls["kwargs"].get("shell") is True
+        assert calls["cmd"][:3] == ["cmd.exe", "/d", "/k"]
+        assert 'call "venv_new\\Scripts\\activate.bat"' in calls["cmd"][3]
+        assert calls["kwargs"]["cwd"] == str(sovits)
+        assert "shell" not in calls["kwargs"]
+
+        duplicate = await start_tts()
+        assert duplicate["code"] == "already_running"
 
     async def test_start_tts_missing_install_returns_message(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        monkeypatch.setattr(
+            settings_api_module, "_local_windows_launch_supported", lambda: True
+        )
         from white_salary.adapters.tools import external_paths as ep
 
-        monkeypatch.setattr(ep, "get_gpt_sovits_dir", lambda: tmp_path / "missing")
+        monkeypatch.setattr(
+            ep, "get_gpt_sovits_dir", lambda **_kwargs: tmp_path / "missing"
+        )
         called = {"popen": False}
 
         def fake_popen(*args: Any, **kwargs: Any) -> object:
@@ -383,8 +433,114 @@ class TestStartTTSEndpoint:
         resp = await start_tts()
 
         assert resp["success"] is False
+        assert resp["code"] == "invalid_install"
+        assert resp["detail"] == resp["message"]
         assert "GPT-SoVITS" in resp["message"]
         assert called["popen"] is False
+
+    async def test_linux_returns_windows_only_before_resolving_paths(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from white_salary.adapters.tools import external_paths as ep
+
+        monkeypatch.setattr(
+            settings_api_module, "_local_windows_launch_supported", lambda: False
+        )
+        resolved = {"called": False}
+
+        def fail_if_resolved(**_kwargs: Any) -> Path:
+            resolved["called"] = True
+            raise AssertionError("Windows GPT-SoVITS paths must not be checked on Linux")
+
+        monkeypatch.setattr(ep, "get_gpt_sovits_dir", fail_if_resolved)
+        router = create_settings_router(_make_project(tmp_path))
+        start_tts = _endpoint(router, "/api/settings/start-tts", "POST")
+
+        resp = await start_tts()
+
+        assert resp["success"] is False
+        assert resp["status"] == "error"
+        assert resp["code"] == "windows_only"
+        assert resp["detail"] == resp["message"]
+        assert resolved["called"] is False
+
+
+class TestStartNapCatEndpoint:
+    async def test_start_uses_resolved_launcher(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            settings_api_module, "_local_windows_launch_supported", lambda: True
+        )
+        from white_salary.adapters.tools import external_paths as ep
+
+        napcat = tmp_path / "NapCat External"
+        napcat.mkdir()
+        launcher = napcat / "launcher-user.bat"
+        launcher.write_text("@echo off\n", encoding="utf-8")
+        monkeypatch.setattr(ep, "get_napcat_launcher", lambda project_root: launcher)
+        calls: dict[str, Any] = {}
+
+        class FakePopen:
+            pid = 321
+
+            def __init__(self, args: list[str], **kwargs: Any) -> None:
+                calls["args"] = args
+                calls["kwargs"] = kwargs
+
+            def poll(self) -> None:
+                return None
+
+        monkeypatch.setattr(subprocess, "Popen", FakePopen)
+        router = create_settings_router(_make_project(tmp_path))
+        endpoint = _endpoint(router, "/api/settings/start-napcat", "POST")
+
+        result = await endpoint()
+
+        assert result["success"] is True
+        assert calls["args"] == ["cmd.exe", "/d", "/c", str(launcher)]
+        assert calls["kwargs"]["cwd"] == str(napcat)
+
+        duplicate = await endpoint()
+        assert duplicate["code"] == "already_running"
+        assert duplicate["detail"] == duplicate["message"]
+
+    async def test_non_windows_start_is_structured(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            settings_api_module, "_local_windows_launch_supported", lambda: False
+        )
+        router = create_settings_router(_make_project(tmp_path))
+        endpoint = _endpoint(router, "/api/settings/start-napcat", "POST")
+
+        result = await endpoint()
+
+        assert result["success"] is False
+        assert result["status"] == "error"
+        assert result["code"] == "windows_only"
+        assert result["detail"] == result["message"]
+
+    async def test_path_endpoint_reports_configured_logs(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from white_salary.adapters.tools import external_paths as ep
+
+        napcat = tmp_path / "NapCat"
+        logs = napcat / "logs"
+        logs.mkdir(parents=True)
+        launcher = napcat / "launcher.bat"
+        launcher.write_text("@echo off\n", encoding="utf-8")
+        monkeypatch.setattr(ep, "get_napcat_launcher", lambda project_root: launcher)
+        router = create_settings_router(_make_project(tmp_path))
+        endpoint = _endpoint(router, "/api/settings/napcat/path", "GET")
+
+        result = await endpoint()
+
+        assert result["available"] is True
+        assert result["launcher"] == str(launcher)
+        assert result["logs_dir"] == str(logs)
+        assert result["logs_exist"] is True
 
 
 class TestRestartEndpoint:

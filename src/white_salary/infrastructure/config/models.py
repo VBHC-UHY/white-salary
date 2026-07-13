@@ -26,7 +26,7 @@ class SystemConfig(BaseModel):
     控制项目名称、版本、调试模式等全局设置。
     """
     name: str = Field(default="White Salary", description="项目名称")
-    version: str = Field(default="0.1.8", description="版本号")
+    version: str = Field(default="0.1.9", description="版本号")
     debug: bool = Field(default=False, description="是否开启调试模式")
     log_level: str = Field(default="INFO", description="日志级别: DEBUG/INFO/WARNING/ERROR")
 
@@ -307,6 +307,10 @@ class ExternalToolsConfig(BaseModel):
     只用云端（填 API key 就能用）的用户可以全部留空。默认值全为空字符串="未配置"；
     对应本地增强功能会给出明确提示或自动降级，不再回退到作者机器的固定路径。
     """
+    napcat_launcher: str = Field(
+        default="",
+        description="NapCat launcher .bat path or installation directory; empty=auto-detect project/NapCat",
+    )
     comfyui_bat: str = Field(
         default="",
         description="ComfyUI 启动脚本(.bat)路径；空=不自动启动本地 ComfyUI",

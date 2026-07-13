@@ -217,6 +217,8 @@ llm_vision:
 
 这几项也都能纯云端跑，**不用装 ComfyUI / GPT-SoVITS**。
 
+如果选择本地服务，路径统一在桌宠 `Ctrl+,` → **终端控制室 → 本地工具路径**中配置，也可以写入 `conf.yaml` 的 `external_tools`。公开版不会默认指向作者电脑的盘符；Linux 服务器只运行后端，本地 Windows `.bat` 启动按钮不适用。
+
 ### 6.1 生图（云端）
 
 白画图时是**三级降级**：先试本地 ComfyUI → 再试 DMXAPI → 最后试硅基流动。你**不装 ComfyUI**时，只要配了云端 key，白会直接用云端画：
