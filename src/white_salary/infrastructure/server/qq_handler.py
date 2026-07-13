@@ -1556,6 +1556,7 @@ async def start_qq_service(
 
         except Exception as e:
             import traceback
+            setattr(msg, "_processing_failed", True)
             if runtime_task is not None:
                 runtime_task.fail(str(e))
             logger.error(f"[QQ] 回复生成失败: {e}\n{traceback.format_exc()}")
@@ -1594,7 +1595,10 @@ async def start_qq_service(
             bot_name=bot_name,
             family_qq=[str(q) for q in (family_qq or [])],
             wake_words=wake_words,
+            data_dir=str(_service_root / "data" / "qq"),
         )
+        adapter.on_message_claim = startup_checker.claim_message
+        adapter.on_message_completed = startup_checker.complete_message
     except Exception as e:
         logger.warning(f"[QQ] StartupChecker 初始化失败，离线消息检查不可用: {e}")
 
