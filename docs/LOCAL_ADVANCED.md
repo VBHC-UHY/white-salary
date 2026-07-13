@@ -188,29 +188,33 @@ pip install -e ".[asr-whisper]"
 
 ## 6. 关于 `external_tools` 配置节（路径怎么配）
 
-上面各组件的路径，本项目提供了**两套等价的配置方式**，你按自己版本挑一种：
+所有可选本地组件都集中在 `external_tools`。最简单的做法是打开控制面板 **终端控制室 → 本地工具路径**，填写后保存；它会写入 `conf.yaml`，启动按钮马上使用新位置。
 
-**方式一（各版本通用、当前已生效）——环境变量 / 固定探测路径**
-
-| 组件 | 覆盖方式 |
-|------|----------|
-| ComfyUI 启动脚本 | 环境变量 `WS_COMFYUI_BAT` |
-| ComfyUI input 目录 | 环境变量 `WS_COMFYUI_INPUT` |
-| GPT-SoVITS 目录 | 填 `conf.yaml` 的 `external_tools.gpt_sovits_dir`，或设 `WS_GPT_SOVITS_DIR`；推理走固定端口 `127.0.0.1:9880` |
-| ffmpeg | 加系统 `PATH`，或填 `conf.yaml` 的 `external_tools.ffmpeg_path` |
-
-**方式二（若你的版本已提供）—— `conf.yaml` 的 `external_tools` 节**
-
-部分版本会在 `conf.yaml` 集中收拢这些路径，形如：
+需要脚本化部署时，也可以直接写配置：
 
 ```yaml
 external_tools:
-  comfyui_bat: "<你的ComfyUI目录>/run_nvidia_gpu.bat"   # ComfyUI 启动脚本
-  gpt_sovits_dir: "<你的GPT-SoVITS目录>"                 # GPT-SoVITS 安装目录
-  ffmpeg_path: "<你的ffmpeg目录>/bin/ffmpeg.exe"         # ffmpeg 可执行文件
+  napcat_launcher: "<NapCat目录或launcher.bat>"
+  comfyui_bat: "<ComfyUI目录>/run_nvidia_gpu.bat"
+  comfyui_input: "<ComfyUI目录>/ComfyUI/input"
+  gpt_sovits_dir: "<GPT-SoVITS目录>"
+  cosyvoice_bat: "<CosyVoice启动脚本>"
+  wav2lip_dir: "<Wav2Lip目录>"
+  ffmpeg_path: "<ffmpeg目录>/bin/ffmpeg.exe"
 ```
 
-> **怎么判断你的版本走哪套**：打开 `conf.default.yaml` 搜 `external_tools`——**搜得到**就按方式二在 `conf.yaml` 填这几个路径。环境变量优先级更高，适合临时覆盖；配置文件更适合长期使用。**不装任何本地组件时全部可以留空，白会自动用云端或关闭对应增强功能**。
+解析顺序始终是：**环境变量 → `conf.yaml` → 安全自动发现**。环境变量适合临时覆盖：
+
+| 配置 | 环境变量 |
+|------|----------|
+| `napcat_launcher` | `WS_NAPCAT_LAUNCHER` |
+| `comfyui_bat` / `comfyui_input` | `WS_COMFYUI_BAT` / `WS_COMFYUI_INPUT` |
+| `gpt_sovits_dir` | `WS_GPT_SOVITS_DIR` |
+| `cosyvoice_bat` | `WS_COSYVOICE_BAT` |
+| `wav2lip_dir` | `WS_WAV2LIP_DIR` |
+| `ffmpeg_path` | `WS_FFMPEG_PATH` |
+
+NapCat 留空时只会查找项目目录下的 `NapCat/launcher*.bat`；ffmpeg 留空时查系统 `PATH`；其它本地模型留空时不会猜作者电脑路径。**不装本地组件时可以全部留空，白会走云端降级或明确提示对应增强不可用。**
 
 ---
 

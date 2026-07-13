@@ -39,6 +39,18 @@ git clone <仓库地址> "White Salary"
 cd "White Salary"
 ```
 
+### Windows 新手：直接用一键安装
+
+Windows 10 / 11 用户下载并解压后，可以直接双击项目根目录的 `安装.bat`。它会选择兼容的 Python 3.10-3.12、创建项目专用 `.venv`、安装后端和前端依赖，再打开配置向导。
+
+只想先检查环境、不安装任何东西时，在 CMD 里运行：
+
+```bat
+安装.bat /check
+```
+
+检查模式不会下载 Python、创建或删除 `.venv`、安装依赖或改写配置。正式安装发现旧 `.venv` 异常时，也只有确认它确实是本项目虚拟环境后才会自动重建；无法确认时会停下来提示你人工检查，不会直接删目录。
+
 ---
 
 ## 2. 安装后端依赖
@@ -126,8 +138,11 @@ cd ..
 git clone https://github.com/VBHC-UHY/white-salary.git
 cd white-salary
 chmod +x server-setup.sh
+./server-setup.sh --check
 ./server-setup.sh
 ```
+
+第一条是**只读检查**：它只报告 Python、虚拟环境能力和 systemd 是否可用，不创建 `.venv`、不装依赖、不改配置。检查通过后再运行第二条正式安装。
 
 向导会一步步问你：
 
@@ -142,6 +157,7 @@ chmod +x server-setup.sh
 它会自动完成：
 
 - 调用 `install.sh`，选择 Python 3.12 / 3.11 / 3.10；
+- 在 Debian / Ubuntu 缺少 `pythonX.Y-venv` 时自动通过系统包管理器补齐（可用 `--no-system-deps` 禁止）；
 - 创建项目专用 `.venv`，不会污染系统 Python；
 - 安装后端依赖；
 - 生成 `conf.yaml` 和 `prompts/system_prompt.txt`；
@@ -153,7 +169,7 @@ chmod +x server-setup.sh
 如果你已经有 key，想少交互一点：
 
 ```bash
-WS_API_KEY=sk-你的key ./server-setup.sh --yes
+WS_API_KEY=sk-你的key ./server-setup.sh --yes --install-service
 ```
 
 需要长期向量记忆：
@@ -165,7 +181,7 @@ WS_API_KEY=sk-你的key ./server-setup.sh --yes
 想让它直接安装并启动 systemd 服务：
 
 ```bash
-WS_API_KEY=sk-你的key ./server-setup.sh --with-memory --install-service
+WS_API_KEY=sk-你的key ./server-setup.sh --with-memory --yes --install-service
 ```
 
 ### 3.5.2 启动和健康检查
@@ -173,8 +189,7 @@ WS_API_KEY=sk-你的key ./server-setup.sh --with-memory --install-service
 如果你没有安装 systemd 服务，用前台方式启动：
 
 ```bash
-source .venv/bin/activate
-PYTHONPATH=src python run_server.py --host 0.0.0.0 --port 12400
+PYTHONPATH=src .venv/bin/python run_server.py --host 0.0.0.0 --port 12400
 ```
 
 启动后在服务器本机检查：
@@ -217,7 +232,18 @@ chmod +x install.sh
 ./install.sh --with-memory
 ```
 
-然后自己编辑 `conf.yaml`，至少填好 `llm.api_key`，再启动后端。`install.sh` 和 Windows 的 `安装.bat` 一样都会创建项目专用 `.venv`；区别是 `install.sh` 不会问你 key、不写服务、不负责启动。脚本会优先寻找 Python 3.12 / 3.11 / 3.10；如果机器只有 Python 3.13，请先安装 3.11 或 3.12，避免可选 AI 依赖解析失败。
+然后自己编辑 `conf.yaml`，至少填好 `llm.api_key`，再启动后端。`install.sh` 和 Windows 的 `安装.bat` 一样都会创建项目专用 `.venv`；区别是 `install.sh` 不会问 key、不写服务、不负责启动。
+
+常用诊断命令：
+
+```bash
+./install.sh --check                         # 只检查，不改环境
+./install.sh --python /usr/bin/python3.11   # 明确指定解释器
+./install.sh --install-system-deps          # apt 系自动补 pythonX.Y-venv
+./install.sh --recreate-venv                # 仅重建项目 .venv
+```
+
+脚本会优先寻找 Python 3.12 / 3.11 / 3.10；如果机器只有 Python 3.13，请先安装 3.11 或 3.12。若服务器没有运行 systemd（例如部分容器 / WSL），向导只生成 `white-salary.service`，不会假装服务已经启动。项目路径含空格也会被正确写入服务文件。
 
 ---
 
@@ -306,7 +332,7 @@ cd frontend && npx electron .
 - **作用**：让白用本地声音说话（比云端更可控）。
 - **不装会怎样**：自动降级到云端 CosyVoice2（需在 `tts.fallback_*` 配 SiliconFlow 密钥）；两者都没有则只有文字，不影响聊天。
 - **装法**：单独安装 [GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS)，启动它的 `api_v2.py` 监听 `127.0.0.1:9880`。项目会在启动时探测该端口决定走本地还是云端。参考音频路径见 `tts.ref_audio`（默认 `assets/tts/ref_default.wav`）。
-- 本地 GPT-SoVITS 路径请填到 `conf.yaml` 的 `external_tools.gpt_sovits_dir`，或设置环境变量 `WS_GPT_SOVITS_DIR`。`Start.bat`、`Start-TTS*.bat` 和设置面板的“启动本地TTS”都会读取这个配置。
+- 本地 GPT-SoVITS 路径可在控制面板 **终端控制室 → 本地工具路径**填写，也可写到 `conf.yaml` 的 `external_tools.gpt_sovits_dir`，或设置 `WS_GPT_SOVITS_DIR`。`Start.bat`、`Start-TTS*.bat` 和设置面板的“启动本地TTS”都会读取同一配置。
 - **训练白的专属声音**（一键 7 步流程）、参考音频放置、路径配置等详见 [LOCAL_ADVANCED.md](LOCAL_ADVANCED.md#2-gpt-sovits--本地语音克隆训练白的专属声音)。
 
 ### 6.2 QQ 机器人（NapCat）
@@ -314,13 +340,16 @@ cd frontend && npx electron .
 - **作用**：让白接入 QQ，能私聊 + 群聊，每个人各自积累好感度。
 - **不装会怎样**：QQ 形态关闭，桌面聊天完全不受影响。
 <!-- 2026-07-03 便捷化文档：NapCat 是独立程序不放进项目；配置改走控制面板 QQ 页 -->
-- **NapCat 是什么**：一个**第三方独立开源程序**（不是本项目做的、也**不随本仓库下载**），负责"登录 QQ 并转发消息"，白通过网络端口与它通信。**它是独立程序，下载后自己单独运行，放哪个文件夹都行、双击自跑，不用放进 White Salary 文件夹。**
+- **NapCat 是什么**：一个**第三方独立开源程序**（不是本项目做的，也**不随本仓库下载**），负责“登录 QQ 并转发消息”，白通过 OneBot WebSocket 与它通信。它可以放在任意目录。
 - **装法**：
   1. **下载 NapCat**：去官方仓库 <https://github.com/NapNeko/NapCatQQ> 的 Releases 下载。**新手强烈建议用一键版 `NapCat.OneKey`**（解压双击就能跑）。放到任意目录，跟 White Salary 各自独立。
   2. **登录 QQ**：运行 NapCat，扫码或账密登录给白用的 QQ 号（建议用小号，别用主号）。
   3. **开正向 WebSocket**：在 NapCat 的 WebUI（网页配置界面）里新建一个 **"WebSocket 服务器"**（正向 WS），记下**端口**（如 3001）和你设的 **token**。
-  4. **配 White Salary（在白的控制面板里填，不用改配置文件）**：在桌宠上按 `Ctrl+,` 打开控制面板 → 进 **QQ 配置**页 → 开启 QQ、把 NapCat 给你的**端口**填进 `ws_url`（如 `ws://127.0.0.1:3001`）、**token** 填成和 NapCat 里一致、`family_qq` 填你自己的 QQ 号（白会把你认成"主人"）→ 点保存 → 点『重启后端』按钮。（进阶用户也可直接改 `conf.yaml` 的 `qq` 节。）
-  5. 后端重启后，启动日志出现 `[QQ] WebSocket 已连接` 就成了。
+  4. **配 White Salary**：在桌宠上按 `Ctrl+,` → **QQ 配置**，开启 QQ，填写 `ws_url`（如 `ws://127.0.0.1:3001`）、相同的 token 和自己的 QQ 号，保存后重启后端。
+  5. **可选的一键启动**：进入 **终端控制室 → 本地工具路径**，在“NapCat 启动脚本或安装目录”填 NapCat 目录或 `launcher*.bat`。之后“启动 NapCat”“NapCat 日志”都会使用这个位置。留空时只自动查找项目下的 `NapCat/`。
+  6. 后端重启后，启动日志出现 `[QQ] WebSocket 已连接` 就成了。
+- **断线补消息**：NapCat 重新连接后，白会查询最近联系人和消息历史，按时间顺序把遗漏消息重新送回正常 QQ 流程。它不是单独的简化回复器，因此原有黑白名单、群聊接话判断、上下文、好感度、插件、工具和发送回执仍然有效；消息 ID 与持久化游标会防止重复处理。
+- **服务器说明**：Linux 服务器只运行 White Salary 后端。NapCat / 其它 OneBot 桥接应单独部署，再把地址填入 `qq.ws_url`；控制面板里的本地 `.bat` 一键启动只适用于 Windows。
 - **排查**：白收不到 QQ 消息，99% 是 `ws_url` 端口或 `token` 和 NapCat 里对不上——回控制面板 QQ 页核对。详见 [CONFIG.md](CONFIG.md) 的 `qq` 节。
 
 ### 6.3 ComfyUI（本地文生图 / 图生视频）
