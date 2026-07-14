@@ -51,6 +51,9 @@ def test_installer_discovers_uv_managed_python_without_path_python(tmp_path: Pat
     assert "import white_salary" in (PROJECT_ROOT / "安装.bat").read_text(
         encoding="utf-8"
     )
+    assert "frontend\\node_modules\\electron\\package.json" in (
+        PROJECT_ROOT / "安装.bat"
+    ).read_text(encoding="utf-8")
     assert "[CHECK] Done" in result.stdout
 
 

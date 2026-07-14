@@ -3108,15 +3108,60 @@ def create_settings_router(
     async def comfyui_start() -> dict:
         """手动启动ComfyUI。"""
         try:
-            from white_salary.adapters.tools.comfyui_client import ensure_comfyui_running
-            ok = await ensure_comfyui_running(timeout=90)
-            if ok:
-                from white_salary.adapters.tools.comfyui_client import list_models
+            from white_salary.adapters.tools.comfyui_client import (
+                ensure_comfyui_running,
+                is_comfyui_online,
+                list_models,
+            )
+
+            if await is_comfyui_online():
                 models = await list_models()
-                return {"success": True, "message": "ComfyUI已启动", "models": models}
-            return {"success": False, "message": "ComfyUI启动超时（90秒），请检查GPU是否可用"}
+                return {
+                    "success": True,
+                    "status": "ok",
+                    "code": "already_running",
+                    "message": "ComfyUI 已经在线",
+                    "models": models,
+                }
+
+            if not _local_windows_launch_supported():
+                return _tool_error(
+                    "windows_only",
+                    "ComfyUI 的 .bat 自动启动只支持 Windows。"
+                    "在 Linux 服务器上请单独启动 ComfyUI，再连接它的 API。",
+                )
+
+            from white_salary.adapters.tools.external_paths import get_comfyui_bat
+
+            try:
+                launcher = get_comfyui_bat(project_root=project_root)
+            except FileNotFoundError as exc:
+                return _tool_error("not_configured", str(exc))
+            if not launcher.is_file():
+                return _tool_error(
+                    "not_configured",
+                    f"ComfyUI 启动脚本不存在: {_path_for_display(launcher)}",
+                )
+
+            ok = await ensure_comfyui_running(timeout=90, project_root=project_root)
+            if not ok:
+                return _tool_error(
+                    "start_timeout",
+                    "ComfyUI 已发起启动，但 90 秒内没有就绪。"
+                    "请检查启动窗口、GPU 和 ComfyUI 日志。",
+                )
+
+            models = await list_models()
+            return {
+                "success": True,
+                "status": "ok",
+                "code": "started",
+                "message": "ComfyUI 已启动",
+                "models": models,
+            }
         except Exception as e:
-            return {"success": False, "message": str(e)}
+            logger.exception(f"ComfyUI start failed: {e}")
+            return _tool_error("start_failed", str(e))
 
     @router.post("/comfyui/test")
     async def comfyui_test(body: dict = None) -> dict:

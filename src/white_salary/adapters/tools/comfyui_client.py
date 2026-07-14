@@ -65,7 +65,10 @@ async def is_comfyui_online() -> bool:
         return False
 
 
-async def ensure_comfyui_running(timeout: int = 60) -> bool:
+async def ensure_comfyui_running(
+    timeout: int = 60,
+    project_root: Path | None = None,
+) -> bool:
     """
     确保ComfyUI正在运行。如果没运行就自动启动，等待就绪。
 
@@ -83,9 +86,16 @@ async def ensure_comfyui_running(timeout: int = 60) -> bool:
 
     # 2026-07-03 外部依赖优化（批8）：启动脚本路径改走统一解析（环境变量→配置→默认），
     # 换机器时改 conf.yaml external_tools.comfyui_bat 即可，无需改源码或设环境变量
+    if os.name != "nt":
+        logger.debug(
+            "[ComfyUI] 自动启动只支持 Windows .bat；"
+            "服务器环境请单独启动 ComfyUI 并配置 API 地址"
+        )
+        return False
+
     from white_salary.adapters.tools.external_paths import get_comfyui_bat
     try:
-        comfyui_bat = get_comfyui_bat()
+        comfyui_bat = get_comfyui_bat(project_root=project_root)
     except FileNotFoundError as exc:
         logger.debug(f"[ComfyUI] {exc}")
         return False

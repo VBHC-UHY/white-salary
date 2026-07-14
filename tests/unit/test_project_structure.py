@@ -8,6 +8,8 @@ import json
 import re
 from pathlib import Path
 
+import yaml
+
 
 # 项目根目录
 PROJECT_ROOT = Path(__file__).parent.parent.parent
@@ -62,6 +64,24 @@ class TestDirectoryStructure:
         assert "pip install --no-cache-dir fastapi uvicorn" not in dockerfile
         assert "COPY pyproject.toml README.md ./" in dockerfile
         assert "COPY src/ src/" in dockerfile
+        assert '"--host", "0.0.0.0", "--port", "12400"' in dockerfile
+        assert "HEALTHCHECK" in dockerfile
+
+        compose = (PROJECT_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+        compose_data = yaml.safe_load(compose)
+        backend = compose_data["services"]["backend"]
+        assert "WHITE_SALARY_MANAGEMENT_TOKEN" in compose
+        assert "chromadb/chroma" not in compose
+        assert "source: ./conf.yaml" in compose
+        assert "target: /app/conf.yaml" in compose
+        assert "create_host_path: false" in compose
+        assert any(
+            volume.get("source") == "./conf.yaml"
+            and volume.get("target") == "/app/conf.yaml"
+            and volume.get("read_only") is True
+            for volume in backend["volumes"]
+            if isinstance(volume, dict)
+        )
 
         for required_ignore in [
             ".git/",
@@ -141,6 +161,12 @@ class TestDirectoryStructure:
         assert "PIL" in install
         assert "mss" in install
         assert ".venv\\Scripts\\python.exe" in start_backend
+
+        launcher = (PROJECT_ROOT / "Start.bat").read_text(encoding="utf-8")
+        assert "taskkill" not in launcher.lower()
+        assert "BACKEND_PORT" in launcher
+        assert "call :wait_health" in launcher
+        assert "npx --no-install electron" in launcher
 
     def test_linux_server_setup_wizard_exists(self) -> None:
         """Linux server users should have a guided setup separate from Windows .bat files."""
