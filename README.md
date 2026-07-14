@@ -318,19 +318,5 @@ Docker 镜像固定运行后端并带真实健康检查，不包含 Electron 桌
 
 ## 致谢
 
-- **参考与致敬**：自然陪伴感对标 [Neuro-sama](https://en.wikipedia.org/wiki/Neuro-sama)，自主工具执行理念参考 Manus；前端视觉参考 my-neuro 后独立实现。白的性格是她自己的，不抄任何人。
+- **参考与致敬**：自然陪伴感对标 [Neuro-sama](https://en.wikipedia.org/wiki/Neuro-sama)，自主工具执行理念参考 Manus；前端视觉参考 my-neuro 后独立实现。
 - **开源依赖**：FastAPI · Uvicorn · Pydantic · loguru · Electron · PixiJS · pixi-live2d-display · ChromaDB · GPT-SoVITS · faster-whisper · Silero VAD · NapCat 等众多优秀开源项目。
-
----
-
-## 许可证
-
-本项目源代码采用 **MIT** 许可证，详见 [LICENSE](LICENSE)。
-
-> ⚠️ **以下内容不在 MIT 许可范围内**，请以各自来源 / 说明为准：
-> - `prompts/` 下"白"的人设文本（原创人设）；
-> - `live2d_models/` 下随仓库提供的公开可分发 Live2D 示例 / 参考模型资源；
-> - `assets/tts/` 下的参考音频；
-> - `NapCat/`、`NapCat_OneKey/` 等第三方组件。
->
-> 分发前请自行确认上述资源是否允许再分发。若你希望更换许可证（如 AGPL），见 [LICENSE](LICENSE) 顶部说明。
