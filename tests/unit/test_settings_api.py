@@ -543,6 +543,125 @@ class TestStartNapCatEndpoint:
         assert result["logs_exist"] is True
 
 
+class TestStartComfyUIEndpoint:
+    """POST /api/settings/comfyui/start: distinguish platform/config/start failures."""
+
+    async def test_reuses_online_comfyui_on_non_windows(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from white_salary.adapters.tools import comfyui_client
+
+        async def online() -> bool:
+            return True
+
+        async def models() -> list[str]:
+            return ["model.safetensors"]
+
+        monkeypatch.setattr(
+            settings_api_module, "_local_windows_launch_supported", lambda: False
+        )
+        monkeypatch.setattr(comfyui_client, "is_comfyui_online", online)
+        monkeypatch.setattr(comfyui_client, "list_models", models)
+        router = create_settings_router(_make_project(tmp_path))
+        endpoint = _endpoint(router, "/api/settings/comfyui/start", "POST")
+
+        result = await endpoint()
+
+        assert result["success"] is True
+        assert result["code"] == "already_running"
+        assert result["models"] == ["model.safetensors"]
+
+    async def test_offline_non_windows_returns_windows_only(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from white_salary.adapters.tools import comfyui_client, external_paths
+
+        async def offline() -> bool:
+            return False
+
+        def must_not_resolve(*args: Any, **kwargs: Any) -> Path:
+            raise AssertionError("path resolution should not run on non-Windows")
+
+        monkeypatch.setattr(
+            settings_api_module, "_local_windows_launch_supported", lambda: False
+        )
+        monkeypatch.setattr(comfyui_client, "is_comfyui_online", offline)
+        monkeypatch.setattr(external_paths, "get_comfyui_bat", must_not_resolve)
+        router = create_settings_router(_make_project(tmp_path))
+        endpoint = _endpoint(router, "/api/settings/comfyui/start", "POST")
+
+        result = await endpoint()
+
+        assert result["success"] is False
+        assert result["code"] == "windows_only"
+
+    async def test_missing_windows_launcher_returns_not_configured(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from white_salary.adapters.tools import comfyui_client, external_paths
+
+        async def offline() -> bool:
+            return False
+
+        def missing(*args: Any, **kwargs: Any) -> Path:
+            raise FileNotFoundError("ComfyUI start script is not configured")
+
+        monkeypatch.setattr(
+            settings_api_module, "_local_windows_launch_supported", lambda: True
+        )
+        monkeypatch.setattr(comfyui_client, "is_comfyui_online", offline)
+        monkeypatch.setattr(external_paths, "get_comfyui_bat", missing)
+        router = create_settings_router(_make_project(tmp_path))
+        endpoint = _endpoint(router, "/api/settings/comfyui/start", "POST")
+
+        result = await endpoint()
+
+        assert result["success"] is False
+        assert result["code"] == "not_configured"
+
+    async def test_configured_windows_launcher_starts_with_project_root(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from white_salary.adapters.tools import comfyui_client, external_paths
+
+        root = _make_project(tmp_path)
+        launcher = root / "ComfyUI" / "run.bat"
+        launcher.parent.mkdir()
+        launcher.write_text("@echo off\n", encoding="utf-8")
+        calls: dict[str, Any] = {}
+
+        async def offline() -> bool:
+            return False
+
+        async def ensure(timeout: int, project_root: Path | None = None) -> bool:
+            calls["timeout"] = timeout
+            calls["project_root"] = project_root
+            return True
+
+        async def models() -> list[str]:
+            return []
+
+        monkeypatch.setattr(
+            settings_api_module, "_local_windows_launch_supported", lambda: True
+        )
+        monkeypatch.setattr(comfyui_client, "is_comfyui_online", offline)
+        monkeypatch.setattr(comfyui_client, "ensure_comfyui_running", ensure)
+        monkeypatch.setattr(comfyui_client, "list_models", models)
+        monkeypatch.setattr(
+            external_paths,
+            "get_comfyui_bat",
+            lambda project_root=None: launcher,
+        )
+        router = create_settings_router(root)
+        endpoint = _endpoint(router, "/api/settings/comfyui/start", "POST")
+
+        result = await endpoint()
+
+        assert result["success"] is True
+        assert result["code"] == "started"
+        assert calls == {"timeout": 90, "project_root": root}
+
+
 class TestRestartEndpoint:
     """POST /api/settings/restart：用 subprocess.Popen 拉起新进程后 os._exit(0)。"""
 

@@ -84,6 +84,16 @@ def _server_project(tmp_path: Path, *, first_run_exit: int = 0) -> Path:
         "llm:\n  api_key: ''\nserver:\n  host: 127.0.0.1\n  port: 12400\n",
         encoding="utf-8",
     )
+    (project / "conf.yaml").write_text(
+        "llm:\n"
+        "  provider: siliconflow\n"
+        "  api_key: fixture\n"
+        "server:\n"
+        "  host: 127.0.0.1\n"
+        "  port: 12400\n"
+        "  management_token: ''\n",
+        encoding="utf-8",
+    )
     (project / "run_server.py").write_text("# fixture\n", encoding="utf-8")
     (project / "scripts").mkdir()
     (project / "scripts" / "first_run_check.py").write_text(
@@ -145,6 +155,10 @@ class TestLinuxInstallerContracts:
         assert 'if ! "${prefix[@]}" install' in text
         assert 'if ! "${prefix[@]}" systemctl daemon-reload' in text
         assert 'if ! "${prefix[@]}" systemctl enable --now' in text
+        assert "wait_for_backend_health" in text
+        assert 'payload.get("name") == "White Salary"' in text
+        assert "secrets.token_urlsafe" in text
+        assert "WS_SETUP_MANAGEMENT_TOKEN" in text
         assert "first_run_check.py || true" not in text
         assert "PYTHONPATH=src .venv/bin/python run_server.py" in text
         assert "Ã¥Â®â€°Ã¨Â£" not in text
@@ -341,6 +355,95 @@ class TestLinuxInstallerBehavior:
 
         assert result.returncode == 7, result.stdout + result.stderr
         assert "health check reported a blocking problem" in result.stdout
+
+    @POSIX_ONLY
+    def test_fresh_unattended_setup_requires_api_key_before_install(
+        self, tmp_path: Path
+    ) -> None:
+        project = _server_project(tmp_path)
+        (project / "conf.yaml").unlink()
+        marker = tmp_path / "install-called"
+        _write_executable(
+            project / "install.sh",
+            f"#!/usr/bin/env bash\ntouch {marker}\nexit 0\n",
+        )
+
+        result = subprocess.run(
+            [
+                "bash",
+                str(project / "server-setup.sh"),
+                "--yes",
+                "--no-memory",
+                "--no-service",
+                "--no-system-deps",
+            ],
+            cwd=project,
+            env=_clean_env(),
+            capture_output=True,
+            text=True,
+        )
+
+        assert result.returncode == 2
+        assert "fresh server setup needs an LLM API key" in result.stdout
+        assert not marker.exists()
+
+    @POSIX_ONLY
+    def test_existing_config_without_api_key_is_rejected(self, tmp_path: Path) -> None:
+        project = _server_project(tmp_path)
+        (project / "conf.yaml").write_text(
+            "llm:\n  provider: siliconflow\n  api_key: ''\n"
+            "server:\n  host: 127.0.0.1\n  port: 12400\n",
+            encoding="utf-8",
+        )
+
+        result = subprocess.run(
+            [
+                "bash",
+                str(project / "server-setup.sh"),
+                "--yes",
+                "--no-memory",
+                "--no-service",
+                "--no-system-deps",
+            ],
+            cwd=project,
+            env=_clean_env(),
+            capture_output=True,
+            text=True,
+        )
+
+        assert result.returncode != 0
+        assert "does not contain an LLM API key" in (result.stdout + result.stderr)
+
+    @POSIX_ONLY
+    def test_remote_setup_generates_management_token(self, tmp_path: Path) -> None:
+        project = _server_project(tmp_path)
+        (project / "conf.yaml").unlink()
+        env = _clean_env()
+        env["WS_API_KEY"] = "sk-test-new"
+
+        result = subprocess.run(
+            [
+                "bash",
+                str(project / "server-setup.sh"),
+                "--yes",
+                "--host",
+                "0.0.0.0",
+                "--no-memory",
+                "--no-service",
+                "--no-system-deps",
+            ],
+            cwd=project,
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        config = __import__("yaml").safe_load(
+            (project / "conf.yaml").read_text(encoding="utf-8")
+        )
+        assert config["server"]["management_token"]
+        assert "generated a remote management token" in result.stdout
 
     @POSIX_ONLY
     def test_root_system_service_is_rejected(self, tmp_path: Path) -> None:

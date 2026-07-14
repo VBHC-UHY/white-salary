@@ -10,12 +10,12 @@
 <!-- 徽章行（2026-07-03 新手体验（批10）：静态徽章，不接 CI） -->
 ![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)
 ![Python 3.10-3.12](https://img.shields.io/badge/Python-3.10--3.12-blue.svg)
-![Tests](https://img.shields.io/badge/tests-926%20passed-brightgreen.svg)
+![Tests](https://img.shields.io/badge/tests-930%20passed-brightgreen.svg)
 ![PRs Welcome](https://img.shields.io/badge/PRs-welcome-ff69b4.svg)
 
 Python 3.10-3.12 · FastAPI · Electron · Live2D · 六边形架构
 
-当前版本：**v0.1.10**
+当前版本：**v0.1.11**
 
 <!-- 2026-07-03：交流群。二维码图放到 docs/assets/qq-group.png 后可取消下一行注释显示图片 -->
 <p>
@@ -199,7 +199,7 @@ chmod +x server-setup.sh
 ./server-setup.sh
 ```
 
-它会自动选择 Python 3.10-3.12、补齐 Debian/Ubuntu 缺少的 `pythonX.Y-venv`、创建项目专用 `.venv`、安装后端依赖并生成 `conf.yaml`。之后只需按提示填写 key、端口、长期记忆和 systemd 选项；依赖不会装进系统 Python。
+它会自动选择 Python 3.10-3.12、补齐 Debian/Ubuntu 缺少的 `pythonX.Y-venv`、创建项目专用 `.venv`、安装后端依赖并生成 `conf.yaml`。首次安装需要提供一把 API key；已有有效 `conf.yaml` 时可以保留旧 key。非本机监听会自动生成管理令牌，systemd 启动后还会等待真实 `/health` 响应；依赖不会装进系统 Python。
 
 先做只读检查，不修改服务器：
 
@@ -232,6 +232,17 @@ curl http://127.0.0.1:12400/health
 ```
 
 > `server-setup.sh` 是给新手的服务器向导；`install.sh` 是底层安装器。两者都只把 Python 包装进项目 `.venv`，不会污染系统 Python。服务器版只运行 FastAPI 后端，不会启动 Electron 桌宠和 Windows 本地工具；远程开放端口前请配置防火墙、反向代理和管理令牌。
+
+### Docker（只跑后端）
+
+```bash
+cp conf.default.yaml conf.yaml   # 先在 conf.yaml 填好 llm.api_key
+docker compose up --build -d
+docker compose ps
+curl http://127.0.0.1:12400/health
+```
+
+Docker 镜像固定运行后端并带真实健康检查，不包含 Electron 桌宠。长期向量记忆使用内嵌 ChromaDB 和 `./data` 挂载，不需要单独的 Chroma 容器；NapCat、GPT-SoVITS、ComfyUI 等服务需要在宿主机或其它容器独立运行。完整说明见 [docs/INSTALL.md](docs/INSTALL.md#36-docker--容器只跑后端)。
 
 **不确定配好了没？** 跑一次首次运行自检：
 

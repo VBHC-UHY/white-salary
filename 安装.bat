@@ -5,7 +5,11 @@ color 0B
 cd /d "%~dp0"
 
 set "CHECK_ONLY=0"
+set "BACKEND_ONLY=0"
 if /i "%~1"=="/check" set "CHECK_ONLY=1"
+if /i "%~2"=="/check" set "CHECK_ONLY=1"
+if /i "%~1"=="/backend-only" set "BACKEND_ONLY=1"
+if /i "%~2"=="/backend-only" set "BACKEND_ONLY=1"
 
 echo ============================================================
 echo   White Salary Installer
@@ -53,11 +57,19 @@ set "NODE_OK=1"
 where node >nul 2>&1
 if errorlevel 1 (
     set "NODE_OK=0"
-    echo   [WARN] Node.js not found. Backend can be installed; desktop UI needs Node.js LTS.
+    echo   [WARN] Node.js not found. The Electron desktop app needs Node.js LTS.
 ) else (
     for /f "tokens=*" %%v in ('node --version') do echo   [OK] Node.js %%v
 )
 echo.
+
+if "%CHECK_ONLY%"=="0" if "%BACKEND_ONLY%"=="0" if "%NODE_OK%"=="0" (
+    echo   [ERROR] A complete Windows desktop install requires Node.js LTS.
+    echo           Install Node.js LTS and rerun this installer.
+    echo           Backend-only users may explicitly run: 安装.bat /backend-only
+    pause
+    exit /b 1
+)
 
 if "%CHECK_ONLY%"=="1" (
     call :check_python_venv_support
@@ -151,11 +163,16 @@ echo   [OK] Python dependencies installed.
 echo.
 
 echo [5/6] Installing desktop frontend dependencies...
-if "%NODE_OK%"=="0" (
-    echo   [SKIP] Node.js is missing. Install Node.js LTS and rerun this script later.
+if "%BACKEND_ONLY%"=="1" (
+    echo   [SKIP] Backend-only mode requested. Electron dependencies were not installed.
     goto :npm_done
 )
-if exist "frontend\node_modules" (
+if "%NODE_OK%"=="0" (
+    echo   [ERROR] Node.js disappeared after the prerequisite check.
+    pause
+    exit /b 1
+)
+if exist "frontend\node_modules\electron\package.json" (
     echo   [OK] Frontend dependencies are already installed.
     goto :npm_done
 )
@@ -163,11 +180,18 @@ pushd frontend
 call npm install
 if errorlevel 1 (
     popd
-    echo   [WARN] Frontend dependency install failed. Backend chat is not affected.
-    echo          You can retry manually: cd frontend && npm install
-    goto :npm_done
+    echo   [ERROR] Frontend dependency install failed.
+    echo           You can retry manually: cd frontend ^&^& npm install
+    pause
+    exit /b 1
 )
 popd
+if not exist "frontend\node_modules\electron\package.json" (
+    echo   [ERROR] npm finished but Electron is still missing.
+    echo           Remove frontend\node_modules and rerun this installer.
+    pause
+    exit /b 1
+)
 echo   [OK] Frontend dependencies installed.
 :npm_done
 echo.
@@ -188,7 +212,11 @@ if exist "prompts\system_prompt.txt" (
 echo.
 
 echo ============================================================
-echo   Install complete. Opening setup wizard...
+if "%BACKEND_ONLY%"=="1" (
+    echo   Backend installation complete. Opening setup wizard...
+) else (
+    echo   Windows desktop installation complete. Opening setup wizard...
+)
 echo ============================================================
 echo.
 "%PROJECT_PYTHON%" scripts\setup_wizard.py

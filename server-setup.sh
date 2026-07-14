@@ -262,13 +262,21 @@ fi
 API_KEY="${WS_API_KEY:-}"
 if [[ -z "$API_KEY" && "$AUTO_YES" != "1" && -t 0 ]]; then
   echo
-  echo "Paste a SiliconFlow API key if you have one."
-  echo "Leave it empty to configure conf.yaml manually later."
+  echo "Paste a SiliconFlow API key for the first working server setup."
+  echo "If conf.yaml already contains another provider/key, you may leave this empty."
   read -r -s -p "SiliconFlow API key (starts with sk-): " API_KEY || API_KEY=""
   echo
 fi
 API_KEY="${API_KEY#"${API_KEY%%[![:space:]]*}"}"
 API_KEY="${API_KEY%"${API_KEY##*[![:space:]]}"}"
+
+if [[ -z "$API_KEY" && ! -f conf.yaml ]]; then
+  echo "[ERROR] A fresh server setup needs an LLM API key."
+  echo "        Set WS_API_KEY and run this wizard again, for example:"
+  echo "        WS_API_KEY=sk-... ./server-setup.sh --yes --install-service"
+  echo "        To install dependencies only, use ./install.sh instead."
+  exit 2
+fi
 
 if [[ "$MEMORY_CHOICE" == "yes" ]]; then
   INSTALL_ARGS+=(--with-memory)
@@ -296,11 +304,16 @@ WS_SETUP_API_KEY="$API_KEY" \
 WS_SETUP_HOST="$HOST_VALUE" \
 WS_SETUP_PORT="$PORT_VALUE" \
 WS_SETUP_MEMORY="$MEMORY_CHOICE" \
+WS_SETUP_MANAGEMENT_TOKEN="${WS_MANAGEMENT_TOKEN:-}" \
 .venv/bin/python - <<'PY'
 from __future__ import annotations
 
+import ipaddress
 import os
+import secrets
 from pathlib import Path
+
+import yaml
 
 conf_path = Path("conf.yaml")
 if not conf_path.exists():
@@ -369,13 +382,51 @@ api_key = os.environ.get("WS_SETUP_API_KEY", "").strip()
 host = os.environ.get("WS_SETUP_HOST", "0.0.0.0").strip() or "0.0.0.0"
 port = os.environ.get("WS_SETUP_PORT", "12400").strip() or "12400"
 memory = os.environ.get("WS_SETUP_MEMORY", "no").strip().lower()
+management_token = os.environ.get("WS_SETUP_MANAGEMENT_TOKEN", "").strip()
 
 if not port.isdigit() or not 1 <= int(port) <= 65535:
     raise SystemExit(f"[ERROR] Invalid port: {port}")
 
 text = conf_path.read_text(encoding="utf-8")
+try:
+    current = yaml.safe_load(text) or {}
+except yaml.YAMLError as exc:
+    raise SystemExit(f"[ERROR] conf.yaml is not valid YAML: {exc}") from exc
+if not isinstance(current, dict):
+    raise SystemExit("[ERROR] conf.yaml must contain a YAML mapping.")
+
+server_config = current.get("server")
+if not isinstance(server_config, dict):
+    server_config = {}
+llm_config = current.get("llm")
+if not isinstance(llm_config, dict):
+    llm_config = {}
+
+if not api_key and not str(llm_config.get("api_key") or "").strip():
+    raise SystemExit(
+        "[ERROR] conf.yaml does not contain an LLM API key. "
+        "Set WS_API_KEY or edit conf.yaml before running the server setup."
+    )
+
+existing_token = str(server_config.get("management_token") or "").strip()
+generated_management_token = False
+if not management_token:
+    management_token = existing_token
+
+host_for_check = host.strip("[]").lower()
+try:
+    is_loopback = ipaddress.ip_address(host_for_check).is_loopback
+except ValueError:
+    is_loopback = host_for_check == "localhost"
+
+if not is_loopback and not management_token:
+    management_token = secrets.token_urlsafe(32)
+    generated_management_token = True
+
 text = set_yaml_scalar(text, "server", "host", host)
 text = set_yaml_scalar(text, "server", "port", port, quote=False)
+if management_token:
+    text = set_yaml_scalar(text, "server", "management_token", management_token)
 text = set_yaml_scalar(
     text,
     "memory",
@@ -395,7 +446,13 @@ print(f"  configured server at {host}:{port}")
 if api_key:
     print("  configured SiliconFlow for text and vision")
 else:
-    print("  API key left unchanged; edit conf.yaml before using cloud chat")
+    print("  kept the existing LLM provider and API key")
+if generated_management_token:
+    print("  generated a remote management token and stored it in conf.yaml")
+elif management_token:
+    print("  kept the configured remote management token")
+elif is_loopback:
+    print("  management token is optional because the server is loopback-only")
 print(f"  long-term vector memory: {'chroma' if memory == 'yes' else 'none'}")
 PY
 if ! chmod 600 conf.yaml; then
@@ -552,6 +609,42 @@ verify_service_file() {
   fi
 }
 
+wait_for_backend_health() {
+  local timeout_seconds="${1:-60}"
+  WS_HEALTH_PORT="$PORT_VALUE" \
+  WS_HEALTH_TIMEOUT="$timeout_seconds" \
+  .venv/bin/python - <<'PY'
+from __future__ import annotations
+
+import json
+import os
+import sys
+import time
+import urllib.request
+
+port = int(os.environ["WS_HEALTH_PORT"])
+timeout = max(1, int(os.environ["WS_HEALTH_TIMEOUT"]))
+url = f"http://127.0.0.1:{port}/health"
+deadline = time.monotonic() + timeout
+last_error = "no response"
+
+while time.monotonic() < deadline:
+    try:
+        with urllib.request.urlopen(url, timeout=2) as response:
+            payload = json.load(response)
+        if payload.get("status") == "ok" and payload.get("name") == "White Salary":
+            print(f"  White Salary health check passed: {url}")
+            raise SystemExit(0)
+        last_error = f"unexpected response: {payload!r}"
+    except Exception as exc:  # The final error is reported after the retry window.
+        last_error = str(exc)
+    time.sleep(1)
+
+print(f"[ERROR] White Salary did not become healthy within {timeout}s: {last_error}")
+raise SystemExit(1)
+PY
+}
+
 install_systemd_service() {
   local prefix=()
   if [[ ! -d /run/systemd/system ]]; then
@@ -581,6 +674,11 @@ install_systemd_service() {
   fi
   if ! "${prefix[@]}" systemctl --no-pager --full status white-salary.service; then
     echo "[ERROR] The systemd service did not start successfully."
+    echo "        Inspect logs with: sudo journalctl -u white-salary -n 100 --no-pager"
+    return 1
+  fi
+  echo "  Waiting for the White Salary HTTP health endpoint..."
+  if ! wait_for_backend_health 60; then
     echo "        Inspect logs with: sudo journalctl -u white-salary -n 100 --no-pager"
     return 1
   fi

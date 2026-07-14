@@ -23,7 +23,7 @@
 
 | 依赖 | 版本 | 说明 |
 |------|------|------|
-| 操作系统 | **Windows 10 / 11** | 桌宠启动脚本、端口清理、部分工具为 Windows 专用；Linux/服务器可跑后端 |
+| 操作系统 | **Windows 10 / 11** | Electron 桌宠与部分本地工具为 Windows 专用；Linux / 服务器 / Docker 只运行后端 |
 | Python | **3.10-3.12** | `pyproject.toml` 声明 `>=3.10,<3.13`；建议用 3.11+ |
 | Node.js | **18+**（建议 LTS） | 前端 Electron 桌宠 |
 | Git | 任意 | 克隆仓库用 |
@@ -41,7 +41,7 @@ cd "White Salary"
 
 ### Windows 新手：直接用一键安装
 
-Windows 10 / 11 用户下载并解压后，可以直接双击项目根目录的 `安装.bat`。它会选择兼容的 Python 3.10-3.12、创建项目专用 `.venv`、安装后端和前端依赖，再打开配置向导。
+Windows 10 / 11 用户下载并解压后，可以直接双击项目根目录的 `安装.bat`。它会选择兼容的 Python 3.10-3.12、创建项目专用 `.venv`、安装后端和前端依赖，再打开配置向导。完整桌宠安装需要 Node.js LTS；缺少 Node.js 或前端依赖安装失败时，脚本会明确报错并停止，不会把半成品误报成安装成功。
 
 只想先检查环境、不安装任何东西时，在 CMD 里运行：
 
@@ -50,6 +50,14 @@ Windows 10 / 11 用户下载并解压后，可以直接双击项目根目录的 
 ```
 
 检查模式不会下载 Python、创建或删除 `.venv`、安装依赖或改写配置。正式安装发现旧 `.venv` 异常时，也只有确认它确实是本项目虚拟环境后才会自动重建；无法确认时会停下来提示你人工检查，不会直接删目录。
+
+如果这台 Windows 机器只准备运行后端，不需要 Electron 桌宠，可以显式运行：
+
+```bat
+安装.bat /backend-only
+```
+
+这个模式仍会创建项目专用 `.venv` 并安装后端依赖，但不会要求 Node.js，也不会安装前端依赖。
 
 ---
 
@@ -151,7 +159,7 @@ chmod +x server-setup.sh
 | `Install ChromaDB long-term vector memory?` | 不懂就回车选 **no**。这只是长期向量记忆，不影响聊天、看图、语音、生图云端兜底 |
 | `Backend listen host` | 默认 `0.0.0.0`，服务器上通常就用这个 |
 | `Backend listen port` | 默认 `12400`，没冲突就直接回车 |
-| `SiliconFlow API key` | 粘贴 `sk-` 开头的硅基流动 key；没有也可以留空，之后手动改 `conf.yaml` |
+| `SiliconFlow API key` | 首次安装必须粘贴一把可用 key；已有 `conf.yaml` 且里面已有提供商和 key 时才可以留空并保留旧配置 |
 | `Create and install a systemd service now?` | 不懂就选 **no**，先按前台启动方式跑通 |
 
 它会自动完成：
@@ -163,8 +171,9 @@ chmod +x server-setup.sh
 - 生成 `conf.yaml` 和 `prompts/system_prompt.txt`；
 - 写入 `server.host` / `server.port`；
 - 如果填了 SiliconFlow key，会写入 `llm` 和 `llm_vision`，语音和生图/生视频云端兜底会自动复用；
+- 非本机监听地址会自动生成高强度管理令牌并写入 `conf.yaml`；也可提前用 `WS_MANAGEMENT_TOKEN=...` 指定；
 - 可选安装 ChromaDB 长期记忆；
-- 可选生成并安装 `systemd` 服务。
+- 可选生成并安装 `systemd` 服务；启动服务后会继续等待真实 `/health` 响应，通过后才报告成功。
 
 如果你已经有 key，想少交互一点：
 
@@ -217,6 +226,8 @@ sudo journalctl -u white-salary -f
 sudo systemctl restart white-salary
 ```
 
+向导在安装 systemd 服务后会等待最多 60 秒，并确认 `/health` 返回的确实是 White Salary。超时会直接报错并给出 `journalctl` 排查命令，不会仅凭进程存在就宣称启动成功。
+
 ### 3.5.3 进阶用户：只跑底层安装器
 
 如果你不想用交互向导，也可以只用底层安装器：
@@ -244,6 +255,27 @@ chmod +x install.sh
 ```
 
 脚本会优先寻找 Python 3.12 / 3.11 / 3.10；如果机器只有 Python 3.13，请先安装 3.11 或 3.12。若服务器没有运行 systemd（例如部分容器 / WSL），向导只生成 `white-salary.service`，不会假装服务已经启动。项目路径含空格也会被正确写入服务文件。
+
+### 3.6 Docker / 容器（只跑后端）
+
+Docker 路线与 Linux 服务器路线一样，只运行 FastAPI 后端，不包含 Electron 桌宠，也不会在容器里启动 NapCat、GPT-SoVITS 或 ComfyUI。先复制并填写配置：
+
+```bash
+cp conf.default.yaml conf.yaml
+# 编辑 conf.yaml，至少填写 llm.api_key
+```
+
+然后构建并启动：
+
+```bash
+docker compose up --build -d
+docker compose ps
+curl http://127.0.0.1:12400/health
+```
+
+容器固定监听 `0.0.0.0:12400`，Compose 默认映射到宿主机 `12400`。镜像自带健康检查，只有 `/health` 返回 White Salary 的正常状态才会标记为 healthy。远程开放端口时，请在 `conf.yaml` 配置 `server.management_token`，或在启动前设置 `WHITE_SALARY_MANAGEMENT_TOKEN`。
+
+长期向量记忆使用应用内嵌的 ChromaDB Python 依赖，数据保存在挂载的 `./data:/app/data` 中，不需要另外启动一个 Chroma 服务。NapCat、GPT-SoVITS、ComfyUI 等可选组件应在宿主机或其它容器单独部署，再把服务地址写入 White Salary 配置；Windows `.bat` 启动按钮在 Linux 容器中不可用。
 
 ---
 
@@ -297,9 +329,11 @@ llm:
 Start.bat
 ```
 
-它会依次：清理旧端口 → （若本机有 GPT-SoVITS）拉起本地 TTS → 启动后端 → 检查/安装前端依赖 → 启动 Electron 桌宠。
+它会依次：检查本地 TTS → 检查并启动后端 → 检查/安装前端依赖 → 启动 Electron 桌宠。后端端口从 `conf.yaml` 读取，启动器会等待真实 `/health` 响应；如果端口被其它程序占用，它会停止并说明原因，不会结束那个程序或清理端口。
 
 > **注意**：`Start.bat` 会从 `WS_GPT_SOVITS_DIR` 或 `conf.yaml` 的 `external_tools.gpt_sovits_dir` 读取本地 GPT-SoVITS 路径。没装 GPT-SoVITS 时会直接跳过本地 TTS，白会自动用云端 TTS 或纯文字。
+
+> 已经有健康的 White Salary 后端或 9880 TTS 服务时，启动器会直接复用。启动失败会停在错误位置，不会继续打开一个注定连不上的桌宠窗口。
 
 ### 方式 B：分步启动（调试用）
 
@@ -357,6 +391,7 @@ cd frontend && npx electron .
 - **作用**：白能本地画图、做图生视频。
 - **不装会怎样**：绘图降级到云端 API（DMXAPI / SiliconFlow FLUX）；都没配则绘图工具不可用，其它功能正常。
 - **装法**：安装 [ComfyUI](https://github.com/comfyanonymous/ComfyUI)。项目相关路径可用环境变量覆盖（`WS_COMFYUI_BAT` / `WS_COMFYUI_INPUT`），避免写死。工作流模板在 `config/comfyui_workflows/`。模型下载、显存要求、路径配置的完整说明见 [LOCAL_ADVANCED.md](LOCAL_ADVANCED.md#1-comfyui--本地生图--生视频)。
+- **启动限制**：控制面板的“一键启动 ComfyUI”只会在 Windows 上执行配置的 `.bat`。Linux / 服务器离线时会明确提示你在宿主机单独启动服务，不会把所有错误都误报成“等待 90 秒超时”。
 
 ### 6.4 长期记忆向量库（ChromaDB）
 

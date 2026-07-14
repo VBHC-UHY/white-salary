@@ -1,6 +1,6 @@
 {
   "name": "white-salary-desktop",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "description": "White Salary - AI智能体桌面应用",
   "main": "main.js",
   "scripts": {
