@@ -1262,9 +1262,20 @@ async def handle_chat_websocket(
                     await _send_voice_lifecycle("error", mode, request_id)
                     continue
 
-                # User speech has priority over any answer currently playing,
-                # while other voice segments stay ordered in the dedicated queue.
-                await _cancel_current_reply()
+                # 长按说话＝用户手动按下，打断意图明确，立刻停下让他说。
+                #
+                # 持续监听则不同：它的分段是靠音量/时长阈值自动切出来的，一声
+                # 咳嗽、关门、电视声都会送上来一帧。此前这里对**任何** voice 帧
+                # 都立即取消进行中的回复，且被取消的那轮回复不会重投递——
+                # 于是环境里一点动静就能把白正在说的整段话彻底吞掉。
+                #
+                # 在 ASR 出结果之前无法知道那是不是真人在说话，所以把打断决策
+                # 推迟到确认有语音内容之后：识别出文字后前端会作为 chat 消息发回，
+                # 而 _launch_reply 的第一件事就是 _cancel_current_reply()，
+                # 打断照样发生、且只在真的有人说话时发生。噪声帧则识别为空，
+                # 白继续把话说完。
+                if mode == "push_to_talk":
+                    await _cancel_current_reply()
                 await _send_voice_lifecycle("queued", mode, request_id)
                 voice_queue.put_nowait((
                     voice_generation,
