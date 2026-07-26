@@ -1,0 +1,231 @@
+"""护栏测试 — 公开仓库不得夹带作者机器专属路径、真实账号或版本回退。
+
+## 为什么需要这一整个文件
+
+本项目的开发方式是"本地目录保留机器专属路径，公开版另开工作树移植"。这套策略
+本身没问题，但它把"哪些东西不能过去"完全交给了人的记忆。2026-07 的一次审计
+实测发现：本地把 `D:/AI_Tools/GPT-SoVITS` 一类路径回灌成了源码默认值，
+并且**把守护它的黄金测试反向改写成"断言这些私人路径就是默认值"**——于是
+护栏不但失效，还反过来强制要求作者路径存在。
+
+这类回归的共同特征是：**只要有人用整目录 checkout 或三方 merge 工具，
+就会被静默带回来**，而普通功能测试全绿。所以这里把裁决写成断言，
+让每次 `pytest` 都替人检查一遍。
+
+## 放宽这些断言之前请先读这段
+
+如果某条断言挡住了你，正确做法几乎总是"把机器专属值放进 `conf.yaml` 或环境
+变量"，而不是放宽断言。`external_paths.py` 已经实现了
+`环境变量 → conf.yaml external_tools → 自动探测` 三级回退，本地一键跑与公开
+仓库干净这两件事本来就可以同时成立。
+"""
+
+from __future__ import annotations
+
+import json
+import re
+from pathlib import Path
+
+import pytest
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+# 扫描范围：只看会进仓库的源码与配置，跳过体积大或本就被 gitignore 的目录
+_SKIP_DIRS = {
+    ".git", ".venv", "venv", "node_modules", "__pycache__", "data", "logs",
+    "backups", "models", "live2d_models", "NapCat", "NapCat_OneKey",
+    "assets", "dist", "build", ".pytest_cache", ".claude",
+}
+_SCAN_SUFFIXES = {".py", ".js", ".mjs", ".html", ".yaml", ".yml", ".json", ".bat", ".sh", ".md", ".toml"}
+
+
+def _iter_repo_files():
+    for path in PROJECT_ROOT.rglob("*"):
+        if not path.is_file():
+            continue
+        if any(part in _SKIP_DIRS for part in path.parts):
+            continue
+        if path.suffix.lower() not in _SCAN_SUFFIXES:
+            continue
+        if path.name.endswith((".bak", ".orig", ".rej")):
+            continue
+        # 本文件自身必然包含这些字面量，跳过
+        if path.name == Path(__file__).name:
+            continue
+        yield path
+
+
+# 允许提及这些路径的文件。
+#
+# CHANGELOG 的职责就是记录"我们把写死的 D:\AI_Tools 改成了配置解析"这类历史，
+# 叙述里必然会出现被禁的字面量。禁止它反而会逼人删掉真实的变更记录。
+# 判据是"能否被程序当作路径使用"：变更日志里的散文不会，源码默认值会。
+_PROSE_ALLOWLIST = {"CHANGELOG.md"}
+
+
+def _grep(needles: list[str]) -> list[str]:
+    """返回 "相对路径:行号: 命中内容" 列表。"""
+    hits: list[str] = []
+    lowered = [n.lower() for n in needles]
+    for path in _iter_repo_files():
+        if path.name in _PROSE_ALLOWLIST:
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        low = text.lower()
+        if not any(n in low for n in lowered):
+            continue
+        for lineno, line in enumerate(text.splitlines(), 1):
+            ll = line.lower()
+            for n in lowered:
+                if n in ll:
+                    rel = path.relative_to(PROJECT_ROOT).as_posix()
+                    hits.append(f"{rel}:{lineno}: {line.strip()[:120]}")
+                    break
+    return hits
+
+
+# ---------------------------------------------------------------------------
+# 一、作者机器专属路径
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "needle",
+    [
+        "d:/cccccccccc",
+        "d:\\cccccccccc",
+        "d:/ai_tools",
+        "d:\\ai_tools",
+        "谷歌浏览器",
+    ],
+)
+def test_author_machine_paths_are_absent(needle: str) -> None:
+    """这些路径只存在于作者机器上，别人 clone 下来指向的是不存在的目录。
+
+    正确做法：源码默认值留空，实际路径写在本地 conf.yaml 的 external_tools 段
+    或对应环境变量里。
+    """
+    hits = _grep([needle])
+    assert not hits, (
+        f"发现作者机器专属路径 {needle!r}，应改为空默认值 + conf.yaml 配置：\n"
+        + "\n".join(hits[:15])
+    )
+
+
+def test_external_paths_defaults_stay_empty() -> None:
+    """external_paths 的默认值必须为空，否则等于把作者的磁盘布局写进公开源码。"""
+    from white_salary.adapters.tools import external_paths as ep
+
+    for name in [n for n in dir(ep) if n.startswith("DEFAULT_")]:
+        value = getattr(ep, name)
+        if isinstance(value, str):
+            assert value == "", f"{name} 应为空串，实际 {value!r}"
+        elif isinstance(value, (tuple, list, set)):
+            assert not value, f"{name} 应为空集合，实际 {value!r}"
+
+
+# ---------------------------------------------------------------------------
+# 二、真实账号信息
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("needle", "what"),
+    [
+        ("2997735486", "真实 QQ 号（曾出现在 smart_reply 类 docstring 示例里）"),
+        ("115985242", "真实 QQ 群号（曾出现在设置面板 placeholder 与单测里）"),
+    ],
+)
+def test_real_account_identifiers_are_absent(needle: str, what: str) -> None:
+    """示例值必须用占位号（如 123456789），不能用真实账号。"""
+    hits = _grep([needle])
+    assert not hits, f"发现{what}：\n" + "\n".join(hits[:10])
+
+
+# ---------------------------------------------------------------------------
+# 三、版本号一致性（防止把版本退回旧值）
+# ---------------------------------------------------------------------------
+
+
+def test_version_is_consistent_and_not_rolled_back() -> None:
+    """四处版本号必须一致。历史上本地分支曾把它从 0.1.11 退回 0.1.7。"""
+    pyproject = (PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    match = re.search(r'^version = "([^"]+)"', pyproject, re.MULTILINE)
+    assert match, "pyproject.toml 里找不到 version"
+    version = match.group(1)
+
+    init_py = (PROJECT_ROOT / "src" / "white_salary" / "__init__.py").read_text(encoding="utf-8")
+    assert f'__version__ = "{version}"' in init_py, f"__init__.py 版本与 pyproject 不一致（应为 {version}）"
+
+    conf_default = (PROJECT_ROOT / "conf.default.yaml").read_text(encoding="utf-8")
+    assert f'version: "{version}"' in conf_default, f"conf.default.yaml 版本与 pyproject 不一致（应为 {version}）"
+
+    frontend_pkg = json.loads((PROJECT_ROOT / "frontend" / "package.json").read_text(encoding="utf-8"))
+    assert frontend_pkg["version"] == version, (
+        f"frontend/package.json 版本 {frontend_pkg['version']} 与 pyproject {version} 不一致"
+    )
+
+    # 单调性：不得低于本护栏引入时的版本
+    parts = tuple(int(p) for p in version.split("."))
+    assert parts >= (0, 1, 12), f"版本号疑似回退到 {version}"
+
+
+# ---------------------------------------------------------------------------
+# 四、启动脚本必须走项目虚拟环境
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "script",
+    ["Start.bat", "Start-Backend.bat", "Start-TTS.bat", "Start-TTS-Local.bat"],
+)
+def test_launchers_use_project_venv(script: str) -> None:
+    """启动器必须用项目 .venv，与安装器的隔离安装保持一致。
+
+    历史上本地分支把 Start.bat 退回全局 python，与 `安装.bat` 装进 .venv 的行为
+    矛盾，导致新装机器起不来。
+    """
+    path = PROJECT_ROOT / script
+    if not path.exists():
+        pytest.skip(f"{script} 不存在")
+    text = path.read_text(encoding="utf-8", errors="ignore")
+
+    assert ".venv" in text, f"{script} 没有引用项目 .venv"
+    assert not re.search(r"(?<![\w.\\/])python(?:\.exe)?\s+run_server\.py", text), (
+        f"{script} 出现了裸 python 调用，应使用 .venv\\Scripts\\python.exe"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 五、"零动作"文件确实没被本地版覆盖
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "relative",
+    [
+        "src/white_salary/core/plugins/sandbox.py",
+        "src/white_salary/infrastructure/server/websocket_handler.py",
+        "src/white_salary/core/runtime/journal.py",
+    ],
+)
+def test_v0_1_12_security_fixes_are_still_present(relative: str) -> None:
+    """v0.1.12 的关键修复不得被本地版覆盖回去。
+
+    这几处的共同点是：本地版本里对应位置是旧代码，一旦整文件取本地，
+    修复就静默消失，而功能测试察觉不到。
+    """
+    text = (PROJECT_ROOT / relative).read_text(encoding="utf-8", errors="ignore")
+    markers = {
+        # 沙箱：绝对禁止层必须仍然拦住 os/sys
+        "src/white_salary/core/plugins/sandbox.py": ['"os"', '"sys"', "BLOCKED_MODULES"],
+        # 3.10 兼容的取消判定辅助函数
+        "src/white_salary/infrastructure/server/websocket_handler.py": ["_current_task_is_cancelling"],
+        # 账本降级句柄
+        "src/white_salary/core/runtime/journal.py": ["_DetachedTaskHandle"],
+    }[relative]
+    for marker in markers:
+        assert marker in text, f"{relative} 缺少 v0.1.12 修复标记 {marker!r}，疑似被本地版覆盖"
