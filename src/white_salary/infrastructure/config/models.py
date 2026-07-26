@@ -79,6 +79,13 @@ class ASRConfig(BaseModel):
         description="API密钥（留空=自动从已配置的角色LLM中扫一把SiliconFlow密钥，沿用旧逻辑）",
     )
     model: str = Field(default="FunAudioLLM/SenseVoiceSmall", description="语音识别模型名称")
+    base_url: str = Field(
+        default="https://api.siliconflow.cn/v1",
+        description=(
+            "ASR 服务地址（OpenAI 兼容的 /audio/transcriptions）。"
+            "自建服务、走代理或做端到端测试时改这里；留默认即用 SiliconFlow 云端。"
+        ),
+    )
 
 
 class TTSConfig(BaseModel):

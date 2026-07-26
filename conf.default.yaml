@@ -118,6 +118,9 @@ asr:
   api_key: ""
   # 语音识别模型
   model: "FunAudioLLM/SenseVoiceSmall"
+  # ASR 服务地址（OpenAI 兼容的 /audio/transcriptions）。
+  # 自建服务、走代理或做端到端测试时改这里；留默认即用 SiliconFlow 云端。
+  base_url: "https://api.siliconflow.cn/v1"
 
 # ---------------------------------------------------------------------------
 # TTS（语音合成）配置

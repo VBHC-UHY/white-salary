@@ -187,4 +187,9 @@ disallow_untyped_defs = false    # 测试文件可以宽松一点
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"            # 自动识别异步测试
-addopts = "-v --tb=short"        # 详细输出，简短错误信息
+# 默认排除 e2e：它会真启动后端+假上游，数分钟且需空闲端口
+# 跑 e2e：python -m pytest tests/e2e -m e2e
+addopts = "-v --tb=short -m 'not e2e'"   # 详细输出，简短错误信息
+markers = [
+    "e2e: 端到端测试（真启动后端与假上游）",
+]

@@ -88,7 +88,29 @@ class StartupChecker:
             return True
         async with self._state_lock:
             self._cleanup_expired()
-            if self._is_processed_key(key) or key in self._inflight:
+            already_processed = self._is_processed_key(key)
+            if already_processed or key in self._inflight:
+                # 去重本身是必要的（重连补发会把同一条消息再送一遍），但此前
+                # 丢弃是**完全静默**的：日志里一个字都没有。
+                #
+                # 这会掩盖一类真实故障：OneBot 的 message_id 是会话级整数，
+                # NapCat 重启后可能从较小值重新开始，而本表保留 7 天
+                # （PROCESSED_EXPIRE_DAYS）。一旦新消息的 id 撞上历史记录，
+                # 它会被当成"已处理"直接丢掉——用户看到的是白已读不回，
+                # 排查时却没有任何线索。
+                #
+                # 补发重放撞重复属预期（DEBUG）；**实时消息**被判重复则可疑，
+                # 用 WARNING 留痕，把这条哑故障变成可诊断的。
+                if getattr(msg, "_offline_replay", False):
+                    logger.debug(f"[QQ backfill] Replayed message already handled: {key}")
+                elif already_processed:
+                    logger.warning(
+                        f"[QQ] 实时消息被判为已处理而丢弃: {key}。"
+                        "若你并未重复发送，可能是 NapCat 重启后 message_id 复用"
+                        "撞上了 7 天内的历史记录。"
+                    )
+                else:
+                    logger.debug(f"[QQ] 同一条消息正在处理中，忽略重复投递: {key}")
                 return False
             self._inflight.add(key)
             return True

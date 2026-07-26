@@ -452,6 +452,7 @@ def main() -> None:
         asr_adapter = SiliconFlowASRAdapter(
             api_key=_sf_key,
             model=config.asr.model,
+            base_url=config.asr.base_url,
         )
         logger.info("ASR: SiliconFlow SenseVoice")
     except Exception as e:
