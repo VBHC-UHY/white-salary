@@ -496,6 +496,33 @@ class LongTermMemoryStore:
             self._chroma_delete_ids([entry_id])
         return deleted
 
+    def cleanup_expired(self) -> int:
+        """清理已过期记忆，返回删除条数（公开入口）。
+
+        每日整理服务（services/memory_consolidation.py）调用的是这个名字。
+        此前本类只有下面那个私有的 _cleanup_expired，于是整理服务第一步就抛
+        AttributeError，被 _consolidate 的外层 except 接住 —— 过期清理、长期
+        记忆去重、核心记忆去重、以及批5 特意挂上来的 enhanced 遗忘曲线维护
+        （run_maintenance）四步全都从未执行过，日志里只有一行"整理失败"。
+        """
+        removed = 0
+        try:
+            conn = sqlite3.connect(str(self._db_path))
+            try:
+                row = conn.execute(
+                    "SELECT COUNT(*) FROM long_term_memory "
+                    "WHERE expires_at > 0 AND expires_at < ?",
+                    (time.time(),),
+                ).fetchone()
+                removed = int(row[0]) if row else 0
+            finally:
+                conn.close()
+        except Exception as exc:
+            logger.warning(f"[LongTerm] 统计过期条数失败: {exc}")
+
+        self._cleanup_expired()
+        return removed
+
     def _cleanup_expired(self) -> None:
         """清理所有过期的记忆。"""
         conn = sqlite3.connect(str(self._db_path))

@@ -1,5 +1,8 @@
 """记忆工具 — 搜索/添加/更新/删除/记住/回忆对话。"""
 import time
+
+from loguru import logger
+
 from ._helpers import tool, P, S, I, NONE_PARAMS
 
 
@@ -12,11 +15,15 @@ async def memory_search(keyword: str = "", memory_type: str = "all") -> str:
             from white_salary.core.memory.core_store import CoreMemoryStore
             core = CoreMemoryStore()
             for key, entry in core._cache.items():
-                val = str(entry.get("value", ""))
+                # CoreMemoryStore._cache 的值是 CoreMemoryEntry dataclass，不是 dict。
+                # 此前这里写 entry.get("value")，每次都抛 AttributeError 并被下面
+                # 那个裸 except 吞掉 —— 白的"搜索记忆"工具查核心记忆恒返回空。
+                val = str(getattr(entry, "value", "") or "")
                 if keyword.lower() in key.lower() or keyword.lower() in val.lower():
                     results.append(f"[核心] {key}: {val}")
-        except Exception:
-            pass
+        except Exception as exc:
+            # 别再静默：同类错误就是靠裸 except 才藏了这么久
+            logger.warning(f"[MemorySearch] 核心记忆检索失败: {exc}")
     if memory_type in ("all", "conversation"):
         try:
             from white_salary.core.memory.conversation_log import ConversationLog
