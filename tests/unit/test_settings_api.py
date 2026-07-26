@@ -170,12 +170,12 @@ class TestSaveSettingsDeepMerge:
         save_settings = _endpoint(router, "/api/settings", "POST")
 
         resp = await save_settings(SettingsUpdate(settings={
-            "qq": {"unblocked_group_ids": ["115985242", " 9988 "]}
+            "qq": {"unblocked_group_ids": ["123456789", " 9988 "]}
         }))
 
         saved = yaml.safe_load((root / "conf.yaml").read_text(encoding="utf-8"))
-        assert saved["qq"]["unblocked_group_ids"] == ["115985242", " 9988 "]
-        assert fake_decider.groups == ["115985242", " 9988 "]
+        assert saved["qq"]["unblocked_group_ids"] == ["123456789", " 9988 "]
+        assert fake_decider.groups == ["123456789", " 9988 "]
         assert "即时同步" in resp["message"]
 
 

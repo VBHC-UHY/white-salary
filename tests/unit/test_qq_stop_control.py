@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from white_salary.core.runtime import EngagementLeaseBook
+from white_salary.core.runtime import EngagementLeaseBook, qq_group_lease_key
 from white_salary.infrastructure.server.qq_handler import (
     _is_user_blocked,
     _parse_continuation_reply,
@@ -19,9 +19,13 @@ class _Message:
     user_id: str = "u1"
 
 
+# 注意：租约必须用 qq_group_lease_key() 建立，也就是生产环境里 SmartReplyDecider
+# 实际写入的那把键。此前这些用例直接写字面量 "group:g1"（上下文存储的命名空间），
+# 恰好与 qq_handler 当时错误的读法对上，于是测试全绿而真实功能是坏的——
+# 群里说"别说了"既查不到窗口也关不掉租约。用例自己造了一把现实中不存在的租约。
 def test_active_user_can_stop_without_repeating_wake_word(tmp_path) -> None:
     leases = EngagementLeaseBook(tmp_path / "runtime.db")
-    leases.confirm_delivery("group:g1", "u1")
+    leases.confirm_delivery(qq_group_lease_key("g1"), "u1")
 
     assert _should_consume_stop_request(
         msg=_Message(),
@@ -33,7 +37,7 @@ def test_active_user_can_stop_without_repeating_wake_word(tmp_path) -> None:
 
 def test_unrelated_group_member_cannot_close_someone_elses_window(tmp_path) -> None:
     leases = EngagementLeaseBook(tmp_path / "runtime.db")
-    leases.confirm_delivery("group:g1", "u1")
+    leases.confirm_delivery(qq_group_lease_key("g1"), "u1")
 
     assert not _should_consume_stop_request(
         msg=_Message(user_id="u2"),
@@ -41,7 +45,7 @@ def test_unrelated_group_member_cannot_close_someone_elses_window(tmp_path) -> N
         is_direct=False,
         engagement_leases=leases,
     )
-    assert leases.is_candidate("group:g1", "u1")
+    assert leases.is_candidate(qq_group_lease_key("g1"), "u1")
 
 
 def test_direct_stop_is_consumed_even_without_existing_window(tmp_path) -> None:

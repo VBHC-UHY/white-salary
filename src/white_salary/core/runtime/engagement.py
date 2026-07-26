@@ -49,6 +49,32 @@ class EngagementLease:
         return max(self.expires_at, self.waiting_until) > now
 
 
+def qq_group_lease_key(group_id: str) -> str:
+    """QQ 群聊的活动租约会话键。
+
+    **这是租约命名空间的唯一权威来源，所有读/写/关闭租约的地方都必须调它。**
+
+    背景：租约键与"聊天上下文存储键"是两套不同的命名空间——
+    ``QQContextManager.group_key()`` 产出 ``group:{gid}``，那是给上下文用的；
+    租约用的是带平台前缀的 ``qq:group:{gid}``。历史版本里 smart_reply 按
+    租约命名空间写入，而 qq_handler 的停止指令路径却拿上下文命名空间的键去
+    查询和关闭，两套键永不相交，导致：
+
+      - 群里处于活动窗口、但没有 @ 白的用户说"别说了/闭嘴"时，
+        is_candidate 恒为 False，停止请求被完全忽略，白继续接话；
+      - 即使 @ 白说停止，close() 把 CLOSED 写到了不存在的键上，
+        真正的租约仍然 ACTIVE，窗口内白照样继续自动回复。
+
+    即"停止当前会话"这个功能整体失效，且因为两边各自自洽，单测全绿。
+    """
+    return f"qq:group:{str(group_id or '').strip()}"
+
+
+def qq_private_lease_key(user_id: str) -> str:
+    """QQ 私聊的活动租约会话键（与群聊同一命名空间约定）。"""
+    return f"qq:private:{str(user_id or '').strip()}"
+
+
 class EngagementLeaseBook:
     """Owns activity state for `(conversation, user)` rather than a whole group."""
 

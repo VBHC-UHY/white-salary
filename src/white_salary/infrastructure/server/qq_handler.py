@@ -13,12 +13,13 @@ import asyncio
 import hashlib
 import json
 import re
+import time
 from pathlib import Path
 from typing import Callable, Optional
 
 from loguru import logger
 
-from white_salary.core.agent.chat_agent import ChatAgent
+from white_salary.core.agent.chat_agent import ChatAgent, ToolResultPresentationError
 from white_salary.core.agent.session_pool import (
     ChatAgentSessionPool,
     qq_conversation_key,
@@ -32,10 +33,17 @@ from white_salary.core.runtime import (
     InteractiveTaskHandle,
     InteractiveTaskJournal,
     RuntimeStore,
+    qq_group_lease_key,
 )
 from white_salary.adapters.platform.qq_adapter import QQAdapter, QQMessage
 # 2026-07-03 面板升级（批6）：功能开关配置模型（features 节，纯Pydantic无循环依赖）
 from white_salary.infrastructure.config.models import FeaturesConfig
+
+
+# 工具结果整理失败时的告知冷却：供应商整体故障时，避免每条消息都回一句同样的话。
+# 按会话（群号 / 私聊用户）计时。
+_TOOL_PRESENTATION_NOTICE_COOLDOWN: float = 60.0
+_TOOL_PRESENTATION_NOTICE_AT: dict[str, float] = {}
 
 
 def _get_plugin_manager():
@@ -375,8 +383,10 @@ def _should_consume_stop_request(
     if not msg.is_group or is_direct:
         return True
     try:
+        # 必须用租约命名空间的键（qq:group:xxx），不能用上下文存储的键
+        # （group:xxx）——两者是不同命名空间，混用会让停止指令永远查不到租约。
         return engagement_leases.is_candidate(
-            QQContextManager.group_key(msg.group_id),
+            qq_group_lease_key(msg.group_id),
             msg.user_id,
         )
     except Exception as exc:
@@ -962,8 +972,9 @@ async def start_qq_service(
                 engagement_leases=qq_engagement_leases,
             ):
                 if msg.is_group:
+                    # 同上：关闭的必须是租约命名空间里那把真实的租约。
                     qq_engagement_leases.close(
-                        QQContextManager.group_key(msg.group_id),
+                        qq_group_lease_key(msg.group_id),
                         msg.user_id,
                         "user_requested_stop",
                     )
@@ -1560,6 +1571,32 @@ async def start_qq_service(
             runtime_task.response_ready(clean_reply, awaiting_delivery=True)
 
             return clean_reply
+
+        except ToolResultPresentationError as e:
+            # 工具跑完了，但主模型连续两次都没能把结果整理成自然语言。
+            #
+            # 此前这里和其它异常一样 return None，结果是【已读不回】：白在 QQ
+            # 上一个字都不说，用户完全不知道发生了什么。而同样的失败在桌面端
+            # 会推一张错误卡（websocket_handler 的 _send_error），QQ 却什么都
+            # 没有——这个不对称才是缺陷本身。
+            #
+            # 项目确有"不使用固定成功/失败话术"的设计原则，但那是指别用模板
+            # 假冒白的口吻去汇报工具结果；走到这一步说明白本来就要开口了，
+            # 此时沉默比一句简短的实话更糟。加会话级冷却避免供应商故障时刷屏。
+            setattr(msg, "_processing_failed", True)
+            if runtime_task is not None:
+                runtime_task.fail(str(e))
+            logger.error(f"[QQ] 工具结果整理失败: {e}")
+            conversation_id = (
+                str(msg.group_id) if msg.is_group else str(msg.user_id)
+            )
+            now = time.time()
+            last_notice = _TOOL_PRESENTATION_NOTICE_AT.get(conversation_id, 0.0)
+            if now - last_notice < _TOOL_PRESENTATION_NOTICE_COOLDOWN:
+                logger.info("[QQ] 工具结果整理失败提示处于冷却期，本次不重复告知")
+                return None
+            _TOOL_PRESENTATION_NOTICE_AT[conversation_id] = now
+            return "……刚才那步我没弄明白，等下再试一次好吗"
 
         except Exception as e:
             import traceback

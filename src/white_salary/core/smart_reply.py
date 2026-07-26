@@ -24,7 +24,7 @@ from typing import Optional
 
 from loguru import logger
 
-from white_salary.core.runtime.engagement import EngagementLeaseBook
+from white_salary.core.runtime.engagement import EngagementLeaseBook, qq_group_lease_key
 
 
 class ReplyDecision(Enum):
@@ -372,7 +372,9 @@ class SmartReplyDecider:
 
     @staticmethod
     def _conversation_key(group_id: str) -> str:
-        return f"qq:group:{str(group_id or '').strip()}"
+        # 委托给租约命名空间的权威实现，避免与 qq_handler 各写一套导致
+        # "停止指令查不到也关不掉真实租约"（见 qq_group_lease_key 的说明）。
+        return qq_group_lease_key(group_id)
 
     def set_unblocked_groups(self, group_ids: Optional[list[str] | tuple[str, ...]]) -> None:
         """Replace the manual per-group inactive-gate bypass list."""

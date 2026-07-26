@@ -168,6 +168,9 @@ class ChatController {
                 this.isConnected = false;
                 this._updateStatus('disconnected', 'OFFLINE');
                 console.log('[Chat] WebSocket disconnected');
+                // 断线后在途语音请求的响应帧永远不会到达，必须主动放弃，
+                // 否则持续监听会被永久卡死（详见 _abortPendingVoiceRequests）。
+                this._abortPendingVoiceRequests('连接断开');
                 this._scheduleReconnect();
             };
 
@@ -188,6 +191,7 @@ class ChatController {
             this.ws = null;
         }
         this.isConnected = false;
+        this._abortPendingVoiceRequests('主动断开');
         this._updateStatus('disconnected', 'OFFLINE');
     }
 
@@ -1367,6 +1371,36 @@ class ChatController {
         }
         if (!isBusy) {
             this._scheduleVoiceBufferFlush();
+        }
+    }
+
+    /**
+     * 连接断开时清理在途语音请求。
+     *
+     * _pendingVoiceRequests 只在收到终态 voice_status 帧或发送失败时才会移除
+     * requestId。若 socket 在服务端发出 queued 之后、终态帧之前断开（ASR 慢时
+     * 这个窗口很宽），该 requestId 就永久滞留在 Set 里——而
+     * _scheduleVoiceBufferFlush() 开头有 `if (... || this._pendingVoiceRequests.size > 0) return;`，
+     * 于是持续监听识别出的文字只会一直堆进 _voiceBuffer 永不发送，
+     * 麦克风按钮也永久停在"正在识别"，只能重启客户端。
+     *
+     * 断线后这些请求的响应帧永远不会到达，必须在这里主动放弃。
+     */
+    _abortPendingVoiceRequests(reason = '连接断开') {
+        const hadPending = this._pendingVoiceRequests.size > 0 || !!this._activeVoiceRequestId;
+        this._pendingVoiceRequests.clear();
+        this._activeVoiceRequestId = null;
+        if (this._voiceMergeTimer) {
+            clearTimeout(this._voiceMergeTimer);
+            this._voiceMergeTimer = null;
+        }
+        if (this.micBtn) {
+            this.micBtn.classList.remove('processing');
+            this.micBtn.title = '按住说话';
+        }
+        if (hadPending) {
+            console.warn(`[Voice] 放弃 ${reason} 时的在途识别请求`);
+            this._showSystemNotice('[语音] 连接中断，本次识别已取消，请重试');
         }
     }
 

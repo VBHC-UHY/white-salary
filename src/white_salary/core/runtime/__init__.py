@@ -6,6 +6,8 @@ from .engagement import (
     EngagementLease,
     EngagementLeaseBook,
     EngagementState,
+    qq_group_lease_key,
+    qq_private_lease_key,
 )
 from .delivery import DeliveryResult, DeliveryRouter, DeliveryWorker
 from .models import (
@@ -43,6 +45,8 @@ __all__ = [
     "RuntimeStore",
     "StaleDeliveryClaim",
     "TaskRecord",
+    "qq_group_lease_key",
+    "qq_private_lease_key",
     "TaskExecutionResult",
     "TaskState",
     "ToolLoopOutcome",
