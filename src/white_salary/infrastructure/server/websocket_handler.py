@@ -200,6 +200,36 @@ _ERROR_DEDUPE_SECONDS: float = 30.0
 _RECENT_ERROR_FRAMES: dict[tuple[int, str], float] = {}
 
 
+def _current_task_is_cancelling() -> bool:
+    """当前协程自身是否正在被取消（而不是它 await 的下游任务被取消）。
+
+    ``asyncio.Task.cancelling()`` 是 Python 3.11 才有的 API，而本项目
+    ``requires-python = ">=3.10,<3.13"``。直接调用会在 3.10 上抛
+    ``AttributeError``，且该异常是在 ``except CancelledError`` 的处理体内
+    抛出的，同级的 ``except Exception`` 按语义接不住它——用户在主动发言
+    生成途中打字打断就会中招，并进一步引爆跨端桥消费循环的猝死。
+
+    3.10 上无法区分"自身被取消"与"下游被取消"，此时返回 False，即不向上
+    传播、只把本次操作记为失败。相比崩溃，这是安全的方向：调用方随即返回，
+    协程照常结束，不会拖延关停。
+    """
+    try:
+        current = asyncio.current_task()
+    except RuntimeError:
+        # 无运行中的事件循环。本函数的唯一职责就是"永不抛异常"，
+        # 它自己在边角上抛就失去意义了。
+        return False
+    if current is None:
+        return False
+    cancelling = getattr(current, "cancelling", None)
+    if cancelling is None:  # Python 3.10
+        return False
+    try:
+        return bool(cancelling())
+    except Exception:  # pragma: no cover - 防御性：不同实现的边角差异
+        return False
+
+
 class CancellationToken:
     """Simple cancellation flag for interrupting in-progress work."""
     def __init__(self):
@@ -998,8 +1028,7 @@ async def handle_chat_websocket(
                 proactive_llm_blocked_until = time.monotonic() + 30.0
             return succeeded
         except asyncio.CancelledError:
-            current = asyncio.current_task()
-            if current is not None and current.cancelling():
+            if _current_task_is_cancelling():
                 raise
             return False
         except Exception as e:
@@ -1102,9 +1131,35 @@ async def handle_chat_websocket(
             except Exception as e:
                 # 2026-07-02 审计修复（批3）：桥轮询异常不再裸吞，至少留日志
                 logger.warning(f"[Bridge] 桌面桥轮询异常: {e}")
+                # 2026-07-26 修复：结算动作本身也会抛。租约默认 30 秒，而本循环
+                # 里的 _auto_chat_send 要等完整的 LLM 生成 + 逐句 TTS，轻易超时；
+                # 租约一旦被过期扫描回收，mark_message_unknown 就抛
+                # StaleDeliveryClaim。历史版本这里是裸调用，二次异常会冲出
+                # except 块杀死整个 while True，此后该连接的 QQ→桌面投递永久
+                # 静默失效（直到重启），且日志里一个字都没有。
                 for message in unsettled.values():
-                    bridge.mark_message_unknown(message, str(e))
+                    try:
+                        bridge.mark_message_unknown(message, str(e))
+                    except Exception as settle_error:
+                        logger.error(
+                            f"[Bridge] 标记桌面桥未决消息失败（已跳过该条）: {settle_error}"
+                        )
     _bridge_task = asyncio.create_task(_bridge_check_loop())
+
+    def _log_bridge_task_exit(task: "asyncio.Task") -> None:
+        """桥循环属于'死了也没人知道'的后台任务，必须显式暴露退出原因。
+
+        create_task 出来的任务若因异常结束，异常会一直躺在任务对象里无人取回；
+        本连接的清理路径又用 `except (CancelledError, Exception): pass` 兜住，
+        于是桥停摆时全程零日志。这个回调保证至少留下 ERROR。
+        """
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.error(f"[Bridge] 桌面桥轮询任务异常退出，跨端投递已停止: {exc!r}")
+
+    _bridge_task.add_done_callback(_log_bridge_task_exit)
 
     # per-connection实例（不共享，避免多客户端干扰）
     from white_salary.core.conflict_detector import ConflictDetector, ConflictType

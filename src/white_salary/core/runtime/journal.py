@@ -117,6 +117,40 @@ class InteractiveTaskHandle:
             logger.warning(f"[Runtime] 更新任务状态失败 task={self.id}: {exc}")
 
 
+class _DetachedTaskHandle(InteractiveTaskHandle):
+    """任务账本不可用时的降级句柄：所有生命周期操作都变成空操作。
+
+    关键语义是 ``should_process`` 恒为 True。任务账本是纯观测性的 sidecar，
+    它写不进去时，正确的行为是"照常回复用户，只是这一轮没有审计记录"，
+    而不是"因为记不上账所以干脆不说话"。
+
+    历史版本 ``begin()`` 不做任何保护，store 一旦不可写（DB 被杀软/备份
+    占用、磁盘满、WAL 脏），异常会一路冒到平台处理器的外层 except：
+    桌面端每条消息只收到红字"处理失败"，QQ 端则是纯粹的已读不回——
+    一个只负责记日志的组件把核心陪伴功能整个绑架了。
+    """
+
+    def __init__(self) -> None:
+        super().__init__(store=None, record=None, created=True)  # type: ignore[arg-type]
+
+    @property
+    def id(self) -> str:
+        return ""
+
+    @property
+    def should_process(self) -> bool:
+        return True
+
+    def refresh(self) -> Any:  # type: ignore[override]
+        return None
+
+    def append_event(self, event_type: str, payload: dict[str, Any] | None = None) -> None:
+        return None
+
+    def _transition(self, state: TaskState, **kwargs: Any) -> None:  # type: ignore[override]
+        return None
+
+
 class InteractiveTaskJournal:
     """Creates durable sidecar tasks without replacing current platform flows."""
 
@@ -134,15 +168,21 @@ class InteractiveTaskJournal:
         idempotency_key: str = "",
     ) -> InteractiveTaskHandle:
         candidate_id = str(uuid.uuid4())
-        record = self.store.create_task(
-            conversation,
-            request_text,
-            owner_id=owner_id,
-            response_address=response_address,
-            metadata=metadata,
-            idempotency_key=idempotency_key,
-            task_id=candidate_id,
-        )
+        try:
+            record = self.store.create_task(
+                conversation,
+                request_text,
+                owner_id=owner_id,
+                response_address=response_address,
+                metadata=metadata,
+                idempotency_key=idempotency_key,
+                task_id=candidate_id,
+            )
+        except Exception as exc:
+            # 记账失败绝不能阻断用户消息：降级为空操作句柄，照常回复。
+            # 同类保护在 append_event / _transition 里早就有了，唯独入口漏了。
+            logger.warning(f"[Runtime] 创建任务账本失败，本轮降级为无账本运行: {exc}")
+            return _DetachedTaskHandle()
         created = record.id == candidate_id
         handle = InteractiveTaskHandle(self.store, record, created)
         if created:

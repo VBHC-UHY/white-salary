@@ -169,10 +169,23 @@ def main() -> None:
     from white_salary.core.cross_platform import CrossPlatformBridge
     from white_salary.core.runtime import RuntimeStore
 
-    runtime_db_path = project_root / "data" / "runtime" / "agent_runtime.db"
-    CrossPlatformBridge.configure(runtime_db_path)
-    runtime_store = RuntimeStore(runtime_db_path)
+    # 先读配置，再建任务账本。历史版本把建库排在 load_config 之前，
+    # 等于让一个观测性 sidecar 比主配置还靠前地决定程序能否启动。
     config = load_config(project_root=project_root)
+
+    # 任务账本（跨端投递 + 任务日志）。它是 sidecar，不是主功能：
+    # DB 损坏、被杀软/备份占用、上次非正常退出留下脏 WAL、磁盘满——
+    # 任一情况都不该让桌宠、QQ、B站、QQ空间全部起不来。
+    # 同文件的插件系统与 Bilibili 段落早就是这么降级的，这里对齐。
+    runtime_db_path = project_root / "data" / "runtime" / "agent_runtime.db"
+    runtime_store = None
+    try:
+        CrossPlatformBridge.configure(runtime_db_path)
+        runtime_store = RuntimeStore(runtime_db_path)
+    except Exception as e:
+        logger.error(f"任务账本初始化失败，将以无账本模式启动（跨端投递不可用）: {e}")
+        logger.error(f"  账本路径: {runtime_db_path}")
+        logger.error("  若需恢复，可关闭占用该文件的程序后重启；必要时删除该 .db 重新生成。")
 
     # 命令行参数覆盖配置文件
     host = args.host or config.server.host

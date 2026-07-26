@@ -461,9 +461,16 @@ async def start_qq_service(
     )
     _service_root = Path(project_root) if project_root is not None else Path.cwd()
     if runtime_store is None:
-        runtime_store = RuntimeStore(
-            _service_root / "data" / "runtime" / "agent_runtime.db"
-        )
+        try:
+            runtime_store = RuntimeStore(
+                _service_root / "data" / "runtime" / "agent_runtime.db"
+            )
+        except Exception as exc:
+            # 任务账本是观测性 sidecar，建库失败不能让整个 QQ 服务起不来。
+            # chat_agent 的 runtime_store 参数本就声明为 RuntimeStore | None，
+            # InteractiveTaskJournal(None) 也会在 begin() 里降级为空账本句柄。
+            logger.error(f"[QQ] 任务账本不可用，将以无账本模式运行: {exc}")
+            runtime_store = None
     runtime_journal = InteractiveTaskJournal(runtime_store)
     ctx_manager = QQContextManager()
     if agent_sessions is None:
@@ -1620,45 +1627,81 @@ async def start_qq_service(
 
         bridge = CrossPlatformBridge()
         default_owner = str((family_qq or [""])[0])
+
+        def _settle(action, item, *args, **kwargs) -> None:
+            """安全执行 ack/reject/unknown 结算。
+
+            这些结算调用会在租约已被过期扫描回收时抛 StaleDeliveryClaim
+            （claim 的租约仅 30 秒，而一批最多 20 条消息逐条经 NapCat 发送
+            很容易超时）。历史版本全部裸调用，任一条抛出就直接掀掉整个
+            while True，桌面→QQ 投递从此永久停摆且无任何日志。
+            """
+            try:
+                action(item, *args, **kwargs)
+            except Exception as settle_error:
+                logger.error(f"[QQ] 桥消息结算失败（已跳过该条）: {settle_error}")
+
         while True:
             await asyncio.sleep(0.5)
-            ws = getattr(adapter, "_ws", None)
-            if ws is None or bool(getattr(ws, "closed", False)):
-                continue
-            messages = bridge.claim_qq_messages(limit=20)
-            for item in messages:
-                target_id = str(item.get("target_id") or default_owner).strip()
-                text = str(item.get("message") or "").strip()
-                is_group = bool(item.get("is_group", False))
-                if not target_id or not text:
-                    bridge.reject_message(item, "QQ bridge target or message is empty")
+            try:
+                ws = getattr(adapter, "_ws", None)
+                if ws is None or bool(getattr(ws, "closed", False)):
                     continue
-                try:
-                    if is_group:
-                        message_id = await adapter.send_group_message(target_id, text)
+                messages = bridge.claim_qq_messages(limit=20)
+                for item in messages:
+                    target_id = str(item.get("target_id") or default_owner).strip()
+                    text = str(item.get("message") or "").strip()
+                    is_group = bool(item.get("is_group", False))
+                    if not target_id or not text:
+                        _settle(
+                            bridge.reject_message,
+                            item,
+                            "QQ bridge target or message is empty",
+                        )
+                        continue
+                    try:
+                        if is_group:
+                            message_id = await adapter.send_group_message(target_id, text)
+                        else:
+                            message_id = await adapter.send_private_message(target_id, text)
+                    except Exception as e:
+                        _settle(bridge.mark_message_unknown, item, str(e))
+                        continue
+                    if message_id:
+                        _settle(
+                            bridge.ack_message,
+                            item,
+                            receipt={
+                                "consumer": "qq_adapter",
+                                "message_id": int(message_id),
+                                "target_id": target_id,
+                                "is_group": is_group,
+                            },
+                        )
                     else:
-                        message_id = await adapter.send_private_message(target_id, text)
-                except Exception as e:
-                    bridge.mark_message_unknown(item, str(e))
-                    continue
-                if message_id:
-                    bridge.ack_message(
-                        item,
-                        receipt={
-                            "consumer": "qq_adapter",
-                            "message_id": int(message_id),
-                            "target_id": target_id,
-                            "is_group": is_group,
-                        },
-                    )
-                else:
-                    bridge.mark_message_unknown(
-                        item,
-                        "NapCat returned no message_id; delivery outcome is ambiguous",
-                    )
+                        _settle(
+                            bridge.mark_message_unknown,
+                            item,
+                            "NapCat returned no message_id; delivery outcome is ambiguous",
+                        )
+            except Exception as loop_error:
+                # 2026-07-26 修复：整个循环体此前完全裸奔，claim/结算任一抛出
+                # 即永久杀死消费协程。这里兜住并继续下一轮，绝不让单次异常
+                # 变成"白突然不转达了"。
+                logger.error(f"[QQ] 桥消费循环异常（本轮跳过，继续运行）: {loop_error}")
 
     logger.info(f"[QQ] 启动QQ服务: {ws_url}")
     qq_bridge_task = asyncio.create_task(_qq_bridge_loop(), name="qq-bridge-consumer")
+
+    def _log_qq_bridge_exit(task: "asyncio.Task") -> None:
+        """桥消费协程若仍以异常告终，必须留下 ERROR 而不是无声消失。"""
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.error(f"[QQ] 桥消费任务异常退出，桌面→QQ 投递已停止: {exc!r}")
+
+    qq_bridge_task.add_done_callback(_log_qq_bridge_exit)
     try:
         await adapter.connect()
     finally:
