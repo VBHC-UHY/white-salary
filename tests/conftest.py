@@ -15,6 +15,16 @@ import pytest
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+# 单元测试里关闭外部工具自动探测。
+#
+# 探测会真的去扫本机磁盘找 GPT-SoVITS / ComfyUI 等安装目录。放任它在测试里跑会有
+# 两个问题：一是结果随机器而变——"未配置时应回退到空"这类用例，在真装了这些工具
+# 的开发机上会拿到一个真实路径而失败；二是每次扫盘都要几秒，白白拖慢整个套件。
+#
+# 探测本身由 tests/unit/test_tool_discovery.py 用临时目录单独验证（那里显式传
+# search_roots，不碰真实磁盘）；端到端测试想验证真实探测时可自行取消该环境变量。
+os.environ.setdefault("WS_DISABLE_TOOL_AUTODETECT", "1")
+
 
 @pytest.fixture
 def project_root() -> Path:

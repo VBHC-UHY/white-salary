@@ -134,13 +134,19 @@ def _resolve(
     """
     按统一三级顺序解析一条外部工具路径。
 
-    顺序：环境变量(env_var) → external_tools 配置(config_field) → 内置默认值(default)。
+    顺序：环境变量(env_var) → external_tools 配置(config_field) → **自动探测** → 内置默认值。
     环境变量与配置都以"非空"为准（空串视为未设置，继续向下回退）。
+
+    自动探测那一层是为了让新用户装好就能点启动。公开版的内置默认值必须为空
+    （不能夹带作者机器的路径），如果没有这一层，用户什么都没做错却会看到
+    "路径未配置"然后卡住——他得先去翻文档手写路径才能用上 TTS 或出图。
+    探测按特征文件识别（例如"同时有 api_v2.py 和 GPT_SoVITS/"就是 GPT-SoVITS），
+    改了目录名也认得出；用户显式配了什么依然优先，探测只在没配时出手。
 
     Args:
         env_var:      历史环境变量名（保留各处旧行为，最高优先级）
         config_field: ExternalToolsConfig 上对应字段名
-        default:      内置默认值（== 历史硬编码值）
+        default:      内置默认值（公开版为空）
 
     Returns:
         解析后的路径字符串
@@ -151,7 +157,30 @@ def _resolve(
     cfg_value = _config_value(config_field, project_root)
     if cfg_value:
         return cfg_value
+
+    detected = _autodetect(config_field)
+    if detected:
+        return detected
+
     return default
+
+
+def _autodetect(config_field: str) -> str:
+    """自动探测兜底。任何异常都吞掉——探测失败只是回到"未配置"，不该让主流程崩。
+
+    `WS_DISABLE_TOOL_AUTODETECT=1` 可关闭这一层。单元测试默认关闭（见
+    tests/conftest.py）：探测会真的去扫磁盘，结果随机器而变，会让
+    "未配置时应回退到空"这类用例在装了工具的机器上莫名失败，而且拖慢测试。
+    真实运行与端到端测试不受影响。
+    """
+    if os.environ.get("WS_DISABLE_TOOL_AUTODETECT", "").strip() in {"1", "true", "yes"}:
+        return ""
+    try:
+        from white_salary.adapters.tools.tool_discovery import detect
+
+        return detect(config_field)
+    except Exception:  # pragma: no cover - 防御性
+        return ""
 
 
 def _path_from_value(value: str, project_root: Optional[Path] = None) -> Path:
