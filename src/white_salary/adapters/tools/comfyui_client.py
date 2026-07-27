@@ -116,8 +116,17 @@ async def ensure_comfyui_running(
         return False
 
     # 启动ComfyUI（后台运行，不阻塞）
+    #
+    # _starting 必须在 finally 里复位，不能只在 return/except 分支里复位：
+    # asyncio.CancelledError 自 Python 3.8 起继承 BaseException，`except Exception`
+    # 接不住它。用户中途打断（或上层超时取消）时，原来那几处 `_starting = False`
+    # 全被跳过，标志位永久为 True —— 之后 ensure_comfyui_running 一进来就因为
+    # "正在启动中"直接返回，ComfyUI 再也不会被自动拉起，且没有任何报错。
+    # started_here 保证只有真正把标志位置上的那一次调用负责复位。
+    started_here = False
     try:
         _starting = True
+        started_here = True
         logger.info("[ComfyUI] 未检测到ComfyUI，正在自动启动...")
 
         subprocess.Popen(
@@ -136,18 +145,19 @@ async def ensure_comfyui_running(
         while time.time() - start < timeout:
             if await is_comfyui_online():
                 logger.info(f"[ComfyUI] 启动成功（等待了{int(time.time()-start)}秒）")
-                _starting = False
                 return True
             await asyncio.sleep(3)
 
         logger.warning(f"[ComfyUI] 启动超时（{timeout}秒）")
-        _starting = False
         return False
 
     except Exception as e:
         logger.warning(f"[ComfyUI] 启动失败: {e}")
-        _starting = False
         return False
+    finally:
+        # 取消（BaseException）路径也会走到这里，这正是本处存在的意义
+        if started_here:
+            _starting = False
 
 
 async def generate_image(
@@ -160,6 +170,7 @@ async def generate_image(
     cfg: float = 7.0,
     seed: int = 0,
     quality: str = "hires",
+    timeout: int = 120,
 ) -> Optional[str]:
     """
     通过ComfyUI生成图片。
@@ -174,6 +185,10 @@ async def generate_image(
         cfg: CFG引导强度
         seed: 随机种子（0=随机）
         quality: 质量模式 "fast"=快速(15秒) / "hires"=精细Hires Fix(40秒)
+        timeout: 提交后等待生成完成的最长秒数。默认保持 120——调用方若确实需要
+            更久（大图/复杂工作流）应显式传入，而不是把全局默认拉长：
+            本地分支曾把它连同启动等待一起提到 600 秒，结果本地失败时
+            云端降级最长要干等 10 分钟。
 
     Returns:
         生成图片的本地路径，失败返回None
@@ -252,8 +267,8 @@ async def generate_image(
     if not prompt_id:
         return None
 
-    # 轮询等待完成（最多120秒）
-    result = await _wait_for_result(prompt_id, timeout=120)
+    # 轮询等待完成（默认 120 秒，调用方可按需放宽）
+    result = await _wait_for_result(prompt_id, timeout=timeout)
     if not result:
         logger.warning(f"[ComfyUI] 生成超时: {prompt_id}")
         return None

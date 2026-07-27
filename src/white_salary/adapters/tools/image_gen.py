@@ -190,7 +190,13 @@ async def _download_and_save(url_or_b64: str) -> Optional[str]:
         elif url_or_b64.startswith("http"):
             # URL格式：下载图片
             async with aiohttp.ClientSession() as session:
-                async with session.get(url_or_b64, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                # 显式要求不压缩：部分图床/CDN 会对二进制响应也做 gzip，
+                # 此时 resp.read() 拿到的是压缩流而不是图片本体，写进文件就是坏图。
+                async with session.get(
+                    url_or_b64,
+                    headers={"Accept-Encoding": "identity"},
+                    timeout=aiohttp.ClientTimeout(total=30),
+                ) as resp:
                     if resp.status == 200:
                         img_bytes = await resp.read()
                         ext = "png"
@@ -215,6 +221,7 @@ async def _try_comfyui(
     size: str,
     is_portrait: bool = False,
     startup_timeout: int = 60,
+    generation_timeout: int = 120,
 ) -> Optional[str]:
     """尝试ComfyUI本地生成（通过API遥控，不修改ComfyUI文件）。"""
     try:
@@ -250,6 +257,7 @@ async def _try_comfyui(
             width=width,
             height=height,
             quality=quality,
+            timeout=generation_timeout,
         )
         if result:
             logger.info(f"[ImageGen] ComfyUI本地生成成功: {result}")
