@@ -62,12 +62,27 @@ if not errorlevel 1 (
     ) else if not exist "!GPT_SOVITS_DIR!\api_v2.py" (
         echo       GPT-SoVITS api_v2.py was not found at: !GPT_SOVITS_DIR!
         echo       Skipping local TTS. Check the configured directory.
-    ) else if not exist "!GPT_SOVITS_DIR!\venv_new\Scripts\activate.bat" (
-        echo       GPT-SoVITS venv_new was not found at: !GPT_SOVITS_DIR!
-        echo       Skipping local TTS. Check the GPT-SoVITS installation.
     ) else (
+        rem GPT-SoVITS ships in two common runtime layouts. Support both:
+        rem   1. venv_new\Scripts\activate.bat - a venv created by the user
+        rem   2. runtime\python.exe            - the official bundled release
+        rem      (its own go-webui.bat runs "runtime\python.exe -I webui.py")
+        rem Requiring only venv_new made the official bundle - what most new
+        rem users download - report "not found" even though the directory was
+        rem detected correctly, so local TTS silently never started.
+        set "SOVITS_LAUNCH="
+        if exist "!GPT_SOVITS_DIR!\venv_new\Scripts\activate.bat" (
+            set "SOVITS_LAUNCH=call venv_new\Scripts\activate.bat ^&^& python api_v2.py"
+        ) else if exist "!GPT_SOVITS_DIR!\runtime\python.exe" (
+            set "SOVITS_LAUNCH=runtime\python.exe api_v2.py"
+        )
+        if not defined SOVITS_LAUNCH (
+            echo       No GPT-SoVITS runtime found at: !GPT_SOVITS_DIR!
+            echo       Looked for venv_new\Scripts\activate.bat and runtime\python.exe.
+            echo       Skipping local TTS. Cloud TTS or text fallback still work.
+        ) else (
         echo       Starting local TTS from: !GPT_SOVITS_DIR!
-        start "WhiteSalary-TTS" /D "!GPT_SOVITS_DIR!" cmd /k "call venv_new\Scripts\activate.bat && python api_v2.py -a 127.0.0.1 -p 9880 -c GPT_SoVITS/configs/tts_infer.yaml"
+        start "WhiteSalary-TTS" /D "!GPT_SOVITS_DIR!" cmd /k "!SOVITS_LAUNCH! -a 127.0.0.1 -p 9880 -c GPT_SoVITS/configs/tts_infer.yaml"
         echo       Waiting for the TTS port to become ready...
         call :wait_port 9880 90
         if errorlevel 1 (
@@ -77,6 +92,7 @@ if not errorlevel 1 (
         ) else (
             set "TTS_STATUS=running"
             echo       Local TTS is ready.
+        )
         )
     )
 )

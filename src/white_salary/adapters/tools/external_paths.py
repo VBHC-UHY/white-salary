@@ -365,7 +365,24 @@ def find_ffmpeg(
                 return candidate
         return None
 
-    lookups = (_from_path, _from_candidates) if prefer_path_first else (_from_candidates, _from_path)
+    def _from_detection() -> Optional[str]:
+        """自动探测兜底。
+
+        本函数不走 `_resolve()`（它有自己的 prefer_path_first 顺序），所以自动探测
+        必须在这里单独接一次。此前漏了这一步，导致 ffmpeg 的探测结果**没有任何
+        消费者**：白扫一遍磁盘，用户装了也用不上。实测场景就是"装了 ffmpeg 但
+        没加进 PATH"——恰恰是这个功能要解决的那一类。
+
+        与请求路径一样只读缓存、不同步扫盘（冷扫描要十几秒，不能卡在转码前）。
+        缓存由启动时的后台预热填充。
+        """
+        return _autodetect("ffmpeg_path") or None
+
+    lookups = (
+        (_from_path, _from_candidates, _from_detection)
+        if prefer_path_first
+        else (_from_candidates, _from_path, _from_detection)
+    )
     for lookup in lookups:
         found = lookup()
         if found:

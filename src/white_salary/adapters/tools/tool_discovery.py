@@ -303,6 +303,22 @@ def find_tool_dir(
             -len(str(p)),
         ),
     )
+
+    # 可用性下限：择优只是候选之间比高低，还需要一个绝对门槛。
+    #
+    # 没有它的话，"只找到一份、而且这份跑不起来"会照样返回并落盘，接着
+    # comfyui_client 真的去 Popen 那个必然失败的 .bat，轮询到超时才放弃——
+    # 用户每次出图干等一分钟，还留下游离进程。误报（用户 clone 了源码仓库、
+    # 留了个备份副本）正好落在这条路径上。
+    #
+    # 拿不到满分就当作"没找到"，让调用方按未配置处理并给出可操作提示。
+    if runnable and _usability_score(best, runnable) < 2:
+        logger.warning(
+            f"[ToolDiscovery] 找到疑似 {label} 于 {best}，但缺少运行环境"
+            f"（需要其中之一：{', '.join(runnable)}），按未配置处理。"
+            "若这就是你要用的安装，请在 conf.yaml 的 external_tools 里显式指定。"
+        )
+        return None
     if len(unique) > 1:
         others = [str(p) for p in unique if p != best]
         logger.info(
@@ -329,7 +345,10 @@ _SIGNATURES: dict[str, dict[str, tuple[str, ...]]] = {
     },
     # ComfyUI 便携版：启动脚本 + 主程序目录；便携版靠内嵌 python 运行
     "comfyui_dir": {
-        "markers": ("run_nvidia_gpu.bat", "ComfyUI"),
+        # marker 用硬件中立的 ComfyUI/main.py，不绑 run_nvidia_gpu.bat：
+        # 后者会把 AMD 常用的 ZLUDA / DirectML 分发版整份漏掉（它们 bat 名字不同），
+        # 同时让下面的 bat 选择逻辑失去意义（marker 保证了它必然存在）。
+        "markers": ("ComfyUI/main.py",),
         "runnable": ("python_embeded/python.exe",),
         # 只数"用户刻意装进去的模型"，不数 output。
         # 实测教训：某份副本积了 892 张输出图，仅凭 output 就把计数上限撑满，
@@ -340,8 +359,18 @@ _SIGNATURES: dict[str, dict[str, tuple[str, ...]]] = {
     # CosyVoice：核心包 + API 服务入口
     "cosyvoice_dir": {
         "markers": ("cosyvoice", "api_server.py"),
-        "runnable": ("venv/Scripts/activate.bat", "runtime/python.exe"),
-        "content": ("pretrained_models",),
+        # CosyVoice 与另外几个不同：它**不自带 python 运行环境**，
+        # 启动脚本里自己写着用哪个解释器（实测真实安装是
+        # `set PYTHON=<别处>\python_embeded\python.exe`，借用 ComfyUI 的内嵌 python）。
+        # 所以"能不能跑"的判据就是"有没有启动脚本"，而不是目录里有没有 venv。
+        #
+        # 早先这里写的是 venv/Scripts/activate.bat 与 runtime/python.exe —— 那是我
+        # 照另外几个工具的样子推测的，没有对照真实安装核对过。加上可用性下限后，
+        # 真实安装立刻被判为"不可运行"而整个消失。教训：指纹必须拿真实安装验证，
+        # 不能靠类比推断。
+        "runnable": ("start_cosyvoice.bat", "start.bat", "run.bat", "webui.py"),
+        # 权重目录名各版本不一，多列几个常见形态；都没有也不影响判定
+        "content": ("pretrained_models", "asset", "examples"),
     },
     # Wav2Lip：超参文件 + 权重目录；没有权重就跑不出结果
     "wav2lip_dir": {
@@ -451,15 +480,62 @@ def detect_gpt_sovits_dir() -> Optional[Path]:
     return _discover("gpt_sovits_dir", "GPT-SoVITS")
 
 
+def _has_nvidia_gpu() -> bool:
+    """本机是否有可用的 NVIDIA 显卡。
+
+    判据是 nvidia-smi 是否存在（驱动装好就会带它，且会放进 System32）。
+    比去 import torch 查 CUDA 便宜得多，也不需要拉起任何重依赖。
+    """
+    if shutil.which("nvidia-smi"):
+        return True
+    if os.name == "nt":
+        system32 = Path(os.environ.get("SystemRoot", "C:/Windows")) / "System32"
+        try:
+            return (system32 / "nvidia-smi.exe").exists()
+        except OSError:
+            return False
+    return False
+
+
 def detect_comfyui_bat() -> Optional[Path]:
-    """ComfyUI 启动脚本。优先 NVIDIA 版，没有则退 CPU 版。"""
+    """ComfyUI 启动脚本，按本机实际显卡挑。
+
+    此前写成"优先 run_nvidia_gpu.bat，没有则退 run_cpu.bat"，但
+    run_nvidia_gpu.bat 本身就在识别特征里，任何命中的目录必然有它 ——
+    第二项永远走不到。于是非 NVIDIA 用户会被拉起 CUDA 版：进程直接退出，
+    而 ensure_comfyui_running 要轮询到超时才放弃，**每次出图都白等一分钟**。
+
+    另外官方文档明确 run_cpu.bat 只用于排障，不是 AMD 的正常选择，
+    所以 AMD 相关分发版（ZLUDA / DirectML）的常见命名排在它前面。
+    """
     directory = _discover("comfyui_dir", "ComfyUI")
     if not directory:
         return None
-    for name in ("run_nvidia_gpu.bat", "run_cpu.bat"):
+
+    if _has_nvidia_gpu():
+        order = (
+            "run_nvidia_gpu.bat",
+            "run_nvidia_gpu_fast_fp16_accumulation.bat",
+            "run_cpu.bat",
+        )
+    else:
+        # 无 NVIDIA：绝不先试 CUDA 版。ZLUDA / DirectML 的常见命名优先，
+        # run_cpu.bat 作为最后兜底（能出图，只是慢）。
+        order = (
+            "run_zluda.bat",
+            "run_directml.bat",
+            "run_amd.bat",
+            "run_cpu.bat",
+        )
+
+    for name in order:
         candidate = directory / name
         if candidate.exists():
+            if not _is_shell_safe(candidate):
+                continue
             return candidate
+
+    logger.debug(f"[ToolDiscovery] {directory} 下没有可用的启动脚本")
     return None
 
 

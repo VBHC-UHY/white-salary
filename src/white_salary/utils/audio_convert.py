@@ -83,6 +83,19 @@ def find_ffmpeg() -> Optional[str]:
     for p in _KNOWN_FFMPEG_PATHS:
         if p.exists():
             return str(p)
+
+    # 自动探测兜底：覆盖"装了 ffmpeg 但没加进 PATH"这一类（很常见，
+    # 尤其是解压式安装）。本函数不走 external_paths._resolve，所以要单独接一次；
+    # 漏了这一步的话，探测出来的 ffmpeg 结果没有任何消费者。
+    # 与请求路径一样只读缓存、不同步扫盘（冷扫描十几秒，不能卡在转码前）。
+    try:
+        from white_salary.adapters.tools.external_paths import _autodetect
+
+        detected = _autodetect("ffmpeg_path")
+        if detected and Path(detected).exists():
+            return detected
+    except Exception:  # pragma: no cover - 探测失败只是回到"找不到"
+        pass
     return None
 
 

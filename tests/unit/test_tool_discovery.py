@@ -543,3 +543,203 @@ def test_shell_safety_check_accepts_normal_paths() -> None:
         "/opt/ai-tools/comfyui",
     ]:
         assert tool_discovery._is_shell_safe(Path(ok)) is True, ok
+
+
+# ---------------------------------------------------------------------------
+# 对抗审查抓出的三条：可用性下限 / 硬件中立 marker / ffmpeg 探测有消费者
+# ---------------------------------------------------------------------------
+
+
+def _make_comfyui(root: Path, *, runnable: bool, bats: tuple[str, ...] = ()) -> Path:
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "ComfyUI").mkdir(exist_ok=True)
+    (root / "ComfyUI" / "main.py").write_text("# fake", encoding="utf-8")
+    if runnable:
+        (root / "python_embeded").mkdir(exist_ok=True)
+        (root / "python_embeded" / "python.exe").write_text("x", encoding="utf-8")
+    for name in bats:
+        (root / name).write_text("@echo off", encoding="utf-8")
+    return root
+
+
+def test_lone_unusable_candidate_is_rejected(tmp_path: Path) -> None:
+    """只找到一份、而且这份跑不起来时，必须当作"没找到"。
+
+    没有这条下限的话，那个路径会被返回并落盘，接着 comfyui_client 真的去
+    Popen 一个必然失败的 .bat，轮询到超时才放弃——用户每次出图干等一分钟，
+    还留下游离进程。用户 clone 了源码仓库或留了备份副本正好落在这条路径上。
+    """
+    _make_comfyui(tmp_path / "source-only", runnable=False)
+
+    found = tool_discovery.find_tool_dir(
+        ("ComfyUI/main.py",),
+        label="ComfyUI",
+        runnable=("python_embeded/python.exe",),
+        search_roots=[tmp_path],
+    )
+
+    assert found is None, f"返回了跑不起来的 {found}"
+
+
+def test_usable_candidate_is_still_accepted(tmp_path: Path) -> None:
+    """下限不能把正常安装也挡掉（反向守卫）。"""
+    good = _make_comfyui(tmp_path / "portable", runnable=True)
+
+    found = tool_discovery.find_tool_dir(
+        ("ComfyUI/main.py",),
+        label="ComfyUI",
+        runnable=("python_embeded/python.exe",),
+        search_roots=[tmp_path],
+    )
+
+    assert found == good
+
+
+def test_comfyui_marker_is_hardware_neutral(tmp_path: Path) -> None:
+    """AMD 的 ZLUDA / DirectML 分发版（没有 run_nvidia_gpu.bat）也必须能被找到。
+
+    marker 曾写死 run_nvidia_gpu.bat，后果双向：这些分发版整份被漏掉，
+    而且让 detect_comfyui_bat 里的"退回 CPU 版"分支永远不可达
+    （marker 保证了 NVIDIA 版必然存在）。
+    """
+    assert "run_nvidia_gpu.bat" not in tool_discovery._SIGNATURES["comfyui_dir"]["markers"]
+
+    amd = _make_comfyui(tmp_path / "ComfyUI-Zluda", runnable=True, bats=("run_zluda.bat",))
+
+    spec = tool_discovery._SIGNATURES["comfyui_dir"]
+    found = tool_discovery.find_tool_dir(
+        spec["markers"],
+        label="ComfyUI",
+        runnable=spec.get("runnable", ()),
+        search_roots=[tmp_path],
+    )
+
+    assert found == amd
+
+
+def test_comfyui_bat_choice_avoids_cuda_without_nvidia(tmp_path: Path, monkeypatch) -> None:
+    """没有 NVIDIA 时绝不能先试 CUDA 版——那会让每次出图卡满超时。"""
+    directory = _make_comfyui(
+        tmp_path / "portable",
+        runnable=True,
+        bats=("run_nvidia_gpu.bat", "run_cpu.bat"),
+    )
+    monkeypatch.setattr(tool_discovery, "_discover", lambda key, label: directory)
+    monkeypatch.setattr(tool_discovery, "_has_nvidia_gpu", lambda: False)
+
+    chosen = tool_discovery.detect_comfyui_bat()
+
+    assert chosen is not None
+    assert "nvidia" not in chosen.name.lower(), f"无 NVIDIA 却选了 {chosen.name}"
+
+
+def test_comfyui_bat_choice_uses_cuda_when_available(tmp_path: Path, monkeypatch) -> None:
+    """有 NVIDIA 时应当用 CUDA 版（反向守卫，别修成永远走 CPU）。"""
+    directory = _make_comfyui(
+        tmp_path / "portable",
+        runnable=True,
+        bats=("run_nvidia_gpu.bat", "run_cpu.bat"),
+    )
+    monkeypatch.setattr(tool_discovery, "_discover", lambda key, label: directory)
+    monkeypatch.setattr(tool_discovery, "_has_nvidia_gpu", lambda: True)
+
+    chosen = tool_discovery.detect_comfyui_bat()
+
+    assert chosen is not None and chosen.name == "run_nvidia_gpu.bat"
+
+
+def test_amd_distribution_bat_is_preferred_over_cpu(tmp_path: Path, monkeypatch) -> None:
+    """无 NVIDIA 且存在 ZLUDA 版时，应当用 ZLUDA 而不是退到 CPU。
+
+    官方文档明确 run_cpu.bat 只用于排障，不是 AMD 的正常选择。
+    """
+    directory = _make_comfyui(
+        tmp_path / "portable",
+        runnable=True,
+        bats=("run_zluda.bat", "run_cpu.bat"),
+    )
+    monkeypatch.setattr(tool_discovery, "_discover", lambda key, label: directory)
+    monkeypatch.setattr(tool_discovery, "_has_nvidia_gpu", lambda: False)
+
+    chosen = tool_discovery.detect_comfyui_bat()
+
+    assert chosen is not None and chosen.name == "run_zluda.bat"
+
+
+def test_ffmpeg_detection_has_a_consumer(tmp_path: Path, monkeypatch) -> None:
+    """探测到的 ffmpeg 必须真的被 find_ffmpeg 使用。
+
+    此前两处 find_ffmpeg 都不走自动探测，于是扫了一遍磁盘找 ffmpeg，
+    结果没有任何消费者——"装了 ffmpeg 但没加进 PATH"这个恰好是本功能
+    要解决的场景，却完全没生效。
+    """
+    from white_salary.adapters.tools import external_paths as ep
+
+    fake = tmp_path / "ffmpeg" / "bin" / "ffmpeg.exe"
+    fake.parent.mkdir(parents=True)
+    fake.write_text("x", encoding="utf-8")
+
+    monkeypatch.delenv("WS_FFMPEG_PATH", raising=False)
+    monkeypatch.setattr(ep, "_config_value", lambda field, root=None: "")
+    # find_ffmpeg 内部是局部 import shutil，所以要打桩全局 shutil.which
+    import shutil as _shutil
+    monkeypatch.setattr(_shutil, "which", lambda name: None)  # PATH 里没有
+    monkeypatch.setattr(
+        tool_discovery, "detect", lambda field, allow_scan=True: str(fake)
+    )
+
+    assert ep.find_ffmpeg(prefer_path_first=True) == str(fake)
+
+
+def test_ffmpeg_explicit_config_still_wins(tmp_path: Path, monkeypatch) -> None:
+    """接了探测之后，显式配置仍必须优先（反向守卫）。"""
+    from white_salary.adapters.tools import external_paths as ep
+
+    explicit = tmp_path / "my-ffmpeg.exe"
+    explicit.write_text("x", encoding="utf-8")
+
+    monkeypatch.delenv("WS_FFMPEG_PATH", raising=False)
+    monkeypatch.setattr(ep, "_config_value", lambda field, root=None: str(explicit))
+    monkeypatch.setattr(
+        tool_discovery, "detect", lambda field, allow_scan=True: "D:/detected/elsewhere.exe"
+    )
+
+    assert ep.find_ffmpeg(prefer_path_first=True) == str(explicit)
+
+
+def test_cosyvoice_runnable_marker_matches_real_layout(tmp_path: Path) -> None:
+    """CosyVoice 的"可运行"判据必须是启动脚本，而不是目录内的 venv。
+
+    它与另外几个工具不同：**不自带 python 运行环境**，启动脚本里自己指定用哪个
+    解释器（实测真实安装是借用别处的 python_embeded）。早先这里按另外几个工具
+    的样子推测成 venv/Scripts/activate.bat 与 runtime/python.exe，
+    加上可用性下限后真实安装立刻被判为不可运行而整个消失——
+    是我自己的真机复验抓到的回归。
+
+    这条守的不只是 CosyVoice，而是那条原则：**指纹要拿真实安装验证，
+    不能靠类比其它工具推断。**
+    """
+    spec = tool_discovery._SIGNATURES["cosyvoice_dir"]
+    runnable = spec.get("runnable", ())
+
+    assert runnable, "CosyVoice 缺少可运行判据"
+    assert not any("venv" in marker for marker in runnable), (
+        f"CosyVoice 的可运行判据又回到了 venv 形态：{runnable}。"
+        "它不自带运行环境，判据应当是启动脚本。"
+    )
+
+    # 造一份真实形态：有 cosyvoice/ 与 api_server.py 与 start_cosyvoice.bat，但没有 venv
+    root = tmp_path / "CosyVoice"
+    (root / "cosyvoice").mkdir(parents=True)
+    (root / "api_server.py").write_text("# fake", encoding="utf-8")
+    (root / "start_cosyvoice.bat").write_text("@echo off", encoding="utf-8")
+
+    found = tool_discovery.find_tool_dir(
+        spec["markers"],
+        label="CosyVoice",
+        runnable=runnable,
+        content_dirs=spec.get("content", ()),
+        search_roots=[tmp_path],
+    )
+
+    assert found == root, "真实形态的 CosyVoice 安装被判为不可运行"
