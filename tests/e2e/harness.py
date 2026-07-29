@@ -221,6 +221,12 @@ class E2EStack:
         env["PYTHONPATH"] = str(PROJECT_ROOT / "src")
         env["PYTHONIOENCODING"] = "utf-8"
         env["PYTHONUNBUFFERED"] = "1"
+        # tests/conftest.py 为了让单元测试可复现，在 pytest 进程里设了
+        # WS_DISABLE_TOOL_AUTODETECT=1。这里的 env 是 dict(os.environ) 全量继承，
+        # 若不显式清掉，**后端子进程里的自动探测也是关着的**——
+        # 于是"新用户点启动能自动找到外部工具"这条产品承诺在端到端层面
+        # 根本没被验证过，而测试照样全绿。这正是本项目要极力避免的假绿。
+        env.pop("WS_DISABLE_TOOL_AUTODETECT", None)
         return env
 
     def start(self) -> None:

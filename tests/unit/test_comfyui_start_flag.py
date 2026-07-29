@@ -13,12 +13,21 @@
 from __future__ import annotations
 
 import asyncio
+import os
 
 import pytest
 
 from white_salary.adapters.tools import comfyui_client
 
 
+@pytest.mark.skipif(
+    os.name != "nt",
+    reason=(
+        "ensure_comfyui_running 对非 Windows 直接 return False（.bat 自动启动只支持 "
+        "Windows），任务在 cancel() 之前就已结束，构造不出取消场景。"
+        "本用例守的是 Windows 上的 _starting 标志复位。"
+    ),
+)
 @pytest.mark.asyncio
 async def test_starting_flag_is_released_when_cancelled(monkeypatch, tmp_path) -> None:
     """被取消时 _starting 必须复位，否则自动启动能力永久失效。"""

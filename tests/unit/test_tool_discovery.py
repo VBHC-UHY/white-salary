@@ -161,8 +161,13 @@ def test_explicit_config_wins_over_detection(tmp_path: Path, monkeypatch) -> Non
     from white_salary.adapters.tools import external_paths as ep
 
     monkeypatch.setattr(ep, "_config_value", lambda field, root=None: "D:/my/explicit/choice")
+    # 打桩签名必须与生产调用一致（detect(field, allow_scan=...)）。
+    # 早先写成单参 lambda，参数不匹配抛 TypeError 被宽 except 吞掉后同样返回 ""，
+    # 于是断言为了错误的原因通过——把开关删掉用例照样绿。
     monkeypatch.setattr(
-        tool_discovery, "detect", lambda field: "D:/auto/detected/elsewhere"
+        tool_discovery,
+        "detect",
+        lambda field, allow_scan=True: "D:/auto/detected/elsewhere",
     )
 
     resolved = ep._resolve("WS_NOT_SET_ANYWHERE", "gpt_sovits_dir", "")
@@ -176,7 +181,9 @@ def test_environment_variable_wins_over_everything(monkeypatch) -> None:
 
     monkeypatch.setenv("WS_TEST_TOOL_PATH", "E:/from/env")
     monkeypatch.setattr(ep, "_config_value", lambda field, root=None: "D:/from/config")
-    monkeypatch.setattr(tool_discovery, "detect", lambda field: "D:/from/detection")
+    monkeypatch.setattr(
+        tool_discovery, "detect", lambda field, allow_scan=True: "D:/from/detection"
+    )
 
     resolved = ep._resolve("WS_TEST_TOOL_PATH", "gpt_sovits_dir", "")
 
@@ -189,7 +196,7 @@ def test_detection_failure_never_breaks_resolution(monkeypatch) -> None:
 
     monkeypatch.setattr(ep, "_config_value", lambda field, root=None: "")
 
-    def _boom(field):
+    def _boom(field, allow_scan=True):
         raise RuntimeError("扫描时磁盘出错")
 
     monkeypatch.setattr(tool_discovery, "detect", _boom)
@@ -238,15 +245,59 @@ def test_detection_does_not_hardcode_any_absolute_path() -> None:
     )
 
 
-def test_autodetect_can_be_disabled_by_env(monkeypatch) -> None:
-    """开关必须真的能关掉探测——测试与 CI 的可复现性依赖它。"""
-    from white_salary.adapters.tools import external_paths as ep
+@pytest.mark.parametrize("entry", ["detect", "detect_all", "warm_up_async", "rescan"])
+def test_master_switch_stops_every_scan_entry_point(monkeypatch, tmp_path, entry) -> None:
+    """总开关必须挡住**所有**入口，不能只挡请求路径那一条。
 
-    monkeypatch.setattr(ep, "_config_value", lambda field, root=None: "")
-    monkeypatch.setattr(tool_discovery, "detect", lambda field: "D:/should/not/be/used")
+    早先开关只写在 external_paths._autodetect 里，于是 run_server 启动时调的
+    warm_up_async() 照样起线程扫全盘——用户/CI 明明关掉了探测，代价照付、
+    结果又被请求路径的开关挡住用不上，两头亏。
+
+    断言方式是**行为探针**：直接看真正扫盘的 find_tool_dir 有没有被调用。
+    不再打桩 detect —— 那样一旦签名或实现变化，用例会为错误的原因通过。
+    """
+    tool_discovery.configure_cache_path(tmp_path / "tool_paths.json")
     monkeypatch.setenv("WS_DISABLE_TOOL_AUTODETECT", "1")
 
-    assert ep._resolve("WS_NOT_SET_ANYWHERE", "gpt_sovits_dir", "") == ""
+    scanned: list[str] = []
+    monkeypatch.setattr(
+        tool_discovery,
+        "find_tool_dir",
+        lambda *a, **k: scanned.append(k.get("label", "?")) or None,
+    )
+
+    if entry == "detect":
+        assert tool_discovery.detect("gpt_sovits_dir") == ""
+    elif entry == "detect_all":
+        assert set(tool_discovery.detect_all().values()) == {""}
+    elif entry == "warm_up_async":
+        tool_discovery.warm_up_async()
+        import time as _t
+
+        _t.sleep(0.3)  # 给后台线程机会（若它真的启动了）
+    else:
+        assert tool_discovery.rescan() == {}
+
+    assert not scanned, (
+        f"入口 {entry} 在探测被显式关闭时仍然扫盘了（{scanned}）"
+    )
+
+
+def test_switch_removal_would_be_caught(monkeypatch, tmp_path) -> None:
+    """反向自检：开关判定函数必须真的读环境变量。
+
+    这条守的是"开关被改成恒返回 False"这类回归——上面那些用例都建立在
+    autodetect_disabled() 可信之上。
+    """
+    monkeypatch.delenv("WS_DISABLE_TOOL_AUTODETECT", raising=False)
+    assert tool_discovery.autodetect_disabled() is False
+
+    for truthy in ("1", "true", "TRUE", "yes", "on"):
+        monkeypatch.setenv("WS_DISABLE_TOOL_AUTODETECT", truthy)
+        assert tool_discovery.autodetect_disabled() is True, truthy
+
+    monkeypatch.setenv("WS_DISABLE_TOOL_AUTODETECT", "0")
+    assert tool_discovery.autodetect_disabled() is False
 
 
 # ---------------------------------------------------------------------------

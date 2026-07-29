@@ -34,6 +34,7 @@ from __future__ import annotations
 import os
 import shutil
 import string
+import time
 from pathlib import Path
 from typing import Callable, Iterable, Optional
 
@@ -59,18 +60,29 @@ _LIKELY_PARENT_NAMES = {
 
 
 def _fixed_drive_roots() -> list[Path]:
-    """本机所有可访问的固定盘根目录。"""
+    """本机所有可访问的固定盘根目录。
+
+    **非 Windows 上返回空列表，不做目录扫描。** 本模块的全部识别特征都是
+    Windows 专属的（`run_nvidia_gpu.bat`、`venv_new/Scripts/activate.bat`、
+    `python_embeded/python.exe`、`start_cosyvoice.bat`），在 Linux/macOS 上
+    结构性地永远不可能命中；而 comfyui_client 的自动启动本身也对非 Windows
+    直接拒绝（"服务器环境请单独启动并配置 API 地址"）。
+
+    所以在 Linux 上扫 `/` 纯属白干，还会把 /proc、/sys、/dev 这类伪文件系统
+    扫进去——服务器上既慢又可能踩到奇怪的挂载点。ffmpeg 不受影响：它走
+    `shutil.which()` 查 PATH，那条路在所有平台都有效。
+    """
+    if os.name != "nt":
+        return []
+
     roots: list[Path] = []
-    if os.name == "nt":
-        for letter in string.ascii_uppercase:
-            root = Path(f"{letter}:/")
-            try:
-                if root.exists():
-                    roots.append(root)
-            except OSError:
-                continue
-    else:
-        roots.append(Path("/"))
+    for letter in string.ascii_uppercase:
+        root = Path(f"{letter}:/")
+        try:
+            if root.exists():
+                roots.append(root)
+        except OSError:
+            continue
     return roots
 
 
@@ -354,6 +366,18 @@ _cache: dict[str, Optional[Path]] = {}
 # 都验证是否仍然存在——用户挪动或删除工具后不能让陈旧路径把启动带进坑里。
 # ---------------------------------------------------------------------------
 
+def autodetect_disabled() -> bool:
+    """探测是否被显式关闭。
+
+    **这是唯一权威判断，所有入口都必须查它。** 早先只在 external_paths 里查，
+    于是 `warm_up_async()` 照样起线程扫全盘——用户/CI 明明关掉了探测，
+    代价照付、结果却被请求路径那边的开关挡住用不上，两头亏。
+    """
+    return os.environ.get("WS_DISABLE_TOOL_AUTODETECT", "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
 _CACHE_VERSION = 1
 _disk_cache_path: Optional[Path] = None
 _disk_cache_loaded = False
@@ -498,9 +522,13 @@ def detect(config_field: str, *, allow_scan: bool = True) -> str:
     detector = _DETECTORS.get(config_field)
     if detector is None:
         return ""
+    if autodetect_disabled():
+        return ""
 
-    # 一、磁盘缓存（并验证路径仍然存在——用户可能挪走或删掉了工具）
-    cached = _load_disk_cache().get(config_field, "")
+    disk = _load_disk_cache()
+
+    # 一、命中缓存（并验证路径仍然存在——用户可能挪走或删掉了工具）
+    cached = disk.get(config_field, "")
     if cached:
         try:
             if Path(cached).exists():
@@ -508,14 +536,25 @@ def detect(config_field: str, *, allow_scan: bool = True) -> str:
         except OSError:
             pass
         logger.info(f"[ToolDiscovery] 缓存的 {config_field} 已失效，将重新探测: {cached}")
-        _disk_cache.pop(config_field, None)
-        _cache.clear()
+        disk.pop(config_field, None)
+        _cache.pop(_cache_key_for(config_field), None)
         _save_disk_cache()
+
+    # 二、负缓存：上次扫过但没找到。
+    #
+    # 若不记这一笔，没装这些工具的用户**每次启动都要把所有固定盘重扫一遍**，
+    # 而启动器那条链路是前台阻塞的（Start.bat 等 resolve 脚本输出），
+    # 等于每次点启动白等十几秒还什么都没得到。
+    # 记一个时间戳，过期后才允许重试——用户装好工具后不必手动清缓存。
+    miss_key = f"__miss__{config_field}"
+    last_miss = disk.get(miss_key, "")
+    if last_miss and not _miss_expired(last_miss):
+        return ""
 
     if not allow_scan:
         return ""
 
-    # 二、真扫（结果落盘，后续启动不再付这个代价）
+    # 三、真扫（结果落盘，后续启动不再付这个代价）
     try:
         found = detector()
     except Exception as exc:  # 探测失败绝不能影响主流程
@@ -523,11 +562,38 @@ def detect(config_field: str, *, allow_scan: bool = True) -> str:
         return ""
 
     if not found:
+        disk[miss_key] = str(int(time.time()))
+        _save_disk_cache()
         return ""
 
-    _load_disk_cache()[config_field] = str(found)
+    disk.pop(miss_key, None)
+    disk[config_field] = str(found)
     _save_disk_cache()
     return str(found)
+
+
+# 负缓存有效期：没找到的结论只信这么久，之后允许重扫。
+# 取一天——用户今天装好工具，明天最迟也能被自动发现，而不必知道有个缓存文件要删。
+# 想立刻生效可以在设置面板点"重新扫描"（rescan）。
+_MISS_TTL_SECONDS = 24 * 3600
+
+
+def _miss_expired(stamp: str) -> bool:
+    try:
+        return (time.time() - float(stamp)) > _MISS_TTL_SECONDS
+    except (TypeError, ValueError):
+        return True
+
+
+def _cache_key_for(config_field: str) -> str:
+    """配置字段 → 内存缓存键（多个字段可能共享同一次目录探测）。"""
+    if config_field.startswith("comfyui"):
+        return "comfyui_dir"
+    if config_field.startswith("cosyvoice"):
+        return "cosyvoice_dir"
+    if config_field.startswith("ffmpeg"):
+        return "ffmpeg"
+    return config_field
 
 
 def detect_all(*, allow_scan: bool = True) -> dict[str, str]:
@@ -541,6 +607,10 @@ def warm_up_async() -> None:
     在服务启动时调一次即可：把那 15 秒的冷扫描放到后台，等真正要用路径时
     缓存通常已经就绪；即使没就绪，请求路径走 allow_scan=False 也不会被卡住。
     """
+    if autodetect_disabled():
+        logger.debug("[ToolDiscovery] 探测已被 WS_DISABLE_TOOL_AUTODETECT 关闭，跳过预热")
+        return
+
     import threading
 
     def _run() -> None:
@@ -554,7 +624,13 @@ def warm_up_async() -> None:
 
 
 def rescan() -> dict[str, str]:
-    """强制重新扫描并覆盖缓存（设置面板的"重新扫描"按钮用）。"""
+    """强制重新扫描并覆盖缓存（设置面板的"重新扫描"按钮用）。
+
+    注意也受总开关约束：显式关闭探测时不做任何事，避免"关了却还在扫盘"。
+    """
+    if autodetect_disabled():
+        logger.info("[ToolDiscovery] 探测已被显式关闭，重新扫描请求被忽略")
+        return {}
     clear_cache(clear_disk=True)
     return detect_all(allow_scan=True)
 
