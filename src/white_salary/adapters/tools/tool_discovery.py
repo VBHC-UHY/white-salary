@@ -75,17 +75,25 @@ def _fixed_drive_roots() -> list[Path]:
 
 
 def _candidate_roots(extra: Iterable[Path] = ()) -> list[Path]:
-    """候选起点：盘根 + 用户目录 + 调用方补充的位置。"""
+    """候选起点：盘根 + 调用方补充的位置。
+
+    **刻意不含下载/桌面/文档目录。** 这不是为了少扫几个地方，而是安全边界：
+
+    探测出来的路径最终会被 `subprocess` 启动（ComfyUI 的 .bat、CosyVoice 的
+    .bat）。把下载目录纳入扫描，等于"用户解压一个 zip 就可能让里面的批处理
+    被自动执行"——攻击者只需在压缩包里放上 run_nvidia_gpu.bat + ComfyUI/ +
+    python_embeded/python.exe，就能被认成"可运行的 ComfyUI"并在用户下次出图时
+    被拉起。已实测复现。
+
+    本改动前只有用户显式配置的路径会被执行，风险由用户自己掌握；探测把这个面
+    扩大到了整块磁盘，因此必须把"未受信任内容的落地区"排除掉。真实的工具安装
+    也不会待在下载目录里——用户会把它解压/移动到一个正式位置再用。
+
+    用户确实想用非常规位置的工具时，仍可在 conf.yaml 的 external_tools 里显式
+    指定（那是他自己的明确选择，优先级也最高）。
+    """
     roots = list(extra)
     roots.extend(_fixed_drive_roots())
-    home = Path.home()
-    for name in ("Desktop", "Downloads", "Documents", "桌面", "下载", "文档"):
-        candidate = home / name
-        try:
-            if candidate.is_dir():
-                roots.append(candidate)
-        except OSError:
-            continue
     # 去重且保持顺序
     seen: set[str] = set()
     unique: list[Path] = []
@@ -121,6 +129,25 @@ def _iter_dirs(root: Path, max_depth: int = _MAX_DEPTH):
                         frontier.append((path, depth + 1))
         except (PermissionError, OSError):
             continue
+
+
+# 会被 cmd.exe 当作语法的字符。探测出来的路径最终会进
+# `subprocess.Popen(..., shell=True)`，含这些字符的路径要么被截断、要么被当成
+# 命令分隔符执行后半段。实测：`echo A & echo INJECTED` 会真的执行两条命令。
+#
+# 正规的工具安装目录不会带这些字符，所以这里直接拒绝而不是尝试转义——
+# 自动探测是"替用户猜"，猜到可疑的东西就该退回"未配置"让用户自己指定，
+# 而不是想办法把它跑起来。
+_SHELL_UNSAFE_CHARS = frozenset('&|<>^"\'`$;\n\r\t')
+
+
+def _is_shell_safe(path: Path) -> bool:
+    """路径是否可以安全地交给 shell 启动。"""
+    text = str(path)
+    if any(char in _SHELL_UNSAFE_CHARS for char in text):
+        return False
+    # 百分号在 cmd 里会触发变量展开（%PATH% 之类），成对出现时尤其危险
+    return text.count("%") < 2
 
 
 def _looks_like(directory: Path, markers: tuple[str, ...]) -> bool:
@@ -222,18 +249,25 @@ def find_tool_dir(
         except (PermissionError, OSError):
             continue
 
+    def _accept(directory: Path) -> None:
+        if not _looks_like(directory, markers):
+            return
+        if not _is_shell_safe(directory):
+            logger.warning(
+                f"[ToolDiscovery] 跳过路径含 shell 特殊字符的 {label} 候选（不安全）: {directory}"
+            )
+            return
+        candidates.append(directory)
+
     for parent in priority:
-        if _looks_like(parent, markers):
-            candidates.append(parent)
+        _accept(parent)
         for directory in _iter_dirs(parent, max_depth=2):
-            if _looks_like(directory, markers):
-                candidates.append(directory)
+            _accept(directory)
 
     # 第二轮：逐盘浅扫（深度 2），覆盖直接解压在盘根的情况
     for root in roots:
         for directory in _iter_dirs(root, max_depth=2):
-            if _looks_like(directory, markers):
-                candidates.append(directory)
+            _accept(directory)
 
     if not candidates:
         logger.debug(f"[ToolDiscovery] 未能自动找到 {label}")

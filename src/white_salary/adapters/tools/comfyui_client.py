@@ -129,10 +129,20 @@ async def ensure_comfyui_running(
         started_here = True
         logger.info("[ComfyUI] 未检测到ComfyUI，正在自动启动...")
 
+        # 不用 shell=True。
+        #
+        # 原来是 `Popen(str(bat), shell=True)`，等于把路径拼进 cmd.exe 的命令行——
+        # 路径里只要有 `&`、`|`、`^`、`%VAR%` 之类，cmd 就会按语法切分并执行后半段
+        # （实测 `echo A & echo INJECTED` 会真的跑两条命令）。这个路径以前只来自
+        # 用户自己的配置，风险可控；加了自动探测之后它可能来自磁盘扫描，
+        # 就必须按不可信输入对待。
+        #
+        # 用 cmd /c + 参数列表：路径作为独立参数传递，由 Windows 负责转义，
+        # 不再经过 shell 的语法解析。cmd /c 是必要的——.bat 不是可执行映像，
+        # CreateProcess 不能直接启动它。
         subprocess.Popen(
-            str(comfyui_bat),
+            [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/c", str(comfyui_bat)],
             cwd=str(comfyui_bat.parent),
-            shell=True,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             creationflags=getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0)

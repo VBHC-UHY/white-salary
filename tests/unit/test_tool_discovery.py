@@ -364,3 +364,131 @@ def test_allow_scan_false_returns_empty_on_cold_cache(tmp_path, monkeypatch) -> 
     )
 
     assert tool_discovery.detect("gpt_sovits_dir", allow_scan=False) == ""
+
+
+# ---------------------------------------------------------------------------
+# 安全边界
+#
+# 这一组守的是自动探测引入的一个真实安全回归（已实测复现后修掉）：
+#
+# 改动前，被 subprocess 启动的路径**只来自用户显式配置**，风险由用户自己掌握。
+# 加了磁盘扫描之后，任何符合特征的目录都可能被自动启动。而我最初把
+# 下载/桌面/文档目录也纳入了扫描范围——那正是未受信任内容的落地区。
+#
+# 完整攻击链（已实测）：攻击者提供一个 zip，内含
+# run_nvidia_gpu.bat + ComfyUI/ + python_embeded/python.exe；
+# 用户只要解压到下载目录，它就会被认成"可运行的 ComfyUI"，
+# 并在下次出图时被 subprocess 拉起 —— 用户没做任何其它操作。
+# ---------------------------------------------------------------------------
+
+
+def test_download_and_desktop_dirs_are_not_scanned() -> None:
+    """下载/桌面/文档目录绝不能进扫描范围。
+
+    它们是未受信任内容的落地区，而探测结果会被 subprocess 启动。
+    真实的工具安装也不会待在下载目录里。
+    """
+    roots = [str(r).lower() for r in tool_discovery._candidate_roots()]
+    for banned in ("downloads", "desktop", "documents", "下载", "桌面", "文档"):
+        offenders = [r for r in roots if banned in r]
+        assert not offenders, (
+            f"候选起点包含 {banned!r}：{offenders}。"
+            "用户解压一个 zip 就可能让里面的批处理被自动执行。"
+        )
+
+
+# 只列 Windows 文件系统真能创建的字符。`|` `"` `<` `>` 等是 Windows 的非法
+# 文件名字符（实测 mkdir 直接报 WinError 123），攻击者在 Windows 上构造不出来；
+# 但 Linux/macOS 允许，所以 _is_shell_safe 仍然要拦它们——只是没法在本用例里造。
+@pytest.mark.parametrize(
+    "evil_name",
+    [
+        "ComfyUI_portable & calc",
+        "ComfyUI^escape",
+        "ComfyUI%PATH%expand",
+        "ComfyUI;semicolon",
+        "ComfyUI$dollar",
+    ],
+)
+def test_shell_unsafe_paths_are_rejected(tmp_path: Path, evil_name: str) -> None:
+    """路径含 shell 语法字符时必须拒绝，而不是想办法把它跑起来。
+
+    这些路径最终会进 subprocess；`&` 在 cmd 下会被当命令分隔符
+    （实测 `echo A & echo INJECTED` 会真的执行两条命令）。
+    正规安装目录不会带这些字符，所以直接退回"未配置"让用户显式指定更安全。
+    """
+    evil = tmp_path / evil_name
+    (evil / "ComfyUI").mkdir(parents=True)
+    (evil / "run_nvidia_gpu.bat").write_text("x", encoding="utf-8")
+    (evil / "python_embeded").mkdir()
+    (evil / "python_embeded" / "python.exe").write_text("x", encoding="utf-8")
+
+    found = tool_discovery.find_tool_dir(
+        ("run_nvidia_gpu.bat", "ComfyUI"),
+        label="ComfyUI",
+        runnable=("python_embeded/python.exe",),
+        search_roots=[tmp_path],
+    )
+
+    assert found is None, f"含 shell 特殊字符的路径被接受了: {found}"
+
+
+def test_safe_path_still_wins_when_an_unsafe_sibling_exists(tmp_path: Path) -> None:
+    """有可疑候选时不能整体放弃——正常那份仍要被选中。"""
+    for name in ("ComfyUI_evil & calc", "ComfyUI_normal"):
+        target = tmp_path / name
+        (target / "ComfyUI").mkdir(parents=True)
+        (target / "run_nvidia_gpu.bat").write_text("x", encoding="utf-8")
+        (target / "python_embeded").mkdir()
+        (target / "python_embeded" / "python.exe").write_text("x", encoding="utf-8")
+
+    found = tool_discovery.find_tool_dir(
+        ("run_nvidia_gpu.bat", "ComfyUI"),
+        label="ComfyUI",
+        runnable=("python_embeded/python.exe",),
+        search_roots=[tmp_path],
+    )
+
+    assert found is not None and found.name == "ComfyUI_normal"
+
+
+@pytest.mark.parametrize("module_name", ["comfyui_client", "cosyvoice_client"])
+def test_external_tools_are_not_launched_through_a_shell(module_name: str) -> None:
+    """启动外部工具不得用 shell=True。
+
+    路径可能来自磁盘扫描，必须按不可信输入对待。改用 cmd /c + 参数列表：
+    路径作为独立参数由 Windows 转义，不再经过 shell 语法解析。
+    （.bat 不是可执行映像，所以 cmd /c 是必要的，不能直接 CreateProcess。）
+    """
+    import importlib
+    import inspect
+
+    module = importlib.import_module(f"white_salary.adapters.tools.{module_name}")
+    source = inspect.getsource(module)
+
+    launch_block = source.split("subprocess.Popen", 1)
+    assert len(launch_block) > 1, f"{module_name} 里找不到 subprocess.Popen"
+    assert "shell=True" not in launch_block[1][:400], (
+        f"{module_name} 仍用 shell=True 启动外部工具，路径里的 & | % 会被当命令执行"
+    )
+
+
+@pytest.mark.parametrize(
+    "unsafe",
+    ["/tools/ComfyUI|whoami", '/tools/ComfyUI"quote', "/tools/ComfyUI`cmd`", "/tools/a" + chr(10) + "b"],
+)
+def test_shell_safety_check_rejects_posix_only_characters(unsafe: str) -> None:
+    """`|` `"` 反引号 换行 在 Windows 上是非法文件名，造不出目录来测；
+    但 Linux/macOS 允许，所以直接对判定函数做字符串级校验。"""
+    assert tool_discovery._is_shell_safe(Path(unsafe)) is False
+
+
+def test_shell_safety_check_accepts_normal_paths() -> None:
+    """正常路径（含空格、中文、括号、连字符）不得被误拦。"""
+    for ok in [
+        "D:/AI Tools/GPT-SoVITS",
+        "E:/我的工具/ComfyUI_windows_portable",
+        "C:/Program Files (x86)/tool",
+        "/opt/ai-tools/comfyui",
+    ]:
+        assert tool_discovery._is_shell_safe(Path(ok)) is True, ok

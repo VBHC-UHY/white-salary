@@ -9,6 +9,7 @@ white_salary/adapters/tools/cosyvoice_client.py
   3. 发送文本 → 接收WAV音频 → 保存到本地
 """
 
+import os
 import subprocess
 import time
 from pathlib import Path
@@ -75,10 +76,12 @@ async def ensure_running(timeout: int = 120) -> bool:
         _starting = True
         logger.info("[CosyVoice2] 自动启动中...")
 
+        # 同 comfyui_client：不经 shell 传路径。
+        # 该路径可能来自自动探测（磁盘扫描），必须按不可信输入对待；
+        # `shell=True` 下路径里的 `&`/`|`/`%VAR%` 会被 cmd 当语法执行。
         subprocess.Popen(
-            str(cosyvoice_bat),
+            [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/c", str(cosyvoice_bat)],
             cwd=str(cosyvoice_bat.parent),
-            shell=True,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             creationflags=getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0)
