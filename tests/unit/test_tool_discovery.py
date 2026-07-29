@@ -247,3 +247,120 @@ def test_autodetect_can_be_disabled_by_env(monkeypatch) -> None:
     monkeypatch.setenv("WS_DISABLE_TOOL_AUTODETECT", "1")
 
     assert ep._resolve("WS_NOT_SET_ANYWHERE", "gpt_sovits_dir", "") == ""
+
+
+# ---------------------------------------------------------------------------
+# 磁盘缓存与"不许在请求路径同步扫盘"
+#
+# 这一组守的是一个实测出来的严重问题：冷缓存下单次探测要 **15 秒**（热缓存只要
+# 0.8 秒，所以开发时极易被"看起来很快"骗过去）。而路径解析会被请求处理路径调用，
+# 同步扫十几秒会把事件循环整个卡死——用户看到的就是"点了没反应"。
+# ---------------------------------------------------------------------------
+
+
+def test_request_path_never_triggers_a_scan(monkeypatch, tmp_path) -> None:
+    """external_paths 解析绝不能同步扫盘。
+
+    这是防"点了没反应"的关键约束：真正的扫描交给启动时的后台预热。
+    """
+    from white_salary.adapters.tools import external_paths as ep
+
+    tool_discovery.configure_cache_path(tmp_path / "tool_paths.json")
+    monkeypatch.setattr(ep, "_config_value", lambda field, root=None: "")
+
+    scanned = []
+
+    def _tripwire(*args, **kwargs):
+        scanned.append(kwargs.get("label", "?"))
+        return None
+
+    monkeypatch.setattr(tool_discovery, "find_tool_dir", _tripwire)
+
+    ep._resolve("WS_NOT_SET_ANYWHERE", "gpt_sovits_dir", "")
+
+    assert not scanned, (
+        f"路径解析触发了同步扫盘（{scanned}）。冷缓存下这会阻塞十几秒，"
+        "必须走 allow_scan=False + 启动时后台预热。"
+    )
+
+
+def test_disk_cache_survives_process_restart(tmp_path, monkeypatch) -> None:
+    """探测结果要落盘，下次启动直接读，不必再付扫盘代价。"""
+    cache_file = tmp_path / "tool_paths.json"
+    tool_discovery.configure_cache_path(cache_file)
+
+    real = _make_gpt_sovits(tmp_path / "tools" / "sovits", runnable=True)
+    monkeypatch.setitem(
+        tool_discovery._DETECTORS, "gpt_sovits_dir", lambda: real
+    )
+
+    assert tool_discovery.detect("gpt_sovits_dir") == str(real)
+    assert cache_file.exists(), "探测结果没有落盘"
+
+    # 模拟新进程：清空内存缓存，且让扫描函数一旦被调用就失败
+    tool_discovery.configure_cache_path(cache_file)
+    monkeypatch.setitem(
+        tool_discovery._DETECTORS,
+        "gpt_sovits_dir",
+        lambda: (_ for _ in ()).throw(AssertionError("不该再扫盘")),
+    )
+
+    assert tool_discovery.detect("gpt_sovits_dir") == str(real)
+
+
+def test_stale_cache_entry_is_discarded(tmp_path, monkeypatch) -> None:
+    """缓存里的路径已经不存在时必须丢弃并重新探测。
+
+    用户挪走或删掉工具后，不能让陈旧路径把启动带进坑里。
+    """
+    cache_file = tmp_path / "tool_paths.json"
+    tool_discovery.configure_cache_path(cache_file)
+
+    gone = tmp_path / "moved-away"
+    cache_file.write_text(
+        '{"version": 1, "paths": {"gpt_sovits_dir": "%s"}}' % gone.as_posix(),
+        encoding="utf-8",
+    )
+
+    fresh = _make_gpt_sovits(tmp_path / "tools" / "new-location", runnable=True)
+    monkeypatch.setitem(tool_discovery._DETECTORS, "gpt_sovits_dir", lambda: fresh)
+
+    assert tool_discovery.detect("gpt_sovits_dir") == str(fresh)
+
+
+def test_corrupt_cache_file_does_not_break_detection(tmp_path, monkeypatch) -> None:
+    """缓存文件损坏（半截 JSON / 手改坏了）时当作没有缓存，而不是崩掉。"""
+    cache_file = tmp_path / "tool_paths.json"
+    cache_file.write_text("{这不是合法 JSON", encoding="utf-8")
+    tool_discovery.configure_cache_path(cache_file)
+
+    real = _make_gpt_sovits(tmp_path / "tools" / "sovits", runnable=True)
+    monkeypatch.setitem(tool_discovery._DETECTORS, "gpt_sovits_dir", lambda: real)
+
+    assert tool_discovery.detect("gpt_sovits_dir") == str(real)
+
+
+def test_cache_version_mismatch_is_ignored(tmp_path, monkeypatch) -> None:
+    """缓存格式版本不匹配时整体作废，避免旧格式被误读。"""
+    cache_file = tmp_path / "tool_paths.json"
+    cache_file.write_text(
+        '{"version": 999, "paths": {"gpt_sovits_dir": "D:/whatever"}}', encoding="utf-8"
+    )
+    tool_discovery.configure_cache_path(cache_file)
+
+    real = _make_gpt_sovits(tmp_path / "tools" / "sovits", runnable=True)
+    monkeypatch.setitem(tool_discovery._DETECTORS, "gpt_sovits_dir", lambda: real)
+
+    assert tool_discovery.detect("gpt_sovits_dir") == str(real)
+
+
+def test_allow_scan_false_returns_empty_on_cold_cache(tmp_path, monkeypatch) -> None:
+    """缓存未就绪且禁止扫盘时，返回空而不是阻塞——调用方按"未配置"处理。"""
+    tool_discovery.configure_cache_path(tmp_path / "tool_paths.json")
+    monkeypatch.setitem(
+        tool_discovery._DETECTORS,
+        "gpt_sovits_dir",
+        lambda: (_ for _ in ()).throw(AssertionError("禁扫模式下不该扫盘")),
+    )
+
+    assert tool_discovery.detect("gpt_sovits_dir", allow_scan=False) == ""

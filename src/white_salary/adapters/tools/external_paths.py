@@ -178,7 +178,15 @@ def _autodetect(config_field: str) -> str:
     try:
         from white_salary.adapters.tools.tool_discovery import detect
 
-        return detect(config_field)
+        # allow_scan=False：**这里绝不能同步扫盘**。
+        # 本机实测冷缓存下一次全盘浅扫要 15 秒（热缓存 0.8 秒，开发时极易被骗过去），
+        # 而本函数会被请求处理路径调用（例如设置面板的 TTS 状态检查是每次请求
+        # 重新解析）。同步扫十几秒会把整个事件循环卡死，用户看到的正是"点了没反应"。
+        #
+        # 真正的扫描交给启动时的后台预热（tool_discovery.warm_up_async），
+        # 结果落盘后后续启动只需读一个小 JSON。缓存还没就绪时这里返回空，
+        # 调用方按"未配置"处理并给出可操作提示，不会卡住任何人。
+        return detect(config_field, allow_scan=False)
     except Exception:  # pragma: no cover - 防御性
         return ""
 

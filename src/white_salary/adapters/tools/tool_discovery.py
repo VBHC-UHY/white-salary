@@ -307,6 +307,71 @@ _SIGNATURES: dict[str, dict[str, tuple[str, ...]]] = {
 
 _cache: dict[str, Optional[Path]] = {}
 
+# ---------------------------------------------------------------------------
+# 磁盘缓存
+#
+# 为什么必须有：本机实测**冷缓存下单次探测要 15 秒**（热缓存只要 0.8 秒，
+# 所以开发时很容易被"看起来很快"骗过去）。而这是同步扫盘：
+#   - 启动器每次点启动都要重新付一遍这个代价；
+#   - 更糟的是若它发生在请求处理路径上，会把整个事件循环卡住十几秒，
+#     用户看到的就是"点了没反应"。
+#
+# 因此结果落盘：只有第一次（或路径失效时）需要真扫。缓存里的路径每次使用前
+# 都验证是否仍然存在——用户挪动或删除工具后不能让陈旧路径把启动带进坑里。
+# ---------------------------------------------------------------------------
+
+_CACHE_VERSION = 1
+_disk_cache_path: Optional[Path] = None
+_disk_cache_loaded = False
+_disk_cache: dict[str, str] = {}
+
+
+def configure_cache_path(path: Path | str) -> None:
+    """设置探测结果缓存文件位置（一般是 <项目>/data/tool_paths.json）。"""
+    global _disk_cache_path, _disk_cache_loaded, _disk_cache
+    _disk_cache_path = Path(path)
+    _disk_cache_loaded = False
+    _disk_cache = {}
+
+
+def _default_cache_path() -> Path:
+    # 默认落在项目 data/ 下；这里不引入 config 依赖，避免循环导入。
+    return Path(__file__).resolve().parents[4] / "data" / "tool_paths.json"
+
+
+def _load_disk_cache() -> dict[str, str]:
+    global _disk_cache_loaded, _disk_cache
+    if _disk_cache_loaded:
+        return _disk_cache
+    _disk_cache_loaded = True
+    path = _disk_cache_path or _default_cache_path()
+    try:
+        import json
+
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        if int(raw.get("version", 0)) != _CACHE_VERSION:
+            _disk_cache = {}
+        else:
+            entries = raw.get("paths", {})
+            _disk_cache = {str(k): str(v) for k, v in entries.items() if v}
+    except Exception:
+        _disk_cache = {}
+    return _disk_cache
+
+
+def _save_disk_cache() -> None:
+    path = _disk_cache_path or _default_cache_path()
+    try:
+        import json
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {"version": _CACHE_VERSION, "paths": _disk_cache}
+        temp = path.with_suffix(".json.tmp")
+        temp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(temp, path)
+    except Exception as exc:
+        logger.debug(f"[ToolDiscovery] 探测缓存写入失败（不影响功能）: {exc}")
+
 
 def _discover(key: str, label: str) -> Optional[Path]:
     if key in _cache:
@@ -388,24 +453,83 @@ _DETECTORS: dict[str, Callable[[], Optional[Path]]] = {
 }
 
 
-def detect(config_field: str) -> str:
-    """给 external_paths 调用：按配置字段名自动探测，返回路径字符串（找不到返回空串）。"""
+def detect(config_field: str, *, allow_scan: bool = True) -> str:
+    """按配置字段名解析外部工具路径，找不到返回空串。
+
+    Args:
+        allow_scan: 允许在缓存未命中时真的扫盘。**请求处理路径必须传 False**——
+            冷缓存下一次扫描实测要 15 秒，同步执行会把事件循环整个卡住，
+            用户看到的就是"点了没反应"。传 False 时只查缓存，未命中就返回空。
+    """
     detector = _DETECTORS.get(config_field)
     if detector is None:
         return ""
+
+    # 一、磁盘缓存（并验证路径仍然存在——用户可能挪走或删掉了工具）
+    cached = _load_disk_cache().get(config_field, "")
+    if cached:
+        try:
+            if Path(cached).exists():
+                return cached
+        except OSError:
+            pass
+        logger.info(f"[ToolDiscovery] 缓存的 {config_field} 已失效，将重新探测: {cached}")
+        _disk_cache.pop(config_field, None)
+        _cache.clear()
+        _save_disk_cache()
+
+    if not allow_scan:
+        return ""
+
+    # 二、真扫（结果落盘，后续启动不再付这个代价）
     try:
         found = detector()
     except Exception as exc:  # 探测失败绝不能影响主流程
         logger.debug(f"[ToolDiscovery] 探测 {config_field} 时出错（忽略）: {exc}")
         return ""
-    return str(found) if found else ""
+
+    if not found:
+        return ""
+
+    _load_disk_cache()[config_field] = str(found)
+    _save_disk_cache()
+    return str(found)
 
 
-def detect_all() -> dict[str, str]:
-    """探测全部外部工具，供安装向导/设置面板一次性填充。"""
-    return {field: detect(field) for field in _DETECTORS}
+def detect_all(*, allow_scan: bool = True) -> dict[str, str]:
+    """探测全部外部工具，供安装向导/设置面板/启动预热一次性填充。"""
+    return {field: detect(field, allow_scan=allow_scan) for field in _DETECTORS}
 
 
-def clear_cache() -> None:
+def warm_up_async() -> None:
+    """后台线程预热探测缓存。
+
+    在服务启动时调一次即可：把那 15 秒的冷扫描放到后台，等真正要用路径时
+    缓存通常已经就绪；即使没就绪，请求路径走 allow_scan=False 也不会被卡住。
+    """
+    import threading
+
+    def _run() -> None:
+        try:
+            detect_all(allow_scan=True)
+        except Exception as exc:  # pragma: no cover - 后台任务不许影响主流程
+            logger.debug(f"[ToolDiscovery] 后台预热失败（忽略）: {exc}")
+
+    thread = threading.Thread(target=_run, name="tool-discovery-warmup", daemon=True)
+    thread.start()
+
+
+def rescan() -> dict[str, str]:
+    """强制重新扫描并覆盖缓存（设置面板的"重新扫描"按钮用）。"""
+    clear_cache(clear_disk=True)
+    return detect_all(allow_scan=True)
+
+
+def clear_cache(*, clear_disk: bool = False) -> None:
     """清空探测缓存（测试与设置面板"重新扫描"用）。"""
+    global _disk_cache_loaded, _disk_cache
     _cache.clear()
+    if clear_disk:
+        _disk_cache = {}
+        _disk_cache_loaded = True
+        _save_disk_cache()

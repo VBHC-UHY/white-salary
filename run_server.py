@@ -173,6 +173,21 @@ def main() -> None:
     # 等于让一个观测性 sidecar 比主配置还靠前地决定程序能否启动。
     config = load_config(project_root=project_root)
 
+    # 外部工具路径预热（GPT-SoVITS / ComfyUI / CosyVoice / Wav2Lip / ffmpeg）。
+    #
+    # 目的：新用户装好这些工具后点启动就能用，不必先去 conf.yaml 手写路径。
+    # 放后台线程是因为冷缓存下扫盘实测要 15 秒——绝不能挡住服务启动，也绝不能
+    # 在请求路径上同步执行（那会把事件循环卡死，表现就是"点了没反应"）。
+    # 结果落盘 data/tool_paths.json，之后每次启动只读一个小 JSON。
+    # 用户在 conf.yaml 或环境变量里显式配了路径的，探测不会去抢。
+    try:
+        from white_salary.adapters.tools import tool_discovery
+
+        tool_discovery.configure_cache_path(project_root / "data" / "tool_paths.json")
+        tool_discovery.warm_up_async()
+    except Exception as e:
+        logger.debug(f"外部工具路径预热未启动（不影响功能）: {e}")
+
     # 任务账本（跨端投递 + 任务日志）。它是 sidecar，不是主功能：
     # DB 损坏、被杀软/备份占用、上次非正常退出留下脏 WAL、磁盘满——
     # 任一情况都不该让桌宠、QQ、B站、QQ空间全部起不来。
