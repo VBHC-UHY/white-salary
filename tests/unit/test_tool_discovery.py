@@ -17,6 +17,7 @@ conf.yaml 里手写路径。公开版的内置默认路径必须为空（不能�
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -743,3 +744,102 @@ def test_cosyvoice_runnable_marker_matches_real_layout(tmp_path: Path) -> None:
     )
 
     assert found == root, "真实形态的 CosyVoice 安装被判为不可运行"
+
+
+# ---------------------------------------------------------------------------
+# 扫描代价与指纹精度（对抗审查的中低危项）
+# ---------------------------------------------------------------------------
+
+
+def test_only_fixed_drives_are_scanned(monkeypatch) -> None:
+    """可移动盘/光驱/网络映射盘不得被深扫。
+
+    此前函数名叫 _fixed_drive_roots 却从不检查盘类型，后果是可感知的骚扰：
+    光驱被唤醒转起来（听得见）、断开的网络盘要等超时（把扫描拖成几十秒）、
+    U 盘内容被当成本机安装（插拔后路径就失效）。
+    """
+    if os.name != "nt":
+        pytest.skip("盘类型判定是 Windows 专属")
+
+    types = {"A:\\": 2, "C:\\": 3, "D:\\": 3, "E:\\": 5, "Z:\\": 4}  # 可移动/固定/固定/光驱/网络
+
+    class _FakeKernel32:
+        @staticmethod
+        def GetDriveTypeW(root):
+            return types.get(str(root), 0)
+
+    import ctypes
+
+    monkeypatch.setattr(ctypes, "windll", type("W", (), {"kernel32": _FakeKernel32})())
+    monkeypatch.setattr(Path, "exists", lambda self: str(self) in types)
+
+    roots = [str(p) for p in tool_discovery._fixed_drive_roots()]
+
+    assert roots == ["C:\\", "D:\\"], f"扫描盘列表不对：{roots}"
+
+
+def test_unknown_drive_type_is_scanned_anyway(monkeypatch) -> None:
+    """盘类型判断不出来时保守放行——宁可多扫也不要漏掉用户真正的安装位置。"""
+    if os.name != "nt":
+        pytest.skip("盘类型判定是 Windows 专属")
+
+    import ctypes
+
+    def _boom(root):
+        raise OSError("API 不可用")
+
+    monkeypatch.setattr(
+        ctypes, "windll", type("W", (), {"kernel32": type("K", (), {"GetDriveTypeW": staticmethod(_boom)})})()
+    )
+
+    assert tool_discovery._is_fixed_drive(Path("D:/")) is True
+
+
+def test_wav2lip_signature_is_not_a_generic_ml_layout(tmp_path: Path) -> None:
+    """Wav2Lip 指纹不能是 ML 项目的通用布局。
+
+    ('hparams.py','checkpoints') 是 Tacotron / so-vits-svc / RVC 一整个家族都有的
+    形状，会把无关仓库误认成 Wav2Lip，之后视频口型功能以看不懂的方式失败。
+    """
+    markers = tool_discovery._SIGNATURES["wav2lip_dir"]["markers"]
+    assert "hparams.py" not in markers, f"指纹又退回通用布局：{markers}"
+
+    # 造一个"通用 ML 仓库"：有 hparams.py 与 checkpoints/，但不是 Wav2Lip
+    generic = tmp_path / "some-tts-project"
+    (generic / "checkpoints").mkdir(parents=True)
+    (generic / "hparams.py").write_text("# generic", encoding="utf-8")
+
+    spec = tool_discovery._SIGNATURES["wav2lip_dir"]
+    found = tool_discovery.find_tool_dir(
+        spec["markers"],
+        label="Wav2Lip",
+        runnable=spec.get("runnable", ()),
+        search_roots=[tmp_path],
+    )
+    assert found is None, f"把无关 ML 仓库认成了 Wav2Lip：{found}"
+
+
+def test_real_wav2lip_layout_is_still_recognised(tmp_path: Path) -> None:
+    """收紧指纹不能把真实 Wav2Lip 安装弄丢（反向守卫）。"""
+    real = tmp_path / "Wav2Lip"
+    (real / "face_detection").mkdir(parents=True)
+    (real / "checkpoints").mkdir()
+    (real / "wav2lip_train.py").write_text("# train", encoding="utf-8")
+    (real / "checkpoints" / "wav2lip_gan.pth").write_text("x", encoding="utf-8")
+
+    spec = tool_discovery._SIGNATURES["wav2lip_dir"]
+    found = tool_discovery.find_tool_dir(
+        spec["markers"],
+        label="Wav2Lip",
+        runnable=spec.get("runnable", ()),
+        content_dirs=spec.get("content", ()),
+        search_roots=[tmp_path],
+    )
+    assert found == real
+
+
+def test_gpt_sovits_content_covers_current_weight_dirs() -> None:
+    """权重目录要覆盖现行发布的命名，否则模型放新目录的用户会被算成 0 分。"""
+    content = tool_discovery._SIGNATURES["gpt_sovits_dir"]["content"]
+    for suffix in ("", "_v2", "_v2Pro", "_v3", "_v4"):
+        assert f"GPT_weights{suffix}" in content, f"缺 GPT_weights{suffix}"

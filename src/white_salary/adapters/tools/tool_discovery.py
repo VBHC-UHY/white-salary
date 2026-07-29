@@ -79,11 +79,41 @@ def _fixed_drive_roots() -> list[Path]:
     for letter in string.ascii_uppercase:
         root = Path(f"{letter}:/")
         try:
-            if root.exists():
-                roots.append(root)
+            if not root.exists():
+                continue
         except OSError:
             continue
+        if not _is_fixed_drive(root):
+            continue
+        roots.append(root)
     return roots
+
+
+# GetDriveTypeW 的返回值（fileapi.h）
+_DRIVE_FIXED = 3
+
+
+def _is_fixed_drive(root: Path) -> bool:
+    """这个盘符是不是本机固定磁盘。
+
+    过滤掉可移动盘、光驱与网络映射盘。此前没有这道过滤（函数名叫
+    _fixed_drive_roots 却从不检查），后果是可感知的骚扰：
+      - 光驱会被唤醒转起来，用户听得见；
+      - 断开的网络映射盘要等到超时才返回，把扫描拖成几十秒；
+      - U 盘上的内容也不该被当成本机安装（插拔后路径就失效了）。
+
+    API 取不到结果时**保守放行**——宁可多扫一个盘，也不要因为判断不了而漏掉
+    用户真正的安装位置。
+    """
+    if os.name != "nt":
+        return True
+    try:
+        import ctypes
+
+        drive_type = ctypes.windll.kernel32.GetDriveTypeW(str(root))
+        return int(drive_type) == _DRIVE_FIXED
+    except Exception:
+        return True
 
 
 def _candidate_roots(extra: Iterable[Path] = ()) -> list[Path]:
@@ -341,7 +371,15 @@ _SIGNATURES: dict[str, dict[str, tuple[str, ...]]] = {
     "gpt_sovits_dir": {
         "markers": ("api_v2.py", "GPT_SoVITS"),
         "runnable": ("venv_new/Scripts/activate.bat", "runtime/python.exe"),
-        "content": ("GPT_weights", "SoVITS_weights", "GPT_weights_v2", "SoVITS_weights_v2"),
+        # 各版本的权重目录名不一样，现行发布还有 v2Pro / v3 / v4。
+        # 少列几个的后果是"模型全放新目录的用户"被算成 0 分，在多份副本里落败。
+        "content": (
+            "GPT_weights", "SoVITS_weights",
+            "GPT_weights_v2", "SoVITS_weights_v2",
+            "GPT_weights_v2Pro", "SoVITS_weights_v2Pro",
+            "GPT_weights_v3", "SoVITS_weights_v3",
+            "GPT_weights_v4", "SoVITS_weights_v4",
+        ),
     },
     # ComfyUI 便携版：启动脚本 + 主程序目录；便携版靠内嵌 python 运行
     "comfyui_dir": {
@@ -374,7 +412,10 @@ _SIGNATURES: dict[str, dict[str, tuple[str, ...]]] = {
     },
     # Wav2Lip：超参文件 + 权重目录；没有权重就跑不出结果
     "wav2lip_dir": {
-        "markers": ("hparams.py", "checkpoints"),
+        # hparams.py + checkpoints/ 是 Tacotron / so-vits-svc / RVC 一整个家族的
+        # 通用布局，会把无关 ML 仓库误认成 Wav2Lip。换成它独有的训练脚本与
+        # 人脸检测包（真实安装已核实存在）。
+        "markers": ("wav2lip_train.py", "face_detection"),
         "runnable": ("checkpoints/wav2lip_gan.pth", "checkpoints/wav2lip.pth"),
         "content": ("checkpoints",),
     },
