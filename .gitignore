@@ -141,7 +141,11 @@ htmlcov/
 # =============================================================================
 PROJECT_PLAN.md
 PROJECT_PLAN.legacy-2026-04.md
-PROJECT_AUDIT_2026-07-02.md
-docs/PANEL_AUDIT_2026-07-03.md
-docs/audit-2026-07-02/
-docs/panel-audit-2026-07-03/
+# 用通配而不是逐个文件名：内部文档会不断新增（审计记录按日期、运维手册等），
+# 逐个登记就等于每次都要记得回来改这里——漏一次就把含作者路径、私聊分析、
+# 真实账号的内部文档推上了公开仓库。前缀是固定约定，通配才配得上"会新增"这个事实。
+PROJECT_AUDIT_*.md
+OPERATIONS_LOCAL.md
+docs/PANEL_AUDIT_*.md
+docs/audit-*/
+docs/panel-audit-*/

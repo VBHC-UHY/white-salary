@@ -24,13 +24,14 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 from pathlib import Path
 
 import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
-# 扫描范围：只看会进仓库的源码与配置，跳过体积大或本就被 gitignore 的目录
+# 扫描范围：只看会进仓库的源码与配置，跳过体积大的已入库目录
 _SKIP_DIRS = {
     ".git", ".venv", "venv", "node_modules", "__pycache__", "data", "logs",
     "backups", "models", "live2d_models", "NapCat", "NapCat_OneKey",
@@ -39,8 +40,34 @@ _SKIP_DIRS = {
 _SCAN_SUFFIXES = {".py", ".js", ".mjs", ".html", ".yaml", ".yml", ".json", ".bat", ".sh", ".md", ".toml"}
 
 
+def _git_published_files() -> list[Path] | None:
+    """问 git 要"会进仓库的文件"清单；拿不到就返回 None 由调用方回退。
+
+    为什么不能只靠 `rglob` + `_SKIP_DIRS`：黑名单是**猜**的，而本机的私有文档
+    （运维手册、审计记录）就躺在项目根目录、后缀是 `.md`、内容里必然出现被禁的
+    真实账号——它们全都被 gitignore，永远不会进仓库，扫它们只会产生假失败。
+
+    而假失败比没有护栏更糟：人会学会"这几条红字是老样子"，真出事那次也照样放过去。
+    所以判据必须和"会不会进仓库"完全一致，也就是直接问 git。
+
+    `--cached` 取已入库的，`--others --exclude-standard` 取未入库但**没被 ignore**
+    的（新写的文件也必须受检，否则加个新文件就能绕过护栏）。
+    """
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(PROJECT_ROOT), "ls-files", "--full-name", "-z",
+             "--cached", "--others", "--exclude-standard"],
+            capture_output=True, text=True, timeout=60, check=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None  # 不在 git 仓库里 / 没装 git：回退到目录遍历
+    return [PROJECT_ROOT / rel for rel in result.stdout.split("\0") if rel]
+
+
 def _iter_repo_files():
-    for path in PROJECT_ROOT.rglob("*"):
+    published = _git_published_files()
+    candidates = published if published is not None else PROJECT_ROOT.rglob("*")
+    for path in candidates:
         if not path.is_file():
             continue
         if any(part in _SKIP_DIRS for part in path.parts):
@@ -85,6 +112,58 @@ def _grep(needles: list[str]) -> list[str]:
                     hits.append(f"{rel}:{lineno}: {line.strip()[:120]}")
                     break
     return hits
+
+
+# ---------------------------------------------------------------------------
+# 零、扫描范围本身的自检
+#
+# 这一组守的是"扫的到底是哪些文件"。上面 `_git_published_files` 的整个价值在于
+# 把判据从"手写目录黑名单"换成"git 说会不会进仓库"；如果这条路径静默失效
+# （git 调用失败被 except 吃掉、回退到 rglob），下面所有断言都还会通过，
+# 只是又开始扫本机私有文档、开始产生假失败。所以这里直接验行为。
+# ---------------------------------------------------------------------------
+
+
+def test_scan_scope_comes_from_git_not_a_guessed_blacklist() -> None:
+    """git 清单必须真的取到了，而不是静默回退到目录遍历。"""
+    published = _git_published_files()
+    assert published is not None, (
+        "拿不到 git 文件清单——扫描退化成了目录遍历，会把 gitignore 的本机私有文档"
+        "一起扫进来。先确认 PROJECT_ROOT 是 git 工作树、git 可执行。"
+    )
+    assert len(published) > 100, f"git 只报了 {len(published)} 个文件，明显不对"
+    # 抽查：入库的源码在，.git 内部文件不在
+    rels = {p.relative_to(PROJECT_ROOT).as_posix() for p in published}
+    assert "pyproject.toml" in rels
+    assert not any(r.startswith(".git/") for r in rels)
+
+
+def test_gitignored_local_files_are_not_scanned() -> None:
+    """被 gitignore 的文件必须落在扫描范围外；新增的未入库文件必须落在范围内。
+
+    前者防假失败：本机的运维手册/审计记录就在项目根、是 `.md`、且必然写着真实
+    账号与作者路径（它们的职责就是记录这些），扫它们等于让护栏天天报错。
+    后者防绕过：光看 `--cached` 的话，新写一个文件就能躲开检查。
+    """
+    ignored = PROJECT_ROOT / "PROJECT_AUDIT_ZZ_GUARDRAIL_PROBE.md"   # 匹配 .gitignore 的 PROJECT_AUDIT_*.md
+    fresh = PROJECT_ROOT / "zz_guardrail_probe.md"                    # 未入库但不被 ignore
+    for probe in (ignored, fresh):
+        if probe.exists():
+            pytest.skip(f"探针文件已存在，不覆盖：{probe.name}")
+
+    try:
+        ignored.write_text("probe\n", encoding="utf-8")
+        fresh.write_text("probe\n", encoding="utf-8")
+        scanned = set(_iter_repo_files())
+        assert ignored not in scanned, (
+            f"{ignored.name} 被 gitignore 却仍在扫描范围内 —— 假失败的来源"
+        )
+        assert fresh in scanned, (
+            f"{fresh.name} 未入库但也没被 ignore，必须受检，否则新增文件可绕过护栏"
+        )
+    finally:
+        ignored.unlink(missing_ok=True)
+        fresh.unlink(missing_ok=True)
 
 
 # ---------------------------------------------------------------------------
