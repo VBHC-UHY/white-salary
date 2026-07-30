@@ -537,8 +537,17 @@ class RuntimeStore:
     ) -> list[DeliveryRecord]:
         now = time.time() if now is None else float(now)
         lease_until = now + max(1.0, float(lease_seconds))
+        normalized_platform = platform.strip().lower()
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            # 2026-07-29 对抗审查修复：两条清扫都只碰本次请求的平台。
+            # 原来不带平台条件，桌面桥每 2 秒一次的 claim 会把 QQ 平台
+            # "正在发送中、只是租约先到期"的行打成 UNKNOWN 终态（QQ 经
+            # NapCat 逐条串行发送，一批轻易超过 30 秒租约）——随后真实的
+            # ack 因 claim 失效抛 StaleDeliveryClaim 被结算保护吞掉，
+            # 已送达的消息在账面上永远停在"结果不明"。
+            # 平台内不存在并发 claim（每个消费循环先结算完上一批才取下一批），
+            # 所以按平台过滤后，清扫只会命中真正无人认领的行（如进程崩溃遗留）。
             conn.execute(
                 """
                 UPDATE runtime_outbox
@@ -556,6 +565,7 @@ class RuntimeStore:
                         ELSE last_error
                     END
                 WHERE state = ? AND lease_until > 0 AND lease_until <= ?
+                    AND (? = '' OR target_platform = ?)
                 """,
                 (
                     DeliveryState.UNKNOWN.value,
@@ -564,6 +574,8 @@ class RuntimeStore:
                     now,
                     DeliveryState.SENDING.value,
                     now,
+                    normalized_platform,
+                    normalized_platform,
                 ),
             )
             conn.execute(
@@ -573,14 +585,16 @@ class RuntimeStore:
                     last_error = CASE WHEN last_error = ''
                         THEN 'Delivery exhausted max attempts' ELSE last_error END
                 WHERE state = ? AND attempts >= max_attempts
+                    AND (? = '' OR target_platform = ?)
                 """,
                 (
                     DeliveryState.FAILED.value,
                     now,
                     DeliveryState.PENDING.value,
+                    normalized_platform,
+                    normalized_platform,
                 ),
             )
-            normalized_platform = platform.strip().lower()
             if normalized_platform:
                 rows = conn.execute(
                     """
@@ -778,7 +792,14 @@ class RuntimeStore:
         *,
         available_at: float | None = None,
     ) -> DeliveryRecord:
-        """Explicitly replay an ambiguous delivery after reconciliation."""
+        """Explicitly replay an ambiguous delivery after reconciliation.
+
+        2026-07-29 对抗审查修复：复活必须把 attempts 归零。UNKNOWN 行的
+        attempts 往往已经等于 max_attempts（正是耗尽前最后一次尝试结果
+        不明才落到这里）；不归零的话，复活成 PENDING 后会被下一次 claim
+        的"耗尽清扫"立刻打回 FAILED——号称唯一的人工恢复路径实际静默无效。
+        人工 requeue 语义上就是"重新给一轮尝试预算"。
+        """
 
         current = self.get_delivery(delivery_id)
         if current is None:
@@ -791,7 +812,8 @@ class RuntimeStore:
                 """
                 UPDATE runtime_outbox
                 SET state = ?, available_at = ?, lease_until = 0,
-                    claim_token = '', updated_at = ?, last_error = ''
+                    claim_token = '', updated_at = ?, last_error = '',
+                    attempts = 0
                 WHERE id = ?
                 """,
                 (

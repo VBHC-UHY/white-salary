@@ -178,3 +178,83 @@ def test_expired_delivery_does_not_exceed_max_attempts(tmp_path: Path) -> None:
     assert saved is not None
     assert saved.state == DeliveryState.FAILED
     assert saved.attempts == 1
+
+
+def test_requeue_after_exhaustion_grants_fresh_attempts(tmp_path: Path) -> None:
+    """人工复活必须重置尝试预算。
+
+    UNKNOWN 行的 attempts 往往已等于 max_attempts（正是最后一次尝试结果
+    不明才落到 UNKNOWN）。修复前复活成 PENDING 后，下一次 claim 的耗尽
+    清扫会立刻把它打回 FAILED——号称唯一的人工恢复路径实际静默无效。
+    """
+    store = RuntimeStore(tmp_path / "runtime.db")
+    delivery = _enqueue(store, max_attempts=1)
+    claimed = store.claim_due_deliveries(now=delivery.available_at)
+    store.mark_delivery_unknown(
+        delivery.id,
+        "receipt lost",
+        claim_token=claimed[0].claim_token,
+    )
+
+    requeued = store.requeue_unknown_delivery(delivery.id)
+    assert requeued.attempts == 0
+
+    reclaimed = store.claim_due_deliveries(now=requeued.available_at + 0.01)
+    assert [item.id for item in reclaimed] == [delivery.id]
+
+
+def test_claim_sweep_only_touches_requested_platform(tmp_path: Path) -> None:
+    """清扫只碰本平台：桌面桥的高频 claim 不得把 QQ 在飞行打成 UNKNOWN。
+
+    QQ 经 NapCat 逐条串行发送，一批轻易超过 30 秒租约；修复前桌面桥每
+    2 秒一次的 claim 会把"租约刚过期、实际仍在发送"的 QQ 行清扫成
+    UNKNOWN 终态，随后真实的 ack 抛 StaleDeliveryClaim 被结算保护吞掉，
+    已送达的消息在账面上永远停在"结果不明"。
+    """
+    store = RuntimeStore(tmp_path / "runtime.db")
+    qq_row = store.enqueue_delivery(
+        ChannelAddress("qq_bridge", "10001"),
+        {"message": "in flight"},
+        conversation_key="bridge:qq:private:10001",
+    )
+    store.enqueue_delivery(
+        ChannelAddress("desktop_bridge", "primary"),
+        {"message": "desktop"},
+        conversation_key="bridge:desktop:primary",
+    )
+
+    claimed = store.claim_due_deliveries(
+        platform="qq_bridge", now=qq_row.available_at, lease_seconds=30.0
+    )
+    assert [item.id for item in claimed] == [qq_row.id]
+    expired_at = claimed[0].lease_until + 0.01
+
+    # 桌面平台的 claim 发生在 QQ 行租约过期之后——不得动 QQ 的行
+    store.claim_due_deliveries(platform="desktop_bridge", now=expired_at)
+    in_flight = store.get_delivery(qq_row.id)
+    assert in_flight is not None
+    assert in_flight.state == DeliveryState.SENDING
+
+    # 真正的消费端此刻完成发送，迟到但真实的 ack 仍然有效
+    store.mark_delivery_delivered(
+        qq_row.id, {"message_id": 7}, claim_token=claimed[0].claim_token
+    )
+    saved = store.get_delivery(qq_row.id)
+    assert saved is not None and saved.state == DeliveryState.DELIVERED
+
+    # 平台内不存在并发 claim（消费循环结算完上一批才取下一批），所以
+    # 本平台清扫命中的只会是真正无人认领的行（如进程崩溃遗留）——仍要兜住
+    orphan = store.enqueue_delivery(
+        ChannelAddress("qq_bridge", "10002"),
+        {"message": "orphan"},
+        conversation_key="bridge:qq:private:10002",
+    )
+    orphan_claimed = store.claim_due_deliveries(
+        platform="qq_bridge", now=orphan.available_at, lease_seconds=1.0
+    )
+    store.claim_due_deliveries(
+        platform="qq_bridge", now=orphan_claimed[0].lease_until + 0.01
+    )
+    swept = store.get_delivery(orphan.id)
+    assert swept is not None
+    assert swept.state == DeliveryState.UNKNOWN

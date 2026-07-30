@@ -85,7 +85,11 @@ async def push_to_desktop(message: str = "") -> str:
         bridge = CrossPlatformBridge()
         bridge.push_to_desktop(message, source="qq")
         return "已推送到桌面端"
-    except Exception as e:
+    except ValueError as e:
+        # 2026-07-29 对抗审查：桥的入队校验拒收时，拒因必须给到模型——
+        # 吞成"推送失败了"的话模型只能盲重试同样的文本、再次被拒。
+        return f"消息被安全校验拒绝（{e}）。请换一种说法重新组织后再推送一次"
+    except Exception:
         return "推送失败了"
 
 # 2026-07-03 工具实现（批9）：check_unread/dm_cleanup 两个空壳已被 qq_inbox 取代
