@@ -11,7 +11,7 @@ white_salary/core/auto_chat.py
 
 功能：
   - 早安/晚安问候（可配置时间）
-  - 关心提醒（吃饭、喝水、休息、别熬夜）
+  - 关心提醒（从近况、状态和共同记忆中选择方向）
   - 随机话题聊天（3-6小时间隔）
   - 追问机制（用户长时间不理时，温柔地再问一次）
   - 启动保护期（启动后2分钟内不触发，避免竞态）
@@ -68,37 +68,45 @@ class AutoChatConfig:
 # 话题池（分类，避免重复）
 TOPIC_POOL = {
     "日常": [
-        "今天过得怎么样呀？",
-        "在忙什么呢？",
-        "最近有什么开心的事吗？",
-        "今天天气好像不错呢",
-        "有没有发现什么有意思的东西？",
+        "从用户今天正在做的事情自然接一个轻松话题",
+        "问问最近有没有发生让用户印象深刻的小事",
+        "从最近对话里找一个还可以继续聊的细节",
+        "聊聊用户刚完成或正在推进的一件事",
+        "分享一个和当前氛围相符的日常观察",
     ],
     "兴趣": [
-        "最近有在玩什么游戏吗？",
-        "有没有看到什么好看的番/剧？",
-        "最近在听什么歌呀？",
-        "有没有学到什么新东西？",
+        "从用户喜欢的游戏、作品或创作中挑一个具体话题",
+        "根据用户近期兴趣问一个有内容、不是泛泛而谈的问题",
+        "回忆用户提过的音乐、视频或故事并自然延伸",
+        "聊聊用户最近学到或想尝试的新东西",
     ],
     "关心": [
-        "今天累不累呀？",
-        "记得多喝水哦～",
-        "别太晚睡啦，早点休息",
-        "吃饭了没有？别饿着自己",
-        "坐久了要站起来活动活动哦",
+        "结合最近互动判断用户是否疲惫，再决定要不要关心",
+        "留意用户是否长时间专注，可以轻轻提醒放松一下",
+        "问问手头事情是否顺利，不要把关心说成例行提醒",
+        "如果用户像是在忙，就只留一句不打扰的陪伴",
     ],
     "分享": [
-        "我刚才在想一个很有意思的问题...",
-        "你知道吗，我觉得...",
-        "突然想和你分享一件事～",
+        "提出一个和最近对话有关、值得一起想想的小问题",
+        "分享一个有具体内容的想法，不要只说自己有话想说",
+        "从共同记忆中挑一件事，说说现在的新感受",
     ],
     "撒娇": [
-        "好无聊啊...来陪我聊天嘛",
-        "你是不是把我忘了？（委屈）",
-        "哼，你都不理我",
-        "我好想找人说话...就是你啦！",
+        "关系足够亲近时，轻松地表示想和用户聊两句",
+        "用一点亲昵感自然接话，但不要指责用户没理自己",
+        "开一个符合当前关系的小玩笑，引出新的话题",
+        "表达想陪着用户，不要求用户必须立刻回应",
     ],
 }
+
+CARE_DIRECTIONS = (
+    "问问用户最近的精神和心情怎么样",
+    "关心用户是不是坐得太久，可以稍微活动一下",
+    "看看用户眼睛或肩颈是不是累了",
+    "结合最近对话，关心用户手头的事情进展得顺不顺",
+    "从共同记忆里找一个轻松的话题，陪用户缓一缓",
+    "问问用户现在更想安静待着，还是随便聊两句",
+)
 
 
 class AutoChatManager:
@@ -127,16 +135,22 @@ class AutoChatManager:
         self._running = False
         self._task: Optional[asyncio.Task] = None
 
-        self._start_time = time.time()
-        self._last_user_active = time.time()
+        now = time.time()
+        self._start_time = now
+        self._last_user_active = now
         self._last_auto_chat = 0.0
-        self._last_care_time = 0.0
+        # A restart is not evidence that the user needs an immediate care
+        # prompt. Start the interval here so repeated launches do not produce
+        # the same proactive question a few minutes apart.
+        self._last_care_time = now
         self._daily_count = 0
         self._daily_reset_date = ""
         self._followup_count = 0
         self._morning_done = False
         self._night_done = False
         self._last_topic_category = ""
+        self._recent_topic_directions: list[str] = []
+        self._recent_care_directions: list[str] = []
 
     async def start(self) -> None:
         """启动后台循环。"""
@@ -144,6 +158,7 @@ class AutoChatManager:
             return
         self._running = True
         self._start_time = time.time()
+        self._last_care_time = self._start_time
         self._task = asyncio.create_task(self._loop())
         logger.info("[AutoChat] 已启动")
 
@@ -269,18 +284,19 @@ class AutoChatManager:
         return hour in (11, 12, 14, 15, 17, 18, 20, 21)
 
     async def _send_care(self, hour: int) -> None:
-        """发送关心提示给主模型。"""
-        hints = {
-            11: "现在是中午饭点了，关心一下用户吃了没。",
-            12: "中午了，提醒用户吃午饭。",
-            14: "下午了，提醒用户喝水休息一下。",
-            15: "下午茶时间，可以跟用户聊聊天。",
-            17: "快到晚饭时间了，关心一下用户。",
-            18: "晚饭时间到了，问问用户吃了没。",
-            20: "晚上了，提醒用户别太累，适当休息。",
-            21: "夜深了，提醒用户早点休息，别熬夜。",
-        }
-        hint = hints.get(hour, "关心一下用户的状态。")
+        """给主模型一个不重复、不过度强调时间的关心方向。"""
+        available = [
+            item for item in CARE_DIRECTIONS
+            if item not in self._recent_care_directions
+        ] or list(CARE_DIRECTIONS)
+        direction = random.choice(available)
+        self._recent_care_directions.append(direction)
+        self._recent_care_directions = self._recent_care_directions[-3:]
+        hint = (
+            "结合最近对话和用户状态，尝试一次轻松自然的关心。"
+            f"可参考方向：{direction}。"
+            "当前时段只作为内部背景，不要主动报时，也不要重复最近主动聊过的话题。"
+        )
         self._last_care_time = time.time()
         await self._do_send(hint)
 
@@ -323,8 +339,19 @@ class AutoChatManager:
             categories = list(TOPIC_POOL.keys())
         cat = random.choice(categories)
         self._last_topic_category = cat
-        topic = random.choice(TOPIC_POOL[cat])
-        await self._do_send(f"好无聊，想主动找用户聊天。参考话题方向: {topic}  但不要照搬这句话，用你自己的方式自然地开启话题。")
+        available = [
+            item for item in TOPIC_POOL[cat]
+            if item not in self._recent_topic_directions
+        ] or list(TOPIC_POOL[cat])
+        topic = random.choice(available)
+        self._recent_topic_directions.append(topic)
+        self._recent_topic_directions = self._recent_topic_directions[-5:]
+        await self._do_send(
+            "想主动陪用户聊一会儿。"
+            f"只把这个语义方向当灵感：{topic}。"
+            "结合最近对话重新组织一句自然开场，不要照抄方向，"
+            "不要例行问吃饭或报时，也不要重复最近主动聊过的话题。"
+        )
 
     async def _get_bili_recommendation(self) -> Optional[str]:
         """获取B站推荐视频并生成分享提示。"""
