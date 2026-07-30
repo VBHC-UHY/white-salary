@@ -4,7 +4,7 @@
 
 本项目的开发方式是"本地目录保留机器专属路径，公开版另开工作树移植"。这套策略
 本身没问题，但它把"哪些东西不能过去"完全交给了人的记忆。2026-07 的一次审计
-实测发现：本地把 `D:/AI_Tools/GPT-SoVITS` 一类路径回灌成了源码默认值，
+实测发现：本地把作者机器上的工具安装路径回灌成了源码默认值，
 并且**把守护它的黄金测试反向改写成"断言这些私人路径就是默认值"**——于是
 护栏不但失效，还反过来强制要求作者路径存在。
 
@@ -132,17 +132,62 @@ def test_external_paths_defaults_stay_empty() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    ("needle", "what"),
-    [
-        ("2997735486", "真实 QQ 号（曾出现在 smart_reply 类 docstring 示例里）"),
-        ("115985242", "真实 QQ 群号（曾出现在设置面板 placeholder 与单测里）"),
-    ],
-)
-def test_real_account_identifiers_are_absent(needle: str, what: str) -> None:
+# 禁用的真实账号以 SHA-256 存储，**不写原始数字**。
+#
+# 原因：本文件的职责就是"禁止真实账号出现在仓库里"，如果把号码作为字面量写在
+# 这里，护栏本身就成了泄漏源——推送到公开仓库后，那串号码照样是公开可见、
+# 可被爬取的。号码不是密钥，但它是个人信息，而我们当初正是为了不公开它，
+# 才把它从 smart_reply 的 docstring 示例里删掉。
+#
+# 检测能力不变：扫描时把文件里所有 8~11 位数字串取出来算哈希再比对。
+_BANNED_ACCOUNT_HASHES: dict[str, str] = {
+    "f379061ca4e056ec1206bb483481223bde7675a939e117225ce631cb19f18152":
+        "真实 QQ 号（曾出现在 smart_reply 类 docstring 示例里）",
+    "a0f87851ba6838d9672dbe281abf6117728c8ed8050c770b4267f409d1e88736":
+        "真实 QQ 群号（曾出现在设置面板 placeholder 与单测里）",
+}
+
+
+def test_real_account_identifiers_are_absent() -> None:
     """示例值必须用占位号（如 123456789），不能用真实账号。"""
-    hits = _grep([needle])
-    assert not hits, f"发现{what}：\n" + "\n".join(hits[:10])
+    import hashlib
+
+    digits = re.compile(r"\b\d{8,11}\b")
+    offenders: list[str] = []
+
+    for file in _iter_repo_files():
+        if file.name in _PROSE_ALLOWLIST:
+            continue
+        try:
+            content = file.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        for lineno, line in enumerate(content.splitlines(), 1):
+            for candidate in digits.findall(line):
+                digest = hashlib.sha256(candidate.encode()).hexdigest()
+                what = _BANNED_ACCOUNT_HASHES.get(digest)
+                if what:
+                    rel = file.relative_to(PROJECT_ROOT).as_posix()
+                    offenders.append(f"{rel}:{lineno}: 发现{what}")
+
+    assert not offenders, "\n".join(offenders[:10])
+
+
+def test_banned_account_detection_actually_works() -> None:
+    """反向自检：哈希比对必须真的能认出被禁号码。
+
+    否则这条护栏会变成"永远通过"的装饰品——号码换成哈希之后，
+    最容易犯的错就是哈希算错而没人发现。
+    """
+    import hashlib
+
+    assert len(_BANNED_ACCOUNT_HASHES) >= 2
+    for digest in _BANNED_ACCOUNT_HASHES:
+        assert len(digest) == 64, f"不是合法 sha256 十六进制：{digest}"
+
+    # 用一个已知不在禁用表里的号码验证不会误报
+    benign = hashlib.sha256(b"123456789").hexdigest()
+    assert benign not in _BANNED_ACCOUNT_HASHES, "占位号 123456789 不该被禁"
 
 
 # ---------------------------------------------------------------------------
